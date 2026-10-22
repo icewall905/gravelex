@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && mkdir -p /data /downloads && chown 10001:10001 /data /downloads
 COPY backend/ ./
+COPY scripts/rebuild-minutes.py ./scripts/rebuild-minutes.py
 COPY web/ ./web/
 USER 10001:10001
 EXPOSE 8790 9998

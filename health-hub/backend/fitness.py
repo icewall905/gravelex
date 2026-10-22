@@ -6,6 +6,7 @@ import math
 import os
 import sqlite3
 import time
+import threading
 import training
 import hrv as hrv_analytics
 import recovery as recovery_model
@@ -13,6 +14,7 @@ import weight as weight_model
 import physiology
 import oxygen
 import collection_health
+import provenance
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -22,12 +24,39 @@ DB_PATH = os.environ.get("FITNESS_DB", "/data/fitness.sqlite3")
 SLEEP_KINDS = ("sleep", "restful_sleep")
 
 
+_schema_lock = threading.Lock()
+
+
+def _schema_ready(db):
+    exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='provenance_migrations'").fetchone()
+    return bool(exists and db.execute('SELECT 1 FROM provenance_migrations WHERE version=2').fetchone())
+
+
 def connect():
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     db = sqlite3.connect(DB_PATH, timeout=15)
     db.row_factory = sqlite3.Row
-    db.executescript("""
-    PRAGMA journal_mode=WAL;
+    db.execute('PRAGMA recursive_triggers=ON')
+    try:
+        if _schema_ready(db):
+            return db
+        # Local threads serialize bootstrap; BEGIN IMMEDIATE also serializes
+        # other worker processes. Never use executescript inside this transaction.
+        with _schema_lock:
+            if _schema_ready(db):
+                return db
+            deadline = time.monotonic() + 15
+            while True:
+                try:
+                    db.execute('PRAGMA journal_mode=WAL')
+                    break
+                except sqlite3.OperationalError as error:
+                    if 'locked' not in str(error).lower() or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+            db.execute('BEGIN IMMEDIATE')
+            if not _schema_ready(db):
+                statements = """
     CREATE TABLE IF NOT EXISTS reports(ts INTEGER, source TEXT, received INTEGER, payload TEXT,
       PRIMARY KEY(ts,source));
     CREATE TABLE IF NOT EXISTS minutes(ts INTEGER PRIMARY KEY, hr INTEGER, steps INTEGER,
@@ -42,13 +71,23 @@ def connect():
     CREATE TABLE IF NOT EXISTS briefings(id INTEGER PRIMARY KEY, created INTEGER, day TEXT, model TEXT, status TEXT, payload TEXT, error TEXT, seconds REAL);
     CREATE TABLE IF NOT EXISTS weights(day TEXT PRIMARY KEY, kg REAL, source TEXT);
     CREATE TABLE IF NOT EXISTS sleep_sessions(id TEXT PRIMARY KEY, start INTEGER, seconds INTEGER, kind TEXT);
-    """)
-    if 'ignored' not in {r[1] for r in db.execute('PRAGMA table_info(workouts)')}:
-        db.execute('ALTER TABLE workouts ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0')
-    if 'scope' not in {r[1] for r in db.execute('PRAGMA table_info(pairing_tokens)')}:
-        db.execute("ALTER TABLE pairing_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'hrv'")
-    oxygen.ensure_schema(db)
-    return db
+    """
+                for statement in statements.split(';'):
+                    if statement.strip():
+                        db.execute(statement)
+                if 'ignored' not in {r[1] for r in db.execute('PRAGMA table_info(workouts)')}:
+                    db.execute('ALTER TABLE workouts ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0')
+                if 'scope' not in {r[1] for r in db.execute('PRAGMA table_info(pairing_tokens)')}:
+                    db.execute("ALTER TABLE pairing_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'hrv'")
+                oxygen.ensure_schema(db)
+                provenance.ensure_schema(db)
+                provenance.seed_legacy_minutes(db)
+            db.commit()
+        return db
+    except Exception:
+        db.rollback()
+        db.close()
+        raise
 
 
 def number(value, low, high, name):
@@ -66,6 +105,7 @@ def ingest(data):
     if not isinstance(rows, list) or len(rows) > 3000 or not isinstance(sessions, list) or len(sessions) > 1000:
         raise ValueError("Invalid record batch")
     with connect() as db:
+        provenance.record_observation(db, "health_batch", source, ts, now, data)
         oxygen.ingest(db, data, now)
         db.execute("INSERT OR REPLACE INTO reports VALUES(?,?,?,?)", (ts, source, now, json.dumps(data)))
         for row in rows:
@@ -73,35 +113,26 @@ def ingest(data):
                 raise ValueError("Minute records must be objects")
             t = int(number(row.get("ts"), 946684800, now + 300, "record timestamp"))
             previous = db.execute("SELECT * FROM minutes WHERE ts=?", (t,)).fetchone()
-            # Merge complementary uploads in arrival order. Missing/null metrics
-            # mean unknown, never zero or a deletion. Explicit zero activity or
-            # steps is a valid correction. There is no source-priority inference.
-            payload = json.loads(previous["payload"]) if previous else {}
-            payload.update(row)
-            values = {}
+            incoming = dict(row)
+            incoming['ts'] = t
             for key, low, high in (("hr", 1, 300), ("steps", 0, 10000), ("active", 0, 1)):
                 value = row.get(key)
-                # Legacy watch history exports use numeric HR 0 as a
-                # missing-sample sentinel, not a measured zero-beat pulse.
-                # Booleans must still fail validation rather than aliasing 0.
                 if key == "hr" and not isinstance(value, bool) and value == 0:
                     value = None
-                if value is None:
-                    value = previous[key] if previous else None
-                else:
+                if value is not None:
                     value = number(value, low, high, key)
                     if value != int(value):
                         raise ValueError(f"{key} must be an integer")
                     value = int(value)
-                values[key] = value
-                # Normalize canonical fields in the payload too, so a null
-                # replay cannot disagree with the retained column values.
-                payload[key] = value
-            payload["ts"] = t
+                incoming[key] = value
+            provenance.record_minute(db, source, ts, now, incoming)
+            payload, winners = provenance.reconcile_minute(db, t)
+            provenance.record_revision(db, t, json.loads(previous['payload']) if previous else None,
+                                       payload, winners, now)
             db.execute("""INSERT INTO minutes(ts,hr,steps,active,payload) VALUES(?,?,?,?,?)
               ON CONFLICT(ts) DO UPDATE SET hr=excluded.hr,steps=excluded.steps,
               active=excluded.active,payload=excluded.payload""",
-              (t, values["hr"], values["steps"], values["active"], json.dumps(payload)))
+              (t, payload['hr'], payload['steps'], payload['active'], json.dumps(payload)))
         for s in sessions:
             if not isinstance(s, dict):
                 raise ValueError("Sessions must be objects")
@@ -179,6 +210,7 @@ def collector_ingest(data):
         if not isinstance(values,list) or len(values)>6:raise ValueError('Invalid scheduled slots')
         payload[key]=[int(number(v,lo,hi,'Scheduled slot')) for v in values]
     with connect() as db:
+        provenance.record_observation(db, 'collector_status', 'hrv-watch', ts, now, data)
         db.execute('INSERT OR REPLACE INTO collector_reports VALUES(?,?,?)',(ts,now,json.dumps(payload)))
     return {'ok':True}
 
@@ -216,6 +248,7 @@ def hrv_ingest(data):
     if payload['vibration_status']=='unknown':payload['vibration_samples']=None
     if data.get('stream_semantics')=='latest_ppi_updates':payload['stream_semantics']='latest_ppi_updates'
     with connect() as db:
+        provenance.record_observation(db, "hrv_capture", "hrv-watch", ts, now, data)
         db.execute("INSERT OR REPLACE INTO hrv_sessions VALUES(?,?,?)", (f"ppi:{ts}", ts, json.dumps(payload)))
         # A saved physiological upload is authoritative evidence of a completed
         # collection. Link only launch metadata from that same measurement window.

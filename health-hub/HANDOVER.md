@@ -33,3 +33,9 @@ F03 software gates and F04 stress freshness deployed: exact server-owned motion 
 ## Collection health follow-up
 
 F05 adds server collection evidence to summary/LLM facts and More. Upload receipt is separate from sensor measured-at; coverage counts distinct elapsed minute buckets on actual local DST days. Night evidence validates paired successful schedule IDs and retains historical advertisements without claiming execution or cancellation certainty. Watch-phone transfer and phone backlog remain unknown until F07 telemetry. The recorder card now separates last saved capture from last status message. Independent review approved; all 73 backend tests pass. Shell cache v15.
+
+## Provenance follow-up
+
+F06 foundation: additive transactional bootstrap, append-only raw upload journals, per-source minute observations, per-field compatibility reconciliation, revision audit and protected bounded source projection. Existing minutes are legacy baseline observations with unknown receipt time. Rebuild CLI previews on a private copy and requires a new mode600 backup to apply; only minute canonical data is reconstructed and workouts/RPE are preserved. Concurrent bootstrap fix passed independent stress review; complete suite 92 tests. Full F06 remains open for verified device/revision metadata and non-minute canonical reconstruction. See DATA-PROVENANCE.md. Rollback images and private database/source backups retained during rollout.
+
+Production migration verification: canonical minute history stayed unchanged, services restarted successfully, protected minute evidence returned honest legacy baseline provenance, and packaged preview reported no metric changes. No production canonical rebuild was applied. Shell cache v16 includes the source-inspection control.

@@ -49,6 +49,8 @@ HRV motion eligibility and the required field study are documented in [MOTION-CA
 
 See [COLLECTION-HEALTH.md](COLLECTION-HEALTH.md) for the More diagnostics panel: upload receipts, actual sensor times, DST-aware daily HR coverage, historical night-slot evidence and unknown phone queue/transfer states.
 
+See [DATA-PROVENANCE.md](DATA-PROVENANCE.md) for immutable ingestion evidence, per-field minute source inspection and the preview-first rebuild tool. Device verification and canonical reconstruction of other streams remain pending.
+
 ## Configuration
 
 Every deployment setting is listed in `.env.example`:

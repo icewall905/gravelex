@@ -1111,6 +1111,32 @@ function spotChecks(pts) {
     ] : pending('No spot checks yet', 'Open the HRV app on the watch and keep still for three minutes.'));
 }
 
+function minuteProvenancePanel() {
+  const ts=D().collection_health?.measurements?.heart_rate?.measured_at;
+  const output=h('div',{'aria-live':'polite'});
+  return h('details',{class:'info'},h('summary',null,'Source evidence for the latest HR minute'),
+    h('p',{class:'foot'},'Sources are reported by the uploader. Their compatibility priority is a reconciliation policy, not proof of sensor accuracy.'),
+    isNum(ts) ? h('button',{class:'btn small',type:'button',onclick:async e=>{
+      const button=e.currentTarget;button.disabled=true;
+      try {
+        const data=await api(`api/provenance/minute?ts=${encodeURIComponent(ts)}`);
+        const observations=data.observations || [], byId=new Map(observations.map(x=>[x.id,x]));
+        const winner=field=>{
+          const id=data.winners?.[field], observation=byId.get(id);
+          if (!id) return 'Unknown';
+          return observation ? `${observation.source} · ${id.slice(0,10)}` : `Observation ${id.slice(0,10)} (outside recent list)`;
+        };
+        output.replaceChildren(h('dl',{class:'kv'},kv('Measured',fmtDateTime(ts)),
+          kv('HR winner',winner('hr')),kv('Steps winner',winner('steps')),kv('Activity winner',winner('active')),
+          kv('Reconciliation',data.algorithm_version || 'Unknown')),
+          h('ul',{class:'list'},observations.map(x=>h('li',null,h('span',{class:'t'},`${x.source} · ${x.id.slice(0,10)}`),
+            h('span',{class:'s'},`HR ${x.hr ?? 'unknown'} · steps ${x.steps ?? 'unknown'} · activity ${x.active ?? 'unknown'}; first received ${isNum(x.received) ? fmtDateTime(x.received) : 'unknown (legacy baseline)'}`)))),
+          h('p',{class:'foot'},'At most 50 observation summaries are shown. Raw batches stay private in the server journal; earlier overwritten source details cannot be recovered.'));
+      } catch (error) { output.replaceChildren(h('p',null,'Could not load source evidence. Try again.')); }
+      finally {button.disabled=false;}
+    }},'Inspect source evidence') : h('p',null,'No stored HR minute to inspect.'),output);
+}
+
 function collectionHealthCard() {
   const c=D().collection_health;
   if (!c) return card('device','Collection health',{cls:'wide'},pending('Diagnostics unavailable','Refresh after the server update.'));
@@ -1141,6 +1167,7 @@ function collectionHealthCard() {
       kv('Night schedule evidence',col.schedule_status==='historical_advertised' ? `${fmt(col.expected_due)} advertised slots past grace period; ${fmt(col.stored)} captures matched` : 'Unknown — no usable saved schedule'),
       kv('Watch → phone transfer','Unknown — not reported by the phone'),kv('Pending phone records','Unknown — queue telemetry not yet available')),
     warnings.length ? h('ul',{class:'list'},warnings.map(x=>h('li',null,h('span',{class:'s'},x)))) : null,
+    minuteProvenancePanel(),
     h('details',{class:'info'},h('summary',null,'Daily observed-minute coverage'),h('ul',{class:'list'},coverage),
       h('p',{class:'foot'},'Coverage counts sampled timestamp buckets, not continuous HR or wear time. DST days use their actual duration. Missing data never confirms rest.')),
     h('details',{class:'info'},h('summary',null,'Night slot evidence'),

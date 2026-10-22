@@ -19,6 +19,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 import briefing
 import fitness
 import oxygen
+import provenance
 import watch_api
 
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent / "web"))
@@ -131,6 +132,18 @@ def api_summary():
         return result
     except (ValueError, TypeError):
         return {"error": "Invalid day range"}, 400
+
+
+@app.get("/api/provenance/minute")
+def api_minute_provenance():
+    try:
+        ts = int(request.args.get("ts", ""))
+        if not 946684800 <= ts <= int(time.time()):
+            raise ValueError()
+    except (TypeError, ValueError):
+        return {"error": "Provide a past minute timestamp in epoch seconds"}, 400
+    with fitness.connect() as db:
+        return provenance.minute_details(db, ts)
 
 
 @app.put("/api/profile")
