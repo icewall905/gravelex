@@ -61,11 +61,23 @@ class PebbleFitOxygenExportServiceTest {
 
         val failed = service.syncNow()
         assertEquals(0, failed.uploaded)
+        assertEquals(null, service.lastSuccessfulUploadAt)
+        assertEquals(null, service.lastSuccessfulUploadCount)
         assertEquals(0L, settings.getLong("pebblefit_health_watermark", 0L))
 
         val succeeded = service.syncNow()
         assertEquals(1, succeeded.uploaded, succeeded.message)
+        assertTrue((service.lastSuccessfulUploadAt ?: 0L) > 0L)
+        assertEquals(1, service.lastSuccessfulUploadCount)
+        val restored = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { _, _ -> emptyList() }, readSessions = { _, _, _, _ -> emptyList() })
+        assertEquals(service.lastSuccessfulUploadAt, restored.lastSuccessfulUploadAt)
+        assertEquals(service.lastSuccessfulUploadCount, restored.lastSuccessfulUploadCount)
         assertEquals(sample.timestamp, settings.getLong("pebblefit_health_watermark", 0L))
+        assertTrue(restored.saveConfiguration("https://other.example", "").saved)
+        assertEquals(null, restored.lastSuccessfulUploadAt)
+        assertEquals(null, restored.lastSuccessfulUploadCount)
+        assertEquals(0L, settings.getLong("pebblefit_health_watermark", 0L))
         assertTrue(payload.contains("\"source\":\"gravelex\""))
         assertTrue(payload.contains("\"ts\":1700000000"))
         assertTrue(payload.contains("\"percent\":96"))

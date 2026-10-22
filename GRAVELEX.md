@@ -42,3 +42,9 @@ Version0.1.1 adds the missing `bloodOxygenPreferences` round trip. Phone Setting
 The watch sends oxygen in version14 minute records. Zero means no measurement. SpO2 must merge independently from step-count priority because a later update to the same minute may supply oxygen without adding steps. Diagnostics `HEALTH_FORMAT` and `HEALTH_OXYGEN` show packet format and valid/missing sample counts through ADB logs.
 
 The diagnostic Health Debug Stats refresh requests full history from the watch; the Health data export Sync button sends stored phone records to the HTTPS receiver. These are distinct steps. No supported public on-demand SpO2 SDK request was found; firmware background sampling can skip flat/off-wrist positions and attempts without accepted readings.
+
+## Checking oxygen setup in the app
+
+Version0.1.2 adds an SpO2 card to Health and a blood-oxygen setup/status view under Health settings. The card follows the selected day/week/month and shows observed readings with actual timestamps. Empty periods remain empty rather than zero. The setup view distinguishes the watch's reported monitoring switch, data stored on the phone, and the HTTPS export status. A switch not yet reported by the watch is shown as unknown, not assumed off.
+
+Last successful upload time and acknowledged batch count are retained across app restarts. They describe server acknowledgment, not sensor measurement time, and reset if you change server or token. Token contents stay hidden.

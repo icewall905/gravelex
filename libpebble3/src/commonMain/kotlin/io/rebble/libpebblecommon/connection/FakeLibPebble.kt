@@ -545,6 +545,8 @@ class FakeLibPebble : LibPebble {
     override suspend fun getHealthDataPageAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> = emptyList()
 
     override suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> = emptyList()
+    override suspend fun getLatestSpo2Reading(): HealthDataEntity? = null
+    override suspend fun getSpo2ReadingCountSince(sinceTimestamp: Long): Int = 0
 
     override suspend fun getOverlayEntriesAfter(
         afterTimestamp: Long,

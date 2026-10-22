@@ -62,6 +62,10 @@ class PebbleFitOxygenExportService(
     val baseUrl: String get() = settings.getString(URL_KEY, DEFAULT_URL).trimEnd('/')
     val enabled: Boolean get() = settings.getBoolean("gravelex_export_enabled", false)
     val tokenConfigured: Boolean get() = settings.hasKey(TOKEN_KEY)
+    val lastSuccessfulUploadAt: Long? get() =
+        if (settings.hasKey(LAST_UPLOAD_AT_KEY)) settings.getLong(LAST_UPLOAD_AT_KEY, 0L) else null
+    val lastSuccessfulUploadCount: Int? get() =
+        if (settings.hasKey(LAST_UPLOAD_COUNT_KEY)) settings.getInt(LAST_UPLOAD_COUNT_KEY, 0) else null
 
     fun saveConfiguration(urlInput: String, tokenInput: String, enableExport: Boolean = true): OxygenExportSaveResult {
         val url = urlInput.trim().trimEnd('/')
@@ -76,7 +80,11 @@ class PebbleFitOxygenExportService(
             settings.putString(URL_KEY, url)
             settings.putBoolean("gravelex_export_enabled", enableExport)
             if (tokenInput.isNotBlank()) tokenSetting.set(tokenInput.trim())
-            if (changedServer || tokenInput.isNotBlank()) clearCursors()
+            if (changedServer || tokenInput.isNotBlank()) {
+                clearCursors()
+                settings.remove(LAST_UPLOAD_AT_KEY)
+                settings.remove(LAST_UPLOAD_COUNT_KEY)
+            }
             val saved = settings.getString(URL_KEY, "") == url &&
                 (tokenInput.isBlank() || settings.hasKey(TOKEN_KEY))
             return if (saved) OxygenExportSaveResult(true, "Settings saved.")
@@ -176,6 +184,8 @@ class PebbleFitOxygenExportService(
                     }
                     if (configurationVersion != config.version) return OxygenExportStatus("Settings changed; upload can be retried.", uploaded)
                     if (response.status.value !in 200..299) return OxygenExportStatus("Upload failed (HTTP ${response.status.value}); will retry.", uploaded)
+                    settings.putLong(LAST_UPLOAD_AT_KEY, Clock.System.now().epochSeconds)
+                    settings.putInt(LAST_UPLOAD_COUNT_KEY, rows.size + sessions.size)
                 }
                 if (healthPage.isNotEmpty()) {
                     healthCursor = healthPage.last().timestamp
@@ -223,6 +233,8 @@ class PebbleFitOxygenExportService(
 
     private companion object {
         const val URL_KEY = "pebblefit_oxygen_url"
+        private const val LAST_UPLOAD_AT_KEY = "gravelex_last_upload_at"
+        private const val LAST_UPLOAD_COUNT_KEY = "gravelex_last_upload_count"
         const val TOKEN_KEY = "pebblefit_oxygen_token"
         const val HEALTH_WATERMARK_KEY = "pebblefit_health_watermark"
         const val HEALTH_CURSOR_KEY = "pebblefit_health_scan_cursor"

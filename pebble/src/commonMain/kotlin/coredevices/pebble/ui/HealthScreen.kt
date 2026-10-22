@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.rebble.libpebblecommon.health.HealthTimeRange
+import io.rebble.libpebblecommon.database.entity.HealthDataEntity
 import kotlinx.datetime.LocalDate
 import org.koin.compose.viewmodel.koinViewModel
 import kotlin.math.roundToInt
@@ -54,6 +55,9 @@ fun HealthScreen(topBarParams: TopBarParams, nav: NavBarNav) {
     val dl by vm.dateLabel.collectAsState()
     val imperial by vm.imperialUnits.collectAsState()
     val hasHrmWatch by vm.hasHrmWatch.collectAsState()
+    val hasBloodOxygenWatch by vm.hasBloodOxygenWatch.collectAsState()
+    val oxygen by vm.oxygen.collectAsState()
+    val bloodOxygenEnabled by vm.bloodOxygenEnabled.collectAsState()
 
     LaunchedEffect(Unit) {
         topBarParams.title("Health")
@@ -73,6 +77,7 @@ fun HealthScreen(topBarParams: TopBarParams, nav: NavBarNav) {
             ActivityCard(act, vm.selectedTimeRange, imperial)
             SleepCard(slp, vm.selectedTimeRange)
             if (hasHrmWatch) HeartRateCard(hr, vm.selectedTimeRange)
+            if (hasBloodOxygenWatch) OxygenCard(oxygen, vm.selectedTimeRange, bloodOxygenEnabled)
             TextButton(
                 onClick = {
                     nav.navigateTo(
@@ -333,6 +338,68 @@ private fun HeartRateCard(st: HeartRateUiState, range: HealthTimeRange) {
             }
             if (st.zoneMinutes.isNotEmpty()) HRZoneBar(st.zoneMinutes)
         }
+    }
+}
+
+@Composable
+private fun OxygenCard(st: OxygenUiState, range: HealthTimeRange, enabled: Boolean?) {
+    val latest = st.observations.firstOrNull()
+    val rangeLabel = when (range) {
+        HealthTimeRange.Daily -> "Selected day"
+        HealthTimeRange.Weekly -> "Selected week"
+        HealthTimeRange.Monthly -> "Selected month"
+    }
+    val subtitle = when {
+        latest != null -> "Recorded ${formatOxygenTimestamp(latest.timestamp)} · quality ${oxygenQualityLabel(latest.spo2Quality)} (${latest.spo2Quality})"
+        enabled == true -> "Enabled on watch · waiting for a recorded sample"
+        enabled == false -> "Monitoring is off on the watch"
+        else -> "Waiting for the watch preference"
+    }
+    val bg = Color(0xFF00695C)
+    HealthCard(bg) {
+        CardHeader(
+            color = bg,
+            cardName = "Blood Oxygen",
+            label = rangeLabel,
+            subtitle = subtitle,
+            mainValue = latest?.let { "${it.spo2Percent}%" } ?: "—",
+            secondLabel = "Observations",
+            secondValue = st.observations.size.toString(),
+        )
+        when {
+            st.isLoading -> ChartPlaceholder("Loading readings…", "")
+            st.observations.isEmpty() -> ChartPlaceholder(
+                "No recorded readings in this period",
+                "The watch records occasional samples while blood oxygen monitoring is enabled.",
+            )
+            else -> {
+                Column(Modifier.fillMaxWidth().background(bg).padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text("Observed samples · no interpolation", color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelSmall)
+                    Spacer(Modifier.height(6.dp))
+                    OxygenScatterChart(st.observations, st.rangeStart, st.rangeEnd)
+                    Text("${formatOxygenTimestamp(st.rangeStart)}    —    ${formatOxygenTimestamp(st.rangeEnd - 1)}", color = Color.White.copy(alpha = 0.55f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 2.dp))
+                    val low = st.observations.minOf { it.spo2Percent }
+                    val high = st.observations.maxOf { it.spo2Percent }
+                    Text("Observed range: $low–$high%", color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 2.dp))
+                    Spacer(Modifier.height(6.dp))
+                    st.observations.take(5).forEach { reading ->
+                        OxygenObservationRow(reading)
+                    }
+                    if (st.observations.size > 5) {
+                        Text("Showing 5 newest of ${st.observations.size} observations", color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    Text("Device-reported signal quality; not a clinical assessment.", color = Color.White.copy(alpha = 0.55f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OxygenObservationRow(reading: HealthDataEntity) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+        Text(formatOxygenTimestamp(reading.timestamp), color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.bodySmall)
+        Text("${reading.spo2Percent}% · ${oxygenQualityLabel(reading.spo2Quality)} (${reading.spo2Quality})", color = Color.White, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
     }
 }
 

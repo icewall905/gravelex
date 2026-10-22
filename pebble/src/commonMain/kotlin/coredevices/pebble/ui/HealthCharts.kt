@@ -35,6 +35,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.rebble.libpebblecommon.health.OverlayType
+import io.rebble.libpebblecommon.database.entity.HealthDataEntity
 
 internal val ActivityHeaderColor = Color(0xFF00A982)
 internal val ActivityBgColor = Color(0xFF009579)
@@ -50,6 +51,7 @@ internal val TypicalBadgeColor = Color(0xFF8BC34A)
 internal val LightSleepBarColor = Color(0xFF5B9BD5)
 internal val DeepSleepBarColor = Color(0xFF0A1F38)
 internal val HRLineColor = Color(0xFFF0437D)
+internal val OxygenPointColor = Color(0xFFA7FFEB)
 internal val HRZone1Color = Color(0xFFF0437D)
 internal val HRZone2Color = Color(0xFF179AC6)
 internal val HRZone3Color = Color(0xFF00C3FD)
@@ -351,6 +353,41 @@ internal fun HRLineChart(hrs: List<Double?>, scrub: ScrubState, tm: androidx.com
         }
         val pointsPerHour = (hrs.size / 24).coerceAtLeast(1)
         for (i in hrs.indices step pointsPerHour * 6) { drawText(tm.measure("${i / pointsPerHour}", ls), topLeft = Offset(i * sx, cH + 2.dp.toPx())) }
+    }
+}
+
+/** Point-only plot of recorded samples. Gaps stay empty; no line suggests unmeasured values. */
+@Composable
+internal fun OxygenScatterChart(
+    observations: List<HealthDataEntity>,
+    rangeStart: Long,
+    rangeEnd: Long,
+) {
+    val valid = observations.filter { it.spo2Percent in 1..100 && it.timestamp in rangeStart until rangeEnd }
+    if (valid.isEmpty() || rangeEnd <= rangeStart) return
+    val minObserved = valid.minOf { it.spo2Percent }
+    val maxObserved = valid.maxOf { it.spo2Percent }
+    val observedSpan = (maxObserved - minObserved).coerceAtLeast(1)
+    val padding = (observedSpan * 0.12f).coerceAtLeast(1f)
+    val minY = (minObserved - padding).coerceAtLeast(0f)
+    val maxY = (maxObserved + padding).coerceAtMost(100f)
+    val ySpan = (maxY - minY).coerceAtLeast(1f)
+
+    Canvas(Modifier.fillMaxWidth().height(112.dp).padding(horizontal = 16.dp)) {
+        val labelHeight = 12.dp.toPx()
+        val plotHeight = (size.height - labelHeight).coerceAtLeast(1f)
+        val plotWidth = size.width
+        drawRect(ChartOverlayColor, Offset.Zero, Size(plotWidth, plotHeight))
+        for (i in 1..3) {
+            val y = plotHeight * i / 4f
+            drawLine(AxisLabelColor.copy(alpha = 0.25f), Offset(0f, y), Offset(plotWidth, y), 1.dp.toPx())
+        }
+        valid.forEach { sample ->
+            val x = ((sample.timestamp - rangeStart).toFloat() / (rangeEnd - rangeStart).toFloat()).coerceIn(0f, 1f) * plotWidth
+            val y = plotHeight - ((sample.spo2Percent - minY) / ySpan) * plotHeight
+            drawCircle(Color.White.copy(alpha = 0.8f), 5.dp.toPx(), Offset(x, y))
+            drawCircle(OxygenPointColor, 3.dp.toPx(), Offset(x, y))
+        }
     }
 }
 

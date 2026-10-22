@@ -156,6 +156,8 @@ interface HealthDataApi {
     suspend fun getHealthDataAfter(afterTimestamp: Long): List<HealthDataEntity>
     suspend fun getHealthDataPageAfter(afterTimestamp: Long, limit: Int = 3000): List<HealthDataEntity>
     suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int = 3000): List<HealthDataEntity>
+    suspend fun getLatestSpo2Reading(): HealthDataEntity?
+    suspend fun getSpo2ReadingCountSince(sinceTimestamp: Long): Int
     suspend fun getOverlayEntriesAfter(afterTimestamp: Long, types: List<Int>): List<OverlayDataEntity>
     suspend fun getOverlayEntriesPageAfter(afterTimestamp: Long, afterType: Int, types: List<Int>, limit: Int = 3000): List<OverlayDataEntity>
 

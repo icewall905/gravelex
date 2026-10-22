@@ -6,12 +6,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coredevices.util.AppResumed
 import io.rebble.libpebblecommon.connection.KnownPebbleDevice
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.database.dao.DailyMovementAggregate
+import io.rebble.libpebblecommon.database.entity.HealthDataEntity
 import io.rebble.libpebblecommon.health.HealthTimeRange
 import io.rebble.libpebblecommon.health.OverlayType
 import io.rebble.libpebblecommon.metadata.supportsHrm
+import io.rebble.libpebblecommon.metadata.supportsBloodOxygen
 
 import io.rebble.libpebblecommon.services.DailySleep
 import kotlinx.coroutines.async
@@ -95,8 +98,18 @@ data class HeartRateUiState(
     val isLoading: Boolean = true,
 )
 
+data class OxygenUiState(
+    val observations: List<HealthDataEntity> = emptyList(),
+    val rangeStart: Long = 0L,
+    val rangeEnd: Long = 0L,
+    val isLoading: Boolean = true,
+) {
+    val latest: HealthDataEntity? get() = observations.firstOrNull()
+}
+
 class HealthViewModel(
     private val libPebble: LibPebble,
+    private val appResumed: AppResumed,
 ) : ViewModel() {
     var selectedTimeRange by mutableStateOf(HealthTimeRange.Daily)
     var dateOffset by mutableStateOf(0)
@@ -109,12 +122,22 @@ class HealthViewModel(
         .map { devs -> devs.any { it is KnownPebbleDevice && it.color?.supportsHrm() == true } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val hasBloodOxygenWatch = libPebble.watches
+        .map { devs -> devs.any { it is KnownPebbleDevice && it.watchType.supportsBloodOxygen(it.runningFwVersion) } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val bloodOxygenEnabled = libPebble.healthSettings
+        .map { it.bloodOxygenEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _activity = MutableStateFlow(ActivityUiState())
     val activity: StateFlow<ActivityUiState> = _activity.asStateFlow()
     private val _sleep = MutableStateFlow(SleepUiState())
     val sleep: StateFlow<SleepUiState> = _sleep.asStateFlow()
     private val _heartRate = MutableStateFlow(HeartRateUiState())
     val heartRate: StateFlow<HeartRateUiState> = _heartRate.asStateFlow()
+    private val _oxygen = MutableStateFlow(OxygenUiState())
+    val oxygen: StateFlow<OxygenUiState> = _oxygen.asStateFlow()
     private val _dateLabel = MutableStateFlow("")
     val dateLabel: StateFlow<String> = _dateLabel.asStateFlow()
 
@@ -123,6 +146,7 @@ class HealthViewModel(
             merge(
                 snapshotFlow { selectedTimeRange to dateOffset },
                 libPebble.healthDataUpdated.map { selectedTimeRange to dateOffset },
+                appResumed.appResumed.map { selectedTimeRange to dateOffset },
             ).collectLatest { (range, offset) ->
                 loadData(range, offset)
             }
@@ -138,6 +162,7 @@ class HealthViewModel(
     fun navigateForward() { if (dateOffset < 0) dateOffset++ }
 
     private suspend fun loadData(range: HealthTimeRange, offset: Int) {
+        _oxygen.value = _oxygen.value.copy(isLoading = true)
         val tz = TimeZone.currentSystemDefault()
         val today = Clock.System.now().toLocalDateTime(tz).date
         when (range) {
@@ -181,6 +206,7 @@ class HealthViewModel(
         val sleepSession = sleepSessionD.await()
         val typicalSteps = typicalStepsD.await()
         val sessions = sessionsD.await()
+        _oxygen.value = buildOxygenState(healthData, dayStart, dayEnd)
 
         val hourlySteps = LongArray(24)
         val hrBuckets = Array<MutableList<Int>>(288) { mutableListOf() } // 5-minute resolution
@@ -392,6 +418,7 @@ class HealthViewModel(
         }
         _sleep.value = buildSleepState(stackedSleep, daysWithData, sleepEntries, tz)
         _heartRate.value = buildHeartRateState(start, end, dayStarts, dayLabels)
+        _oxygen.value = buildOxygenState(libPebble.getHealthDataForRange(start, end), start, end)
     }
 
     private suspend fun loadAggregatedMonthly(
@@ -423,9 +450,28 @@ class HealthViewModel(
         }
         _sleep.value = buildSleepState(stackedSleep, daysWithData, sleepEntries, tz)
         _heartRate.value = buildHeartRateState(start, end)
+        _oxygen.value = buildOxygenState(libPebble.getHealthDataForRange(start, end), start, end)
     }
 
+    private fun buildOxygenState(rows: List<HealthDataEntity>, start: Long, end: Long) = OxygenUiState(
+        observations = validOxygenObservations(rows, start, end),
+        rangeStart = start,
+        rangeEnd = end,
+        isLoading = false,
+    )
+
 }
+
+internal fun validOxygenObservations(
+    rows: List<HealthDataEntity>,
+    start: Long,
+    end: Long,
+    now: Long = Clock.System.now().epochSeconds,
+): List<HealthDataEntity> =
+    rows.asSequence()
+        .filter { it.timestamp >= start && it.timestamp < end && it.timestamp <= now && it.spo2Percent in 1..100 }
+        .sortedByDescending { it.timestamp }
+        .toList()
 
 internal fun buildDailySleepSegments(dayStart: Long, dailySleep: DailySleep?): List<SleepSegmentUi> {
     if (dailySleep == null) return emptyList()

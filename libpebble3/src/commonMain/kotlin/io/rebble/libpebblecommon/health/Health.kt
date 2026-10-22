@@ -188,6 +188,11 @@ class Health(
     override suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> =
         healthDao.getSpo2DataAfter(afterTimestamp, limit.coerceIn(1, 3000))
 
+    override suspend fun getLatestSpo2Reading(): HealthDataEntity? = healthDao.getLatestSpo2Reading(System.now().epochSeconds)
+
+    override suspend fun getSpo2ReadingCountSince(sinceTimestamp: Long): Int =
+        healthDao.getSpo2ReadingCountSince(sinceTimestamp, System.now().epochSeconds)
+
     override suspend fun getOverlayEntriesAfter(
         afterTimestamp: Long,
         types: List<Int>

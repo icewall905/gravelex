@@ -98,6 +98,12 @@ interface HealthDao {
     @Query("SELECT * FROM health_data WHERE spo2Percent BETWEEN 1 AND 100 AND timestamp > :afterTimestamp ORDER BY timestamp ASC LIMIT :limit")
     suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity>
 
+    @Query("SELECT * FROM health_data WHERE spo2Percent BETWEEN 1 AND 100 AND timestamp <= :nowTimestamp ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestSpo2Reading(nowTimestamp: Long): HealthDataEntity?
+
+    @Query("SELECT COUNT(*) FROM health_data WHERE spo2Percent BETWEEN 1 AND 100 AND timestamp >= :sinceTimestamp AND timestamp <= :nowTimestamp")
+    suspend fun getSpo2ReadingCountSince(sinceTimestamp: Long, nowTimestamp: Long): Int
+
     @Query("SELECT * FROM overlay_data WHERE startTime > :afterTimestamp AND type IN (:types) ORDER BY startTime ASC")
     suspend fun getOverlayEntriesAfter(afterTimestamp: Long, types: List<Int>): List<OverlayDataEntity>
 

@@ -423,8 +423,18 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
     }
     var showHealthStatsDialog by remember { mutableStateOf(false) }
     var showOxygenExportDialog by remember { mutableStateOf(false) }
+    var showOxygenStatusDialog by remember { mutableStateOf(false) }
     if (showOxygenExportDialog) {
         OxygenExportSettingsDialog(onDismiss = { showOxygenExportDialog = false })
+    }
+    if (showOxygenStatusDialog) {
+        OxygenSetupStatusDialog(
+            onDismiss = { showOxygenStatusDialog = false },
+            onConfigureExport = {
+                showOxygenStatusDialog = false
+                showOxygenExportDialog = true
+            },
+        )
     }
     val showFakeHealthDataDialog = remember { mutableStateOf(false) }
     var showSignInDialog by remember { mutableStateOf(false) }
@@ -1756,6 +1766,15 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                     keywords = "health oxygen spo2 steps sleep activity export GravelEx HRV",
                     show = { healthSettings.trackingEnabled },
                     action = { showOxygenExportDialog = true },
+                ),
+                basicSettingsActionItem(
+                    title = "Blood Oxygen Setup & Status",
+                    description = "Check the watch preference, recent readings, and GravelEx upload status",
+                    topLevelType = TopLevelType.Phone,
+                    section = Section.Health,
+                    keywords = "health blood oxygen SpO2 watch status export",
+                    show = { healthSettings.trackingEnabled && anyWatchSupportsBloodOxygen },
+                    action = { showOxygenStatusDialog = true },
                 ),
                 basicSettingsActionItem(
                     title = "View debug stats",
