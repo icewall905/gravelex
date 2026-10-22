@@ -87,6 +87,8 @@ fun parseStepsData(payload: ByteArray, itemSize: UShort): List<HealthDataEntity>
             var heartRate = 0
             var heartRateWeight = 0
             var heartRateZone = 0
+            var spo2Percent = 0
+            var spo2Quality = 0
 
             if (version >= VERSION_FW_3_11) {
                 restingGramCalories = buffer.getUShort().toInt()
@@ -106,6 +108,14 @@ fun parseStepsData(payload: ByteArray, itemSize: UShort): List<HealthDataEntity>
                 heartRateZone = buffer.getUByte().toInt()
             }
 
+            // Firmware 4.41.1 v14 appends SpO2 percent and quality bytes.
+            // Keep quality verbatim (0..255); zero percent denotes no sample.
+            if (version >= VERSION_FW_4_4_1 && sampleSize >= VERSION_FW_4_4_1_SAMPLE_SIZE) {
+                spo2Percent = buffer.getUByte().toInt()
+                spo2Quality = buffer.getUByte().toInt()
+                if (spo2Percent !in 1..100) spo2Percent = 0
+            }
+
             // Newer versions append fields to each sample
             val unread = sampleSize - (buffer.readPosition - sampleStart)
             if (unread > 0) buffer.getBytes(unread)
@@ -123,7 +133,9 @@ fun parseStepsData(payload: ByteArray, itemSize: UShort): List<HealthDataEntity>
                     distanceCm = distanceCm,
                     heartRate = heartRate,
                     heartRateZone = heartRateZone,
-                    heartRateWeight = heartRateWeight
+                    heartRateWeight = heartRateWeight,
+                    spo2Percent = spo2Percent,
+                    spo2Quality = spo2Quality
                 )
             )
 
@@ -254,6 +266,8 @@ private val VERSION_FW_4_0: UShort = 7u
 private val VERSION_FW_4_1: UShort = 12u
 private val VERSION_FW_4_3: UShort = 13u
 private const val VERSION_FW_4_3_SAMPLE_SIZE = 16
+private val VERSION_FW_4_4_1: UShort = 14u
+private const val VERSION_FW_4_4_1_SAMPLE_SIZE = 18
 private val SUPPORTED_STEP_VERSIONS = setOf(
     VERSION_FW_3_10_AND_BELOW,
     VERSION_FW_3_11,

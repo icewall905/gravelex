@@ -420,6 +420,10 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
         PKJSCopyTokenDialog(onDismissRequest = { setShowCopyTokenDialog(false) })
     }
     var showHealthStatsDialog by remember { mutableStateOf(false) }
+    var showOxygenExportDialog by remember { mutableStateOf(false) }
+    if (showOxygenExportDialog) {
+        OxygenExportSettingsDialog(onDismiss = { showOxygenExportDialog = false })
+    }
     val showFakeHealthDataDialog = remember { mutableStateOf(false) }
     var showSignInDialog by remember { mutableStateOf(false) }
     var debugOptionsEnabled by remember { mutableStateOf(settings.showDebugOptions()) }
@@ -1724,6 +1728,15 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                     onCheckChanged = {
                         coreConfigHolder.update(coreConfig.copy(preferHealthTab = it))
                     },
+                ),
+                basicSettingsActionItem(
+                    title = "PebbleFit oxygen export",
+                    description = "Configure encrypted phone-to-server SpO₂ upload",
+                    topLevelType = TopLevelType.Phone,
+                    section = Section.Health,
+                    keywords = "oxygen spo2 export PebbleFit",
+                    show = { healthSettings.trackingEnabled },
+                    action = { showOxygenExportDialog = true },
                 ),
                 basicSettingsActionItem(
                     title = "View debug stats",

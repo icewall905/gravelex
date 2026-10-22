@@ -543,6 +543,8 @@ class FakeLibPebble : LibPebble {
 
     override suspend fun getHealthDataAfter(afterTimestamp: Long): List<HealthDataEntity> = emptyList()
 
+    override suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> = emptyList()
+
     override suspend fun getOverlayEntriesAfter(
         afterTimestamp: Long,
         types: List<Int>

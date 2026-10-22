@@ -114,6 +114,8 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         getByName("debug") {
+            // Keep the user's installed/signed Gravel intact during hardware verification.
+            applicationIdSuffix = ".pebblefit"
             isMinifyEnabled = false
             isDebuggable = true
         }

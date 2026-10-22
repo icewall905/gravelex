@@ -182,6 +182,9 @@ class Health(
     override suspend fun getHealthDataAfter(afterTimestamp: Long): List<HealthDataEntity> =
         healthDao.getHealthDataAfter(afterTimestamp)
 
+    override suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> =
+        healthDao.getSpo2DataAfter(afterTimestamp, limit.coerceIn(1, 3000))
+
     override suspend fun getOverlayEntriesAfter(
         afterTimestamp: Long,
         types: List<Int>

@@ -66,6 +66,11 @@ class HealthRecordFormatsTest {
                 buffer.putUByte((1 + s % 3).toUByte()) // heart rate zone
                 wrote += 1
             }
+            if (version == 14) {
+                buffer.putUByte(97u) // SpO2 percent
+                buffer.putUByte(242u) // SpO2 quality
+                wrote += 2
+            }
             repeat(sampleSize - wrote) { buffer.putUByte(0xAAu) }
         }
         return buffer.array().toByteArray()
@@ -84,6 +89,8 @@ class HealthRecordFormatsTest {
         heartRate = if (version >= 7) 60 + s else 0,
         heartRateZone = if (version >= 13) 1 + s % 3 else 0,
         heartRateWeight = if (version >= 12) 100 + s else 0,
+        spo2Percent = if (version == 14) 97 else 0,
+        spo2Quality = if (version == 14) 242 else 0,
     )
 
     private fun parsedRecord(version: Int, start: UInt) =

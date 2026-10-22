@@ -154,6 +154,7 @@ data class LatestHeartRate(
 interface HealthDataApi {
     suspend fun getLatestTimestamp(): Long?
     suspend fun getHealthDataAfter(afterTimestamp: Long): List<HealthDataEntity>
+    suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int = 3000): List<HealthDataEntity>
     suspend fun getOverlayEntriesAfter(afterTimestamp: Long, types: List<Int>): List<OverlayDataEntity>
 
     /** Returns minute-level health data for the given epoch-second range. */

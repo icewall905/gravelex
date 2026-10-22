@@ -13,6 +13,7 @@ import coredevices.api.WisprFlowAuth
 import coredevices.coreapp.CommonAppDelegate
 import coredevices.pebble.health.HealthSyncTracker
 import coredevices.pebble.health.PlatformHealthSync
+import coredevices.pebble.health.PebbleFitOxygenExportService
 import coredevices.coreapp.ui.navigation.CoreDeepLinkHandler
 import coredevices.coreapp.ui.screens.BugReportProcessor
 import coredevices.coreapp.ui.screens.OnboardingViewModel
@@ -141,5 +142,11 @@ val utilModule = module {
     // had an account; see SignedOutUsersDao.
     single<UsersDao> { SignedOutUsersDao }
     singleOf(::HealthSyncTracker)
+    single {
+        PebbleFitOxygenExportService(get(), get(), get()) { afterTimestamp, limit ->
+            get<io.rebble.libpebblecommon.connection.HealthDataApi>()
+                .getSpo2DataAfter(afterTimestamp, limit)
+        }
+    }
     singleOf(::PlatformHealthSync)
 }

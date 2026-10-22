@@ -37,6 +37,7 @@ class PlatformHealthSync(
     private val appResumed: AppResumed,
     private val healthManager: HealthManager,
     private val healthDataApi: HealthDataApi,
+    private val oxygenExport: PebbleFitOxygenExportService,
 ) {
     private val logger = Logger.withTag("PlatformHealthSync")
 
@@ -48,12 +49,15 @@ class PlatformHealthSync(
         scope.launch {
             libPebble.healthDataUpdated.collect {
                 sync()
+                oxygenExport.syncNow()
             }
         }
         scope.launch {
             sync()
+            oxygenExport.syncNow()
             appResumed.appResumed.collect {
                 sync()
+                oxygenExport.syncNow()
             }
         }
     }

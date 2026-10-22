@@ -27,7 +27,9 @@ class HealthDataParserTest {
             buffer.putUByte((60 + s).toUByte()) // hr
             buffer.putUShort(1u) // hr weight
             buffer.putUByte(3u) // hr zone
-            repeat(extraSampleBytes) { buffer.putUByte(0xAAu) }
+            if (extraSampleBytes >= 1) buffer.putUByte(if (s == 0) 98u else 0u) // SpO2 percent
+            if (extraSampleBytes >= 2) buffer.putUByte(if (s == 0) 241u else 255u) // quality
+            repeat((extraSampleBytes - 2).coerceAtLeast(0)) { buffer.putUByte(0xAAu) }
         }
         return buffer.array().toByteArray()
     }
@@ -44,6 +46,9 @@ class HealthDataParserTest {
         assertEquals(listOf(100, 101, 100, 101), records.map { it.steps })
         assertEquals(listOf(60, 61, 60, 61), records.map { it.heartRate })
         assertTrue(records.all { it.heartRateZone == 3 && it.distanceCm == 7000 })
+        assertEquals(listOf(98, 0, 98, 0), records.map { it.spo2Percent })
+        assertEquals(listOf(241, 255, 241, 255), records.map { it.spo2Quality })
+        assertEquals(listOf(1600000000L, 1600000060L, 1600000000L, 1600000060L), records.map { it.timestamp })
     }
 
     @Test
