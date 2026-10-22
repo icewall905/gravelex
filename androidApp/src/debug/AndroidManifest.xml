@@ -5,7 +5,21 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+    <!--
+        The suffixed debug app installs beside a differently signed Gravel, so it
+        must not redefine the PebbleKit 2 permissions (the installer rejects a
+        permission already owned by another signer) or claim the fixed basalt
+        authority (one owner per authority). The basalt provider stays declared
+        because PebbleKitComponentState toggles it by class name.
+    -->
+    <permission android:name="io.rebble.pebblekit2.permission.SEND_DATA_TO_WATCH" tools:node="remove" />
+    <permission android:name="io.rebble.pebblekit2.permission.RECEIVE_DATA_FROM_WATCH" tools:node="remove" />
+    <permission android:name="io.rebble.pebblekit2.permission.READ_PROVIDER" tools:node="remove" />
     <application>
+        <provider
+            android:name="io.rebble.libpebblecommon.pebblekit.classic.PebbleKitProvider"
+            android:authorities="${applicationId}.basalt"
+            tools:replace="android:authorities" />
         <!--
             Sets the dictation debug hooks from adb (see SttDebugReceiver);
             the DUMP gate is described with the other adb receivers in
