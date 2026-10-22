@@ -262,11 +262,14 @@ def _z(value: float, history: list[float], seed_sd: float | None = None) -> tupl
     return None, False
 
 
-def training_state(history: list[dict[str, Any]], chronic_days: int = 42) -> dict[str, Any] | None:
+def training_state(history: list[dict[str, Any]], chronic_days: int = 42,
+                   today: date | None = None) -> dict[str, Any] | None:
     """Load balance from the latest confirmed day, ready once a full chronic
     window of consecutive confirmed days precedes it.  Today is usually not
     confirmed in the morning, so it is never required."""
-    complete = [h for h in history or [] if h.get("complete")]
+    today = today or datetime.now(TZ).date()
+    complete = sorted((h for h in history or [] if h.get("complete") and date.fromisoformat(h["date"]) <= today),
+                      key=lambda h: h["date"])
     if not complete:
         return None
     last = complete[-1]
@@ -275,8 +278,10 @@ def training_state(history: list[dict[str, Any]], chronic_days: int = 42) -> dic
     while day.isoformat() in confirmed:
         run += 1
         day -= timedelta(days=1)
+    age = (today - date.fromisoformat(last["date"])).days
     return {"date": last["date"], "acute": last.get("acute"), "chronic": last.get("chronic"),
-            "consecutive_days": run, "status": "ready" if run >= chronic_days else "warming"}
+            "age_days": age, "consecutive_days": run,
+            "status": "stale" if age > 1 else "ready" if run >= chronic_days else "warming"}
 
 
 def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_latest: dict[str, Any] | None,
@@ -315,11 +320,18 @@ def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_
         components["sleep"] = {"score": sleep["score"], "detail": f"{sleep['sleep_s'] / 3600:.1f} h"}
 
     t = training_latest or {}
-    if t.get("status") == "ready" and t.get("chronic"):
+    try:
+        load_age = (today - date.fromisoformat(t["date"])).days
+    except (KeyError, TypeError, ValueError):
+        load_age = None
+    load_fresh = load_age is not None and 0 <= load_age <= 1
+    if t.get("status") == "ready" and load_fresh and t.get("chronic"):
         # Form relative to fitness: fresher than usual scores above 50.
         ratio = (t["chronic"] - t["acute"]) / t["chronic"]
         components["training_load"] = {"score": round(_clip(50 + 100 * ratio)),
                                        "detail": f"acute {t['acute']:.0f} vs chronic {t['chronic']:.0f}"}
+    elif t and not load_fresh:
+        missing.append("training_load: latest confirmed day is stale or undated; confirm history through yesterday")
     else:
         missing.append(f"training_load: needs 42 consecutive confirmed days ({t.get('consecutive_days', 0)} so far)")
 
@@ -345,4 +357,4 @@ def build(analysed: list[tuple[float, dict[str, Any]]], sleep_sessions: list[dic
     sleep = sleep_score(sleep_nights, today, need_s)
     return {"today": today.isoformat(), "nights": nights[-60:], "hrv_status": hrv_status(nights, today, seed), "seed": seed,
             "sleep": sleep, "sleep_nights": sleep_nights[-60:],
-            "readiness": readiness(nights, sleep, training_state(training_history or []), today, seed)}
+            "readiness": readiness(nights, sleep, training_state(training_history or [], today=today), today, seed)}

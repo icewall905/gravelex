@@ -71,11 +71,36 @@ def ingest(data):
             if not isinstance(row, dict):
                 raise ValueError("Minute records must be objects")
             t = int(number(row.get("ts"), 946684800, now + 300, "record timestamp"))
-            hr = row.get("hr")
-            hr = int(number(hr, 1, 300, "heart rate")) if hr else None
-            steps = int(number(row.get("steps", 0), 0, 10000, "steps"))
-            active = int(number(row.get("active", 0), 0, 1, "active"))
-            db.execute("INSERT OR REPLACE INTO minutes VALUES(?,?,?,?,?)", (t, hr, steps, active, json.dumps(row)))
+            previous = db.execute("SELECT * FROM minutes WHERE ts=?", (t,)).fetchone()
+            # Merge complementary uploads in arrival order. Missing/null metrics
+            # mean unknown, never zero or a deletion. Explicit zero activity or
+            # steps is a valid correction. There is no source-priority inference.
+            payload = json.loads(previous["payload"]) if previous else {}
+            payload.update(row)
+            values = {}
+            for key, low, high in (("hr", 1, 300), ("steps", 0, 10000), ("active", 0, 1)):
+                value = row.get(key)
+                # Legacy watch history exports use numeric HR 0 as a
+                # missing-sample sentinel, not a measured zero-beat pulse.
+                # Booleans must still fail validation rather than aliasing 0.
+                if key == "hr" and not isinstance(value, bool) and value == 0:
+                    value = None
+                if value is None:
+                    value = previous[key] if previous else None
+                else:
+                    value = number(value, low, high, key)
+                    if value != int(value):
+                        raise ValueError(f"{key} must be an integer")
+                    value = int(value)
+                values[key] = value
+                # Normalize canonical fields in the payload too, so a null
+                # replay cannot disagree with the retained column values.
+                payload[key] = value
+            payload["ts"] = t
+            db.execute("""INSERT INTO minutes(ts,hr,steps,active,payload) VALUES(?,?,?,?,?)
+              ON CONFLICT(ts) DO UPDATE SET hr=excluded.hr,steps=excluded.steps,
+              active=excluded.active,payload=excluded.payload""",
+              (t, values["hr"], values["steps"], values["active"], json.dumps(payload)))
         for s in sessions:
             if not isinstance(s, dict):
                 raise ValueError("Sessions must be objects")

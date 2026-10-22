@@ -2,6 +2,8 @@
 
 The self-hosted companion to GravelEx: the same Pebble Health PWA, durable receiver and analytics used by this project. It stores your own watch data in SQLite and works without Google services, Home Assistant, an external database or a cloud LLM. Optional integrations are configured separately.
 
+See [FITNESS-ROADMAP.md](FITNESS-ROADMAP.md) for the audited limitations, ordered implementation tasks and delivery status.
+
 ## Start a new instance
 
 Requirements: Docker Engine with Compose v2, and Python 3 for the setup script.

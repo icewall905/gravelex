@@ -21,3 +21,7 @@ The Android native oxygen Health card and Settings diagnostics were previously b
 ## Outstanding operational checks
 
 A phone is not connected to ADB at the final packaging check, so Obtainium refresh to the published 0.1.2 release could not be checked again. Each new deployment should verify its own phone upload, HA credentials/forwarding if enabled, HTTPS authentication, and backup restore. Production history and infrastructure are deliberately excluded.
+
+## Fitness roadmap follow-up
+
+See FITNESS-ROADMAP.md for the full audit and 30 ordered improvement tickets. F01 protects minute data against sparse replays (including legacy HR-zero sentinels); F02 excludes stale/future/undated load from current readiness. Independent review approved both; the complete backend suite passes 34 tests in the dependency image. The roadmap delivery ledger records rollout status.
