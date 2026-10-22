@@ -16,11 +16,13 @@ rejected samples.
 from __future__ import annotations
 
 import os
+import time
 
 from collections import defaultdict
 from datetime import datetime
 from statistics import median
 import math
+import motion_quality
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -57,11 +59,7 @@ def _context(payload: dict[str, Any]) -> str:
 
 
 def _motion(payload: dict[str, Any]) -> dict[str, Any]:
-    samples = payload.get("motion_samples", 0)
-    total = payload.get("motion_total", 0)
-    if not _finite_number(samples) or samples <= 0 or not _finite_number(total) or total < 0:
-        return {"available": False, "samples": 0, "normalized_mean": None}
-    return {"available": True, "samples": int(samples), "normalized_mean": round(float(total) / float(samples), 6), "source":payload.get("motion_source","processed_accelerometer"), "vibration_status":payload.get("vibration_status","unspecified")}
+    return motion_quality.assess(payload)
 
 
 def _sample_period(offsets: list[Any]) -> float | None:
@@ -264,6 +262,9 @@ def analyze_session(payload: dict[str, Any]) -> dict[str, Any]:
     elif not motion["available"]:
         status = "motion_unknown"
         unique_reasons.append("motion_data_missing_or_empty")
+    elif not motion["eligible"]:
+        status = "motion_" + motion["status"]
+        unique_reasons.append("motion_" + motion["status"])
     else:
         status = "experimental"
     # The spectral estimate is the costly part; only run it for usable sessions.
@@ -272,6 +273,9 @@ def analyze_session(payload: dict[str, Any]) -> dict[str, Any]:
         respiration = _respiration([v for _, v, _ in max(runs, key=len)], period, _context(payload))
     return {
         "status": status,
+        "source": f"pebble_ppi:firmware={payload.get('firmware', 'unknown')}:collector={payload.get('collector_version', 'unknown')}",
+        "algorithm_version": "hrv-v2-motion",
+        "diagnostic_rmssd_ms": rmssd,
         "quality": status,
         "validated": False,
         "experimental_rmssd_ms": rmssd if status == "experimental" else None,
@@ -297,8 +301,16 @@ def analyze_session(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def analyze_history(sessions: list[dict[str, Any]]) -> dict[str, Any]:
+def _prior_days(rows, current):
+    current_day = datetime.fromtimestamp(current['ts'], LOCAL_TZ).date()
+    return [r for r in rows if all(r[k] == current[k] for k in ('context','metric','source','algorithm_version'))
+            and r['adequate_motion'] and r['experimental_rmssd_ms'] is not None
+            and 1 <= (current_day-datetime.fromisoformat(r['date']).date()).days <= 28]
+
+
+def analyze_history(sessions: list[dict[str, Any]], now: float | None = None) -> dict[str, Any]:
     """Analyze history with context-separated, prior-day-only baselines."""
+    now = time.time() if now is None else now
     points = []
     by_day: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in sessions if isinstance(sessions, list) else []:
@@ -316,16 +328,16 @@ def analyze_history(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         quality = analyze_session(payload)
         ts = row.get("ts", payload.get("ts"))
         context = quality["context"]
-        point = {"ts": ts, "experimental_rmssd_ms": quality["experimental_rmssd_ms"], "quality": quality["status"], "context": context, "metric": quality["metric"], "source_validation": "unvalidated", "motion": quality["motion"]}
+        point = {"ts": ts, "experimental_rmssd_ms": quality["experimental_rmssd_ms"], "quality": quality["status"], "context": context, "metric": quality["metric"], "source_validation": "unvalidated", "motion": quality["motion"], "source": quality["source"], "algorithm_version": quality["algorithm_version"]}
         points.append(point)
-        if isinstance(ts, (int, float)):
+        if _finite_number(ts) and 946684800 <= ts <= now:
             day = datetime.fromtimestamp(ts, LOCAL_TZ).date().isoformat()
-            by_day[(context, day)].append(quality)
+            by_day[(context, day, quality["source"], quality["algorithm_version"])].append(quality)
     day_summaries = []
     progress = {}
     for context in ("manual", "scheduled"):
         rows = []
-        for (ctx, day), values in sorted(by_day.items()):
+        for (ctx, day, source, algorithm), values in sorted(by_day.items()):
             if ctx != context:
                 continue
             good = [v for v in values if v["status"] == "experimental" and v["motion"]["available"]]
@@ -333,33 +345,38 @@ def analyze_history(sessions: list[dict[str, Any]]) -> dict[str, Any]:
             metrics = [v["metric"] for v in good]
             metric = max(sorted(set(metrics)), key=metrics.count) if metrics else None
             usable = [v["experimental_rmssd_ms"] for v in good if v["metric"] == metric]
-            rows.append({"date": day, "context": context, "metric": metric, "experimental_rmssd_ms": round(median(usable), 3) if usable else None, "sessions": len(values), "adequate_motion": bool(usable), "quality": "experimental" if usable else "insufficient"})
+            rows.append({"date": day, "context": context, "source": source, "algorithm_version": algorithm, "metric": metric, "experimental_rmssd_ms": round(median(usable), 3) if usable else None, "sessions": len(values), "adequate_motion": bool(usable), "quality": "experimental" if usable else "insufficient"})
         day_summaries.extend(rows)
-        progress[context] = {"adequate_baseline_days": sum(1 for r in rows if r["adequate_motion"]), "required_days": 14}
+        candidates = [p for p in points if p['context'] == context and _finite_number(p['ts']) and 946684800 <= p['ts'] <= now]
+        anchor = max(candidates, key=lambda p: p['ts']) if candidates else None
+        matching = _prior_days(rows, anchor) if anchor else []
+        progress[context] = {"adequate_baseline_days": len(matching), "required_days": 14,
+                             "metric": anchor['metric'] if anchor else None,
+                             "source": anchor['source'] if anchor else None,
+                             "algorithm_version": anchor['algorithm_version'] if anchor else None}
 
     # Use only the latest usable point as the current observation. A baseline
     # is made from earlier local days of the same context, never future data
     # and never a mixture of manual and scheduled sessions.
     stress = {"status": "quality_insufficient", "experimental_score": None, "baseline_days": 0, "required_days": 14,
               "reason": "Current session lacks adequate quality or motion", "method": "experimental logRMSSD percentile; lower current value maps to higher arousal; no clinical interpretation"}
-    numeric_points = [p for p in points if isinstance(p["ts"], (int, float))]
+    numeric_points = [p for p in points if _finite_number(p["ts"]) and 946684800 <= p["ts"] <= now]
     if numeric_points:
         current = max(numeric_points, key=lambda p: p["ts"])
         current_day = datetime.fromtimestamp(current["ts"], LOCAL_TZ).date()
-        prior = []
-        for row in day_summaries:
-            if row["context"] != current["context"] or row["metric"] != current["metric"] or not row["adequate_motion"] or row["experimental_rmssd_ms"] is None:
-                continue
-            day = datetime.fromisoformat(row["date"]).date()
-            age = (current_day - day).days
-            if 1 <= age <= 28:
-                prior.append(float(row["experimental_rmssd_ms"]))
+        prior = [float(row['experimental_rmssd_ms']) for row in _prior_days(day_summaries, current)]
+        max_age = 36*3600 if current['context'] == 'scheduled' else 4*3600
+        stress.update(measured_at=current['ts'], age_seconds=now-current['ts'],
+                      expires_at=current['ts']+max_age, context=current['context'],
+                      metric=current['metric'], source=current['source'], algorithm_version=current['algorithm_version'])
         stress["baseline_days"] = len(prior)
         stress["method"] = ("experimental recovery/arousal proxy from prior context-matched logRMSSD percentile; "
                              "lower current value maps to higher arousal; no clinical interpretation") if current["context"] == "scheduled" else stress["method"]
-        if current['experimental_rmssd_ms'] is None or not current['motion']['available']:
+        if now-current['ts'] > max_age:
+            stress.update(status='stale', reason='Latest observation is historical; record a new measurement for a current score')
+        elif current['experimental_rmssd_ms'] is None or not current['motion']['eligible']:
             stress['status']='quality_insufficient'
-            stress['reason']='Latest recording cannot establish consecutive beat intervals with adequate movement data; a longer baseline alone will not fix this'
+            stress['reason']='Current recording excluded: ' + current['motion']['reason'] if not current['motion']['eligible'] else 'Current recording fails interval-quality checks; a longer baseline alone will not fix this'
         elif len(prior) < 14:
             stress['status']='baseline_building'
             stress['reason']='Requires 14 distinct prior context-matched days with adequate quality and motion'

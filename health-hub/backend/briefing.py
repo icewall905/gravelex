@@ -92,7 +92,9 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
     now = datetime.fromtimestamp(s["now"], tz)
     today = now.date()
     rc = s.get("recovery") or {}
-    nights = rc.get("nights") or []
+    identity = (rc.get("hrv_status") or {}).get("comparable_series")
+    nights = [n for n in rc.get("nights") or [] if identity and n.get("comparable_series") == identity
+              and n["night"] <= today.isoformat()]
     sleep_nights = rc.get("sleep_nights") or []
     fit = s.get("fitness") or {}
     weight = s.get("weight") or {}
@@ -172,6 +174,9 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "breathing_per_min": (last_hrv or {}).get("breaths_per_min"),
             "night_recordings_last_night": night_sessions_today, "night_recordings_planned": 3,
             "stress_status": (s.get("stress") or {}).get("status"),
+            "hrv_comparable_series": identity,
+            "hrv_capture_quality": {k:(s.get("hrv",{}).get("quality") or {}).get(k) for k in ("status","source","algorithm_version","motion")},
+            "stress_observation": {k:(s.get("stress") or {}).get(k) for k in ("measured_at","age_seconds","expires_at","context","reason")},
             "nights": [{"night": n["night"], "hrv_ms": n["rmssd_ms"], "pulse_bpm": n["resting_hr"], "breathing": n["breaths_per_min"]} for n in hrv_recent],
             "link_sleep_hours_vs_hrv_rank_correlation": sleep_vs_hrv,
         },

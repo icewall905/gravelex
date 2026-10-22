@@ -292,7 +292,7 @@ def summary(days=42):
     load['history']=[r for r in load['history'] if r['date']>=str(start_day)]
     load['workouts']=[w for w in load['workouts'] if w['start']>=since]
     workouts=load['workouts'];history=load['history']
-    recovery=hrv_analytics.analyze_history(hrv_rows)
+    recovery=hrv_analytics.analyze_history(hrv_rows, now=now)
     nightly=recovery_model.build([(r['ts'],hrv_analytics.analyze_session(r['payload'])) for r in hrv_rows if r['ts']>=now-70*86400],
                                  sleep_rows,snapshot_sleep,full_history,now,seed=seed)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None

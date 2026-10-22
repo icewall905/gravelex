@@ -60,12 +60,34 @@ def _round(x: float | None, nd: int = 1) -> float | None:
 # Nights from overnight HRV sessions
 # --------------------------------------------------------------------------
 
+def _series(record: dict[str, Any]) -> tuple[str, str, str]:
+    """Missing provenance is its own legacy series, never a wildcard."""
+    identity = record.get("comparable_series") or record
+    return tuple(str(identity.get(key) or "legacy_unknown")
+                 for key in ("metric", "source", "algorithm_version"))
+
+
+def _series_info(identity: tuple[str, str, str]) -> dict[str, str]:
+    return dict(zip(("metric", "source", "algorithm_version"), identity))
+
+
+def _current_series(nights: list[dict[str, Any]], today: date) -> list[dict[str, Any]]:
+    eligible = sorted((n for n in nights if n.get("metric") != "mixed" and
+                       date.fromisoformat(n["night"]) <= today), key=lambda n: n["night"])
+    if not eligible:
+        return []
+    identity = _series(eligible[-1])
+    return [n for n in eligible if _series(n) == identity]
+
+
 def nightly_hrv(analysed: list[tuple[float, dict[str, Any]]]) -> list[dict[str, Any]]:
     """Combine usable scheduled sessions into one record per night.
 
     ``analysed`` holds (session ts, hrv.analyze_session output).  Night RMSSD is
     the geometric mean of its sessions (mean of ln), resting HR comes from the
-    mean RR, breathing from the median of reliable session estimates.
+    mean RR, breathing from the median of reliable session estimates. Select the
+    largest comparable group per night; ties sort lexically by full identity,
+    independent of upload order. Other groups remain visible as exclusions.
     """
     by_night: dict[date, list[dict[str, Any]]] = {}
     for ts, q in analysed:
@@ -75,18 +97,26 @@ def nightly_hrv(analysed: list[tuple[float, dict[str, Any]]]) -> list[dict[str, 
         if night is not None:
             by_night.setdefault(night, []).append(q)
     nights = []
-    for night, qs in sorted(by_night.items()):
+    for night, candidates in sorted(by_night.items()):
+        groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for q in candidates:
+            groups.setdefault(_series(q), []).append(q)
+        identity = min(groups, key=lambda key: (-len(groups[key]), key))
+        qs = groups[identity]
+        excluded = [{"comparable_series": _series_info(key), "sessions": len(group),
+                     "reason": "incompatible_measurement_series"}
+                    for key, group in sorted(groups.items()) if key != identity]
         rmssd = math.exp(mean(math.log(q["experimental_rmssd_ms"]) for q in qs))
         rrs = [q["mean_rr_ms"] for q in qs if q.get("mean_rr_ms")]
         if not rrs:
             continue
         rr = mean(rrs)
         resp = [q["respiration"]["breaths_per_min"] for q in qs if (q.get("respiration") or {}).get("reliable")]
-        metrics = {q.get("metric") for q in qs}
         nights.append({"night": night.isoformat(), "sessions": len(qs), "rmssd_ms": _round(rmssd),
                        "ln_rmssd": round(math.log(rmssd), 4), "resting_hr": _round(60000.0 / rr),
                        "breaths_per_min": _round(median(resp)) if resp else None,
-                       "metric": metrics.pop() if len(metrics) == 1 else "mixed"})
+                       "metric": identity[0], "comparable_series": _series_info(identity),
+                       "excluded_sessions": len(candidates) - len(qs), "excluded_groups": excluded})
     return nights
 
 
@@ -95,10 +125,7 @@ def hrv_status(nights: list[dict[str, Any]], today: date, seed: dict[str, Any] |
 
     Before 14 baseline nights exist, a seeded spread gives a provisional
     status: the last 3 nights against the earlier Pebble nights."""
-    metric_nights = [n for n in nights if n["metric"] != "mixed"]
-    if metric_nights:
-        current_metric = metric_nights[-1]["metric"]
-        metric_nights = [n for n in metric_nights if n["metric"] == current_metric]
+    metric_nights = _current_series(nights, today)
     week_start = today - timedelta(days=6)
     week = [n for n in metric_nights if week_start <= date.fromisoformat(n["night"]) <= today]
     prior = [n for n in metric_nights
@@ -106,7 +133,8 @@ def hrv_status(nights: list[dict[str, Any]], today: date, seed: dict[str, Any] |
     out: dict[str, Any] = {"weekly_rmssd_ms": None, "baseline_low_ms": None, "baseline_high_ms": None,
                            "nights_this_week": len(week), "baseline_nights": len(prior),
                            "required_baseline_nights": MIN_BASELINE_NIGHTS,
-                           "last_night_rmssd_ms": nights[-1]["rmssd_ms"] if nights and nights[-1]["night"] == today.isoformat() else None}
+                           "comparable_series": _series_info(_series(metric_nights[-1])) if metric_nights else None,
+                           "last_night_rmssd_ms": metric_nights[-1]["rmssd_ms"] if metric_nights and metric_nights[-1]["night"] == today.isoformat() else None}
     if len(week) >= WEEK_NIGHTS_REQUIRED:
         out["weekly_rmssd_ms"] = _round(math.exp(mean(n["ln_rmssd"] for n in week)))
     out["provisional"] = False
@@ -289,14 +317,15 @@ def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_
     """Weighted mean of available components; each is 0-100 with 50 = your normal."""
     components: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
-    last = hrv_nights[-1] if hrv_nights and hrv_nights[-1]["night"] == today.isoformat() else None
-    prior = [n for n in hrv_nights if today - timedelta(days=BASELINE_NIGHTS) <= date.fromisoformat(n["night"]) < today]
+    comparable = _current_series(hrv_nights, today)
+    last = comparable[-1] if comparable and comparable[-1]["night"] == today.isoformat() else None
+    prior = [n for n in comparable if today - timedelta(days=BASELINE_NIGHTS) <= date.fromisoformat(n["night"]) < today]
 
     if last is None:
         missing.append("hrv: no usable overnight measurement last night")
         missing.append("resting_hr: no usable overnight measurement last night")
     else:
-        same = [n["ln_rmssd"] for n in prior if n["metric"] == last["metric"]]
+        same = [n["ln_rmssd"] for n in prior]
         seed = seed or {}
         need = SEED_MIN_NIGHTS if seed.get("hrv_ln_sd") else MIN_BASELINE_NIGHTS
         z, provisional = _z(last["ln_rmssd"], same, seed.get("hrv_ln_sd"))
@@ -337,7 +366,8 @@ def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_
 
     weight = sum(READINESS_WEIGHTS[k] for k in components)
     out: dict[str, Any] = {"components": components, "missing": missing, "weights": READINESS_WEIGHTS,
-                           "method": "weighted mean of available components, 50 = your normal; experimental"}
+                           "method": "weighted mean of available components, 50 = your normal; experimental",
+                           "comparable_series": _series_info(_series(last)) if last else None}
     if len(components) < 2 or not ({"hrv", "sleep"} & set(components)):
         out.update(score=None, status="insufficient",
                    reason="Needs at least two inputs including overnight HRV or sleep")

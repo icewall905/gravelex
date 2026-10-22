@@ -25,3 +25,7 @@ A phone is not connected to ADB at the final packaging check, so Obtainium refre
 ## Fitness roadmap follow-up
 
 See FITNESS-ROADMAP.md for the full audit and 30 ordered improvement tickets. F01 protects minute data against sparse replays (including legacy HR-zero sentinels); F02 excludes stale/future/undated load from current readiness. Independent review approved both; the complete backend suite passes 34 tests in the dependency image. The roadmap delivery ledger records rollout status.
+
+## HRV quality follow-up
+
+F03 software gates and F04 stress freshness deployed: exact server-owned motion calibration matching, diagnostic-only uncalibrated recordings, comparable source/metric/algorithm recovery and briefing series, current-observation timestamp guards, and 4h/36h stress freshness. Field calibration remains pending; see MOTION-CALIBRATION.md. Independent review approved; all 58 backend tests pass. More contains the HRV measurement quality panel; shell cache v13. Raw history is retained and no default motion threshold is assumed.

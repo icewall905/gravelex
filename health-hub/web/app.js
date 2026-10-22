@@ -1103,7 +1103,7 @@ function spotChecks(pts) {
   return card('hrv', 'Daytime spot checks', { chip: expChip(), cls: 'wide' },
     pts.length ? [
       lineChart({ items: pts.slice(-30).map(p => ({ key: isoOf(new Date(p.ts * 1000)), label: isoOf(new Date(p.ts * 1000)), v: p.experimental_rmssd_ms ?? null, hollow: p.context !== 'scheduled', note: `${fmtClock(p.ts)}, ${p.context || 'manual'}, ${String(p.quality || '').replace(/_/g, ' ')}` })), W: chartW(), H: 160, unit: 'ms', label: 'Recent HRV recordings' }),
-      h('p', { class: 'lede', style: { fontSize: '13.5px' } }, `${ok.length} of ${pts.length} recent recordings were clean enough to use. Gaps are recordings spoilt by movement or noise.`),
+      h('p', { class: 'lede', style: { fontSize: '13.5px' } }, `${ok.length} of ${pts.length} recent recordings were clean enough to use. Gaps include recordings excluded by interval quality, missing motion calibration or movement.`),
       isNum(q.experimental_rmssd_ms) ? stats([['Latest', fmt(q.experimental_rmssd_ms, 1), 'ms'], ['Beats kept', isNum(q.retained_fraction) ? `${fmt(q.retained_fraction * 100)}%` : '—'], ['Taken', fmtClock((D().hrv || {}).ts)]]) : null,
     ] : pending('No spot checks yet', 'Open the HRV app on the watch and keep still for three minutes.'));
 }
@@ -1127,6 +1127,20 @@ function devicesView() {
         isNum(sched.schedule_ok) ? kv('Scheduled slots', `${sched.schedule_ok} armed${sched.schedule_error ? `, error ${sched.schedule_error}` : ''}`) : null,
         isNum(sched.next_wakeup) && sched.next_wakeup > nowSec() ? kv('Next night recording', fmtDateTime(sched.next_wakeup)) : null)
         : pending('The HRV app has not reported yet', 'Install it on the watch and open it once.')),
+    card('hrv', 'HRV measurement quality', { cls: 'wide', chip: expChip() },
+      d.hrv && d.hrv.quality ? (() => {
+        const q=d.hrv.quality, motion=q.motion || {};
+        return [h('p',{class:'lede'},motion.reason || 'Interval and motion quality are being checked.'),
+          h('dl',{class:'kv'},kv('Taken',fmtDateTime(d.hrv.ts)),
+            kv('Eligibility',String(q.status || 'unknown').replace(/_/g,' ')),
+            kv('Method',String(q.metric || 'unknown').replace(/_/g,' ')),
+            kv('Firmware / collector',`${motion.firmware || 'unknown'} / ${motion.collector_version ?? 'unknown'}`),
+            kv('Motion assessment',String(motion.status || 'unknown').replace(/_/g,' ')),
+            kv('Mean movement delta',isNum(motion.normalized_mean) ? `${fmt(motion.normalized_mean,2)} collector units/transition` : 'Unknown'),
+            kv('Motion coverage',isNum(motion.coverage_fraction) ? `${fmt(motion.coverage_fraction*100)}% of calibrated rate` : 'No matching calibration'),
+            kv('Algorithm',q.algorithm_version || 'Legacy')),
+          h('p',{class:'foot'},'Uncalibrated recordings remain stored for diagnostics. They do not contribute to HRV recovery or stress scores. Genuine beat intervals and reconstructed tachograms use separate baselines.')];
+      })() : pending('No HRV quality report yet','Open the HRV watch app to save a recording.')),
     card('device', 'Watch apps', { cls: 'wide' },
       h('p', { class: 'lede', style: { marginTop: 0 } }, 'Install these on the watch, then pair each one in the phone app. HRV and History upload to this server; Today only reads the daily summary.'),
       h('ul', { class: 'list' }, [
