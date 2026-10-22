@@ -35,6 +35,7 @@ from urllib.request import Request, urlopen
 import fitness
 
 log = logging.getLogger("pebble-health.briefing")
+FACTS_VERSION = 2
 PAGES = ("today", "sleep", "recovery", "training", "more")
 _running = threading.Lock()
 
@@ -91,6 +92,8 @@ def _spearman(pairs):
 def facts(s: dict[str, Any], tz) -> dict[str, Any]:
     now = datetime.fromtimestamp(s["now"], tz)
     today = now.date()
+    collection = s.get("collection_health") or {}
+    receipt_age = (collection.get("transport") or {}).get("age_seconds")
     rc = s.get("recovery") or {}
     identity = (rc.get("hrv_status") or {}).get("comparable_series")
     nights = [n for n in rc.get("nights") or [] if identity and n.get("comparable_series") == identity
@@ -129,6 +132,7 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
     unconfirmed = [h["date"] for h in (s.get("history") or [])[-7:] if not h.get("complete")]
 
     return {
+        "facts_version": FACTS_VERSION,
         "date": today.isoformat(), "weekday": now.strftime("%A"), "time": now.strftime("%H:%M"),
         "name": s.get("wearer") or None,
         "today": {
@@ -172,7 +176,7 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "pulse_during_night_recording_bpm": (last_hrv or {}).get("resting_hr"),
             "resting_pulse_night_minimum_bpm": fit.get("resting_hr"),
             "breathing_per_min": (last_hrv or {}).get("breaths_per_min"),
-            "night_recordings_last_night": night_sessions_today, "night_recordings_planned": 3,
+            "qualified_night_recordings_last_night": night_sessions_today, "night_recordings_planned": None,
             "stress_status": (s.get("stress") or {}).get("status"),
             "hrv_comparable_series": identity,
             "hrv_capture_quality": {k:(s.get("hrv",{}).get("quality") or {}).get(k) for k in ("status","source","algorithm_version","motion")},
@@ -191,12 +195,13 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "max_hr_setting": fit.get("hr_max"),
         },
         "more": {
-            "hours_since_last_upload": _r((s.get("sync_age_seconds") or 0) / 3600, 1),
+            "hours_since_last_upload": _r(receipt_age / 3600, 1) if receipt_age is not None else None,
+            "collection_evidence": {k:collection.get(k) for k in ("transport","measurements","daily","collector","watch_phone_transfer","phone_backlog")},
             "watch_battery_percent": status.get("battery_percent"),
             "hrv_app_version": _version(collector.get("collector_version")),
             "night_slots_armed": collector.get("schedule_ok"),
             "next_night_recording": datetime.fromtimestamp(collector["next_wakeup"], tz).strftime("%a %H:%M") if collector.get("next_wakeup") else None,
-            "night_recordings_last_night": night_sessions_today, "night_recordings_planned": 3,
+            "qualified_night_recordings_last_night": night_sessions_today, "night_recordings_planned": None,
             "minute_records_total": s.get("minute_records"),
         },
     }
@@ -411,7 +416,8 @@ def latest(db) -> dict[str, Any] | None:
         return None
     payload = json.loads(row["payload"])
     return {"created": row["created"], "day": row["day"], "model": row["model"], "pages": payload["pages"],
-            "grounding": payload.get("grounding")}
+            "grounding": payload.get("grounding"),
+            "requires_refresh": (payload.get("facts") or {}).get("facts_version") != FACTS_VERSION}
 
 
 def run() -> str:

@@ -682,11 +682,14 @@ const CARDS = {
 
   device() {
     const d = D(), lt = d.latest || {}, st = lt.status || {}, col = d.collector || {};
-    const age = d.sync_age_seconds;
-    return card('device', 'Watch and sync', { link: 'device' },
-      stats([['Last upload', isNum(age) ? ago(age) : '—'], ['Battery', isNum(st.battery_percent) ? `${st.battery_percent}%` : '—', st.battery_charging ? 'charging' : ''],
-        ['HRV recorder', isNum(col.received) ? ago(nowSec() - col.received) : '—']]),
-      isNum(age) && age > 3 * 3600 ? h('p', { class: 'lede', style: { color: 'var(--warn)' } }, 'No upload for over three hours. Check that the phone app is running.') : null);
+    const c=d.collection_health || {}, age=c.transport?.age_seconds;
+    const hr=c.measurements?.heart_rate;
+    return card('device', 'Collection and sync', { link: 'device' },
+      stats([['Server receipt',isNum(age) ? ago(age) : 'Unknown'],
+        ['HR measured',isNum(hr?.age_seconds) ? ago(hr.age_seconds) : 'Not recorded'],
+        ['Battery snapshot',isNum(st.battery_percent) ? `${st.battery_percent}%` : '—']]),
+      h('p',{class:'foot'},'Upload activity and sensor freshness are separate. Open for stream timestamps, coverage and night collection evidence.'));
+
   },
 };
 
@@ -1108,19 +1111,57 @@ function spotChecks(pts) {
     ] : pending('No spot checks yet', 'Open the HRV app on the watch and keep still for three minutes.'));
 }
 
+function collectionHealthCard() {
+  const c=D().collection_health;
+  if (!c) return card('device','Collection health',{cls:'wide'},pending('Diagnostics unavailable','Refresh after the server update.'));
+  const measurement=(label,key)=>{
+    const m=c.measurements?.[key] || {};
+    return kv(label,isNum(m.measured_at) ? `${fmtDateTime(m.measured_at)} (${ago(m.age_seconds)})` : 'Not recorded');
+  };
+  const col=c.collector || {}, transport=c.transport || {}, latest=(c.daily || []).at(-1);
+  const warnings=[];
+  if (!isNum(transport.last_received)) warnings.push('No upload receipt is stored. Check GravelEx export settings, URL, token and connection test.');
+  else if (transport.age_seconds>3*3600) warnings.push('No server receipt for over three hours. Check the phone network and export status; the server cannot tell whether the phone is offline.');
+  const hr=c.measurements?.heart_rate || {};
+  if (!isNum(hr.measured_at) || hr.age_seconds>3*3600) warnings.push('No recent stored minute HR. Check sensor settings and watch-history transfer. This alone cannot establish whether the watch was worn.');
+  if (col.missed_slots>0) warnings.push(`${col.missed_slots} previously advertised night slot(s) have no saved capture here after the 15-minute transfer grace period. Check recorder and transfer status.`);
+  const perSource=(c.sources || []).map(x=>h('li',null,
+    h('span',{class:'t'},x.source),
+    h('span',{class:'s'},`Received ${fmtDateTime(x.last_received)} · report dated ${fmtDateTime(x.last_report_ts)} · ${fmt(x.reports)} reports in ${c.window_days} days`)));
+  const coverage=(c.daily || []).slice(-7).map(x=>h('li',null,
+    h('span',{class:'t'},x.date),
+    h('span',{class:'s'},`${fmt(x.hr_minutes)}/${fmt(x.expected_minutes)} elapsed full minutes with HR${isNum(x.hr_coverage_pct) ? ` (${fmt(x.hr_coverage_pct,1)}%)` : ''}; ${fmt(x.minute_buckets)} buckets stored · ${fmt(x.day_minutes)}-minute local day`)));
+  return card('device','Collection health',{cls:'wide'},
+    h('p',{class:'lede'},'Receipts show transport activity. Measurement times show what actually reached the history store.'),
+    h('dl',{class:'kv'},kv('Server response',fmtDateTime(c.now)),
+      kv('Last accepted upload',isNum(transport.last_received) ? `${fmtDateTime(transport.last_received)} (${ago(transport.age_seconds)})` : 'Not recorded'),
+      measurement('Minute heart rate','heart_rate'),measurement('Blood oxygen','oxygen'),measurement('Saved HRV capture','hrv'),measurement('Sleep session ended','sleep_end'),
+      kv('Last watch snapshot',isNum(c.latest_snapshot?.last_report_ts) ? fmtDateTime(c.latest_snapshot.last_report_ts) : 'Not recorded'),
+      kv('Today HR coverage',latest && isNum(latest.hr_coverage_pct) ? `${fmt(latest.hr_coverage_pct,1)}% of elapsed full minutes` : 'Not available'),
+      kv('Night schedule evidence',col.schedule_status==='historical_advertised' ? `${fmt(col.expected_due)} advertised slots past grace period; ${fmt(col.stored)} captures matched` : 'Unknown — no usable saved schedule'),
+      kv('Watch → phone transfer','Unknown — not reported by the phone'),kv('Pending phone records','Unknown — queue telemetry not yet available')),
+    warnings.length ? h('ul',{class:'list'},warnings.map(x=>h('li',null,h('span',{class:'s'},x)))) : null,
+    h('details',{class:'info'},h('summary',null,'Daily observed-minute coverage'),h('ul',{class:'list'},coverage),
+      h('p',{class:'foot'},'Coverage counts sampled timestamp buckets, not continuous HR or wear time. DST days use their actual duration. Missing data never confirms rest.')),
+    h('details',{class:'info'},h('summary',null,'Night slot evidence'),
+      (col.slots || []).length ? h('ul',{class:'list'},col.slots.map(slot=>h('li',null,
+        h('span',{class:'t'},fmtDateTime(slot.scheduled_ts)),h('span',{class:'s'},
+          ({saved:'Saved capture matched',missed:'No capture received after grace period',pending:'Transfer grace period still open',unknown:'Uncertain — cancellation or scheduling evidence incomplete'})[slot.status] || 'Unknown'))))
+        : h('p',null,'No past advertised slots can be established from stored reports.'),
+      h('p',{class:'foot'},'These are historical advertisements. Execution and cancellations are not directly observed; uncertain slots are excluded from missing counts.')),
+    h('details',{class:'info'},h('summary',null,'Upload sources'),perSource.length ? h('ul',{class:'list'},perSource) : h('p',null,'No batch reports stored. HRV collector receipts are tracked separately.')),
+    h('p',{class:'foot'},'A collector launch is not a saved measurement. A saved capture may still fail HRV quality checks. Empty uploads do not refresh sensor timestamps.'));
+}
+
 function devicesView() {
   const d = D(), lt = d.latest || {}, st = lt.status || {}, col = d.collector || {};
   const sched = (d.collector_history || []).find(c => isNum(c.next_wakeup)) || {};
   return [
-    card('device', 'Sync', { cls: 'wide' },
-      h('dl', { class: 'kv' },
-        kv('Last upload', isNum(d.last_received) ? `${fmtDateTime(d.last_received)} (${ago(d.sync_age_seconds)})` : 'Never'),
-        kv('Battery', isNum(st.battery_percent) ? `${st.battery_percent}%${st.battery_charging ? ', charging' : ''}` : 'Unknown'),
-        kv('Hourly reports stored', fmt(d.reports)),
-        kv('Minute records stored', fmt(d.minute_records)))),
+    collectionHealthCard(),
     card('device', 'HRV recorder', { cls: 'wide' },
       isNum(col.received) ? h('dl', { class: 'kv' },
-        kv('Last recording', fmtDateTime(col.measurement_ts || col.ts)),
+        kv('Last saved recording',isNum(d.collection_health?.measurements?.hrv?.measured_at) ? fmtDateTime(d.collection_health.measurements.hrv.measured_at) : 'Not recorded'),
+        kv('Last recorder status',fmtDateTime(col.ts)),
         kv('Started', col.launch === 'scheduled' ? 'On schedule' : 'By hand'),
         kv('App version', col.collector_version != null ? String(col.collector_version) : '—'),
         sched.nights_enabled != null ? kv('Night recordings', sched.nights_enabled ? 'On' : 'Off') : null,
@@ -1340,6 +1381,9 @@ async function regenerateBriefing(btn) {
 function briefPanel(page, opts = {}) {
   const b = D().briefing, p = b && b.pages && b.pages[page];
   if (!p || !(p.headline || p.summary)) return null;
+  if (b.requires_refresh) return card('device','Briefing needs refresh',{cls:'wide'},
+    h('p',null,'The saved briefing uses older collection or quality rules. Generate a new briefing before using it as current guidance.'),
+    opts.regenerate ? h('button',{class:'btn small',type:'button',onclick:e=>regenerateBriefing(e.currentTarget)},'Regenerate') : h('a',{href:'#more'},'Refresh from More'));
   const age = nowSec() - b.created, stale = age > 30 * 3600;
   const when = stale ? fmtDateTime(b.created) : fmtClock(b.created);
   const btn = opts.regenerate ? h('button', { class: 'btn small', type: 'button', onclick: e => regenerateBriefing(e.currentTarget) }, 'Regenerate') : null;
@@ -1412,8 +1456,9 @@ function renderStatus() {
   const line = document.getElementById('sync-line'), banner = document.getElementById('banner');
   const d = S.data;
   if (d) {
-    const age = isNum(d.last_received) ? Math.floor(Date.now() / 1000) - d.last_received : d.sync_age_seconds;
-    line.textContent = isNum(age) ? `Watch synced ${ago(age)}` : 'Waiting for the first sync';
+    const received=d.collection_health?.transport?.last_received;
+    const age=isNum(received) ? Math.max(0,nowSec()-received) : null;
+    line.textContent=isNum(age) ? `Server received upload ${ago(age)}` : 'No upload receipt recorded';
     line.classList.toggle('stale', isNum(age) && age > 3 * 3600);
   } else line.textContent = S.error ? 'Offline' : 'Loading…';
   if (S.offlineSince !== null && d) {

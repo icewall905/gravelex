@@ -29,3 +29,7 @@ See FITNESS-ROADMAP.md for the full audit and 30 ordered improvement tickets. F0
 ## HRV quality follow-up
 
 F03 software gates and F04 stress freshness deployed: exact server-owned motion calibration matching, diagnostic-only uncalibrated recordings, comparable source/metric/algorithm recovery and briefing series, current-observation timestamp guards, and 4h/36h stress freshness. Field calibration remains pending; see MOTION-CALIBRATION.md. Independent review approved; all 58 backend tests pass. More contains the HRV measurement quality panel; shell cache v13. Raw history is retained and no default motion threshold is assumed.
+
+## Collection health follow-up
+
+F05 adds server collection evidence to summary/LLM facts and More. Upload receipt is separate from sensor measured-at; coverage counts distinct elapsed minute buckets on actual local DST days. Night evidence validates paired successful schedule IDs and retains historical advertisements without claiming execution or cancellation certainty. Watch-phone transfer and phone backlog remain unknown until F07 telemetry. The recorder card now separates last saved capture from last status message. Independent review approved; all 73 backend tests pass. Shell cache v15.

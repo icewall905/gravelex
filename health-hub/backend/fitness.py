@@ -12,6 +12,7 @@ import recovery as recovery_model
 import weight as weight_model
 import physiology
 import oxygen
+import collection_health
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -277,6 +278,7 @@ def summary(days=42):
         collector=db.execute('SELECT payload FROM collector_reports ORDER BY ts DESC LIMIT 1').fetchone()
         hrv = db.execute("SELECT ts,payload FROM hrv_sessions ORDER BY ts DESC LIMIT 1").fetchone()
         count = db.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+        collection = collection_health.build(db, now, TZ)
         hrv_recent = []
         for row in db.execute("SELECT ts,payload FROM hrv_sessions ORDER BY ts DESC LIMIT 12"):
             payload=json.loads(row["payload"])
@@ -300,7 +302,7 @@ def summary(days=42):
     return {"wearer": os.environ.get("WEARER_NAME", ""), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
       "last_received": latest["received"] if latest else None,
       "sync_age_seconds": now - latest["received"] if latest else None,
-      "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
+      "collection_health": collection, "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},

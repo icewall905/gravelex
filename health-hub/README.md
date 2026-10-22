@@ -47,6 +47,8 @@ A watch-history request transfers stored watch data to the phone. Upload now tra
 
 HRV motion eligibility and the required field study are documented in [MOTION-CALIBRATION.md](MOTION-CALIBRATION.md). Uncalibrated recordings remain diagnostic-only; no universal stillness threshold is supplied.
 
+See [COLLECTION-HEALTH.md](COLLECTION-HEALTH.md) for the More diagnostics panel: upload receipts, actual sensor times, DST-aware daily HR coverage, historical night-slot evidence and unknown phone queue/transfer states.
+
 ## Configuration
 
 Every deployment setting is listed in `.env.example`:
