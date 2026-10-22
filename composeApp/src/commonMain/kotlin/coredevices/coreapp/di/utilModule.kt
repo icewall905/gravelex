@@ -143,10 +143,17 @@ val utilModule = module {
     single<UsersDao> { SignedOutUsersDao }
     singleOf(::HealthSyncTracker)
     single {
-        PebbleFitOxygenExportService(get(), get(), get()) { afterTimestamp, limit ->
-            get<io.rebble.libpebblecommon.connection.HealthDataApi>()
-                .getSpo2DataAfter(afterTimestamp, limit)
-        }
+        PebbleFitOxygenExportService(
+            get(), get(), get(),
+            readHealth = { afterTimestamp, limit ->
+                get<io.rebble.libpebblecommon.connection.HealthDataApi>()
+                    .getHealthDataPageAfter(afterTimestamp, limit)
+            },
+            readSessions = { afterTimestamp, afterType, types, limit ->
+                get<io.rebble.libpebblecommon.connection.HealthDataApi>()
+                    .getOverlayEntriesPageAfter(afterTimestamp, afterType, types, limit)
+            },
+        )
     }
     singleOf(::PlatformHealthSync)
 }

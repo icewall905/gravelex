@@ -40,7 +40,7 @@ class PebbleKitProviderNotifier(
             classicEnabled = classicEnabled(watchConfig, componentState),
             notifyChange = {
                 try {
-                    context.contentResolver.notifyChange(PebbleKitProvider.URI_CONTENT_BASALT, null)
+                    context.contentResolver.notifyChange(PebbleKitProvider.stateUri(context), null)
                 } catch (e: SecurityException) {
                     logger.e(e) { "Failed to notify PebbleKitProvider content change - is the provider present in app manifest?" }
                 }

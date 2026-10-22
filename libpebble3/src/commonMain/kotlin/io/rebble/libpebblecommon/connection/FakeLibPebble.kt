@@ -542,6 +542,7 @@ class FakeLibPebble : LibPebble {
     override suspend fun getLatestTimestamp(): Long? = 0
 
     override suspend fun getHealthDataAfter(afterTimestamp: Long): List<HealthDataEntity> = emptyList()
+    override suspend fun getHealthDataPageAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> = emptyList()
 
     override suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity> = emptyList()
 
@@ -549,6 +550,8 @@ class FakeLibPebble : LibPebble {
         afterTimestamp: Long,
         types: List<Int>
     ): List<OverlayDataEntity> = emptyList()
+
+    override suspend fun getOverlayEntriesPageAfter(afterTimestamp: Long, afterType: Int, types: List<Int>, limit: Int) = emptyList<OverlayDataEntity>()
 
     override suspend fun getHealthDataForRange(start: Long, end: Long) = emptyList<HealthDataEntity>()
     override suspend fun getDailyAggregates(start: Long, end: Long) = emptyList<DailyMovementAggregate>()

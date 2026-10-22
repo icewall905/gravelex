@@ -1,6 +1,6 @@
 name: Build
 
-on: [push]
+on: [workflow_dispatch]
 
 # The job only builds and asserts; nothing here writes to the repository, so
 # the workflow token gets read access and no more. actions/checkout persists

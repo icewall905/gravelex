@@ -9,6 +9,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -31,11 +32,12 @@ internal fun OxygenExportSettingsDialog(onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val status by service.status.collectAsState()
     var url by remember { mutableStateOf(service.baseUrl) }
+    var enabled by remember { mutableStateOf(service.enabled) }
     var token by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
 
     fun save(): Boolean {
-        val result = service.saveConfiguration(url, token)
+        val result = service.saveConfiguration(url, token, enabled)
         message = result.message
         if (result.saved) token = ""
         return result.saved
@@ -43,14 +45,18 @@ internal fun OxygenExportSettingsDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("PebbleFit oxygen export") },
+        title = { Text("GravelEx health data export") },
         text = {
             Column {
                 Text(
-                    "Upload watch oxygen readings from this phone to your health server. " +
-                        "The bearer token is stored encrypted and is never shown after saving.",
+                    "Upload recorded minute heart rate, steps, intensity, calories, distance, oxygen, and sleep or activity sessions. " +
+                        "This watch data contains no HRV intervals. The bearer token is stored encrypted and hidden after saving.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                Row {
+                    Text("Enable automatic health export", modifier = Modifier.weight(1f))
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },

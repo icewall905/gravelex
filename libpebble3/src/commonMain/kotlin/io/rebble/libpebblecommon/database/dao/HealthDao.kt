@@ -92,11 +92,17 @@ interface HealthDao {
     @Query("SELECT * FROM health_data WHERE timestamp > :afterTimestamp ORDER BY timestamp ASC")
     suspend fun getHealthDataAfter(afterTimestamp: Long): List<HealthDataEntity>
 
+    @Query("SELECT * FROM health_data WHERE timestamp > :afterTimestamp ORDER BY timestamp ASC LIMIT :limit")
+    suspend fun getHealthDataPageAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity>
+
     @Query("SELECT * FROM health_data WHERE spo2Percent BETWEEN 1 AND 100 AND timestamp > :afterTimestamp ORDER BY timestamp ASC LIMIT :limit")
     suspend fun getSpo2DataAfter(afterTimestamp: Long, limit: Int): List<HealthDataEntity>
 
     @Query("SELECT * FROM overlay_data WHERE startTime > :afterTimestamp AND type IN (:types) ORDER BY startTime ASC")
     suspend fun getOverlayEntriesAfter(afterTimestamp: Long, types: List<Int>): List<OverlayDataEntity>
+
+    @Query("SELECT * FROM overlay_data WHERE (startTime > :afterTimestamp OR (startTime = :afterTimestamp AND type > :afterType)) AND type IN (:types) ORDER BY startTime ASC, type ASC LIMIT :limit")
+    suspend fun getOverlayEntriesPageAfter(afterTimestamp: Long, afterType: Int, types: List<Int>, limit: Int): List<OverlayDataEntity>
 
     @Query("""
         SELECT SUM(duration) / 60 FROM overlay_data

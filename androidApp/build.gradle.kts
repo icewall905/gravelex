@@ -76,7 +76,7 @@ android {
         // Fork identity: the installed package is Gravel's. The Kotlin namespace above
         // deliberately stays "coredevices.coreapp" so source packages match upstream and
         // merges stay cheap; only the applicationId is rebranded.
-        applicationId = "com.anopticlabs.gravel"
+        applicationId = "tdgs.gravel"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -115,7 +115,7 @@ android {
         }
         getByName("debug") {
             // Keep the user's installed/signed Gravel intact during hardware verification.
-            applicationIdSuffix = ".pebblefit"
+            applicationIdSuffix = ".debug"
             isMinifyEnabled = false
             isDebuggable = true
         }

@@ -10,16 +10,34 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.rebble.libpebblecommon.database.entity.HealthDataEntity
+import io.rebble.libpebblecommon.database.entity.OverlayDataEntity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PebbleFitOxygenExportServiceTest {
+    @Test
+    fun disabledExportDoesNotReadOrSendHealthData() = runTest {
+        val settings = MapSettings()
+        val client = HttpClient(MockEngine { error("Disabled export must not make a request") })
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { _, _ -> error("Disabled export must not read health") },
+            readSessions = { _, _, _, _ -> error("Disabled export must not read sessions") })
+        assertFalse(service.enabled)
+        assertTrue(service.saveConfiguration("https://ph.tdgs.org", "test-secret", false).saved)
+        assertTrue(service.syncNow().message.contains("disabled"))
+        assertTrue(service.tokenConfigured)
+    }
+
     @Test
     fun failedPostKeepsCursorAndSuccessfulRetryUploadsValidSamples() = runTest {
         var requests = 0
@@ -35,20 +53,20 @@ class PebbleFitOxygenExportServiceTest {
             )
         })
         val settings = MapSettings()
-        val service = PebbleFitOxygenExportService(settings, TestCipher(), client) { after, _ ->
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client, readHealth = { after, _ ->
             listOf(sample).filter { it.timestamp > after }
-        }
+        }, readSessions = { _, _, _, _ -> emptyList() })
         assertTrue(service.saveConfiguration("https://ph.tdgs.org", "test-secret").saved)
         assertFalse(settings.getString("pebblefit_oxygen_token", "").contains("test-secret"))
 
         val failed = service.syncNow()
         assertEquals(0, failed.uploaded)
-        assertEquals(0L, settings.getLong("pebblefit_oxygen_watermark", 0L))
+        assertEquals(0L, settings.getLong("pebblefit_health_watermark", 0L))
 
         val succeeded = service.syncNow()
         assertEquals(1, succeeded.uploaded, succeeded.message)
-        assertEquals(sample.timestamp, settings.getLong("pebblefit_oxygen_watermark", 0L))
-        assertTrue(payload.contains("\"source\":\"phone-oxygen\""))
+        assertEquals(sample.timestamp, settings.getLong("pebblefit_health_watermark", 0L))
+        assertTrue(payload.contains("\"source\":\"gravelex\""))
         assertTrue(payload.contains("\"ts\":1700000000"))
         assertTrue(payload.contains("\"percent\":96"))
         assertTrue(payload.contains("\"quality\":42"))
@@ -74,9 +92,9 @@ class PebbleFitOxygenExportServiceTest {
             respond(content = "", status = HttpStatusCode.OK)
         })
         val settings = MapSettings()
-        val service = PebbleFitOxygenExportService(settings, TestCipher(), client) { after, _ ->
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client, readHealth = { after, _ ->
             listOf(sample).filter { it.timestamp > after }
-        }
+        }, readSessions = { _, _, _, _ -> emptyList() })
         assertTrue(service.saveConfiguration("https://old.example", "old-token").saved)
 
         val firstSync = async { service.syncNow() }
@@ -86,13 +104,13 @@ class PebbleFitOxygenExportServiceTest {
         assertTrue(rejected.message.contains("in progress"))
         release.complete(Unit)
         assertEquals(1, firstSync.await().uploaded)
-        assertEquals(sample.timestamp, settings.getLong("pebblefit_oxygen_watermark", 0L))
+        assertEquals(sample.timestamp, settings.getLong("pebblefit_health_watermark", 0L))
 
         assertTrue(service.saveConfiguration("https://new.example", "new-token").saved)
-        assertEquals(0L, settings.getLong("pebblefit_oxygen_watermark", 0L))
+        assertEquals(0L, settings.getLong("pebblefit_health_watermark", 0L))
         assertEquals(1, service.syncNow().uploaded)
         assertEquals(2, requests)
-        assertEquals(sample.timestamp, settings.getLong("pebblefit_oxygen_watermark", 0L))
+        assertEquals(sample.timestamp, settings.getLong("pebblefit_health_watermark", 0L))
     }
 
     @Test
@@ -106,7 +124,7 @@ class PebbleFitOxygenExportServiceTest {
             release.await()
             respond(content = "", status = HttpStatusCode.OK)
         })
-        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client) { _, _ -> emptyList() }
+        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client, readHealth = { _, _ -> emptyList() }, readSessions = { _, _, _, _ -> emptyList() })
         assertTrue(service.saveConfiguration("https://old.example", "old-token").saved)
 
         val testRequest = async { service.testConnection() }
@@ -125,9 +143,9 @@ class PebbleFitOxygenExportServiceTest {
             if (requests == 1) awaitCancellation()
             respond(content = "", status = HttpStatusCode.OK)
         })
-        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client) { after, _ ->
+        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client, readHealth = { after, _ ->
             listOf(sample).filter { it.timestamp > after }
-        }
+        }, readSessions = { _, _, _, _ -> emptyList() })
         service.saveConfiguration("https://ph.tdgs.org", "token")
 
         val timeout = service.syncNow()
@@ -152,16 +170,16 @@ class PebbleFitOxygenExportServiceTest {
         })
         val settings = MapSettings()
         val available = mutableListOf(first)
-        val service = PebbleFitOxygenExportService(settings, TestCipher(), client) { after, _ ->
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client, readHealth = { after, _ ->
             available.filter { it.timestamp > after }.sortedBy { it.timestamp }
-        }
+        }, readSessions = { _, _, _, _ -> emptyList() })
         service.saveConfiguration("https://ph.tdgs.org", "token")
         run { val result = service.syncNow(); assertEquals(1, result.uploaded, result.message) }
-        assertEquals(first.timestamp, settings.getLong("pebblefit_oxygen_watermark", 0L))
+        assertEquals(first.timestamp, settings.getLong("pebblefit_health_watermark", 0L))
 
         available += late
         assertEquals(2, service.syncNow().uploaded)
-        assertEquals(first.timestamp, settings.getLong("pebblefit_oxygen_watermark", 0L))
+        assertEquals(first.timestamp, settings.getLong("pebblefit_health_watermark", 0L))
         assertEquals(listOf(first.timestamp, late.timestamp, first.timestamp), uploaded)
     }
 
@@ -170,10 +188,157 @@ class PebbleFitOxygenExportServiceTest {
         val client = HttpClient(MockEngine {
             error("A network request must not be made without a configured token.")
         })
-        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client) { _, _ -> emptyList() }
+        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client, readHealth = { _, _ -> emptyList() }, readSessions = { _, _, _, _ -> emptyList() })
         assertFalse(service.saveConfiguration("http://ph.tdgs.org", "token").saved)
+        assertTrue(service.saveConfiguration("https://ph.tdgs.org", "", true).saved)
         assertEquals("Add a bearer token first.", service.syncNow().message)
     }
+
+    @Test
+    fun exportsMinuteUnitsOxygenAndEveryKnownOverlayType() = runTest {
+        val minute = sample(timestamp = 1_700_000_100L, percent = 97, quality = 9).copy(
+            steps = 23,
+            intensity = 11,
+            lightIntensity = 4,
+            activeMinutes = 1,
+            restingGramCalories = 500,
+            activeGramCalories = 1_250,
+            distanceCm = 1_234,
+            heartRate = 122,
+            heartRateZone = 2,
+        )
+        val sessions = (1..7).map { type ->
+            OverlayDataEntity(
+                startTime = 1_700_001_000L + type,
+                duration = 60L * type,
+                type = type,
+                steps = 1,
+                restingKiloCalories = 0,
+                activeKiloCalories = 0,
+                distanceCm = 0,
+                offsetUTC = 0,
+            )
+        }
+        var payload = ""
+        val client = HttpClient(MockEngine { request ->
+            payload = (request.body as? TextContent)?.text.orEmpty()
+            respond(content = "", status = HttpStatusCode.OK)
+        })
+        val service = PebbleFitOxygenExportService(
+            MapSettings(), TestCipher(), client,
+            readHealth = { after, _ -> listOf(minute).filter { it.timestamp > after } },
+            readSessions = { after, afterType, _, limit -> sessions.filter { it.startTime > after || (it.startTime == after && it.type > afterType) }.take(limit) },
+        )
+        service.saveConfiguration("https://receiver.example", "secret")
+
+        val result = service.syncNow()
+        assertEquals(8, result.uploaded, result.message)
+        assertTrue(payload.contains("\"source\":\"gravelex\""))
+        assertTrue(payload.contains("\"hr\":122"))
+        assertTrue(payload.contains("\"steps\":23"))
+        assertTrue(payload.contains("\"active_kcal\":1.25"))
+        assertTrue(payload.contains("\"resting_kcal\":0.5"))
+        assertTrue(payload.contains("\"distance_m\":12.34"))
+        assertTrue(payload.contains("\"percent\":97"))
+        assertTrue(payload.contains("\"type\":\"sleep\""))
+        assertTrue(payload.contains("\"type\":\"restful_sleep\""))
+        assertTrue(payload.contains("\"type\":\"walk\""))
+        assertTrue(payload.contains("\"type\":\"run\""))
+        assertTrue(payload.contains("\"type\":\"workout\""))
+        assertTrue(payload.contains("\"raw_overlay_type\":7"))
+        assertTrue(payload.contains("\"id\":\"1700001007:7\""))
+    }
+
+    @Test
+    fun boundedPagesResumeAfterAPartialFailureWithoutLosingTheRemainder() = runTest {
+        val rows = (1L..3001L).map { sample(1_700_000_000L + it, 95, 1) }
+        var requests = 0
+        val client = HttpClient(MockEngine {
+            requests++
+            respond(content = "", status = if (requests == 2) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK)
+        })
+        val settings = MapSettings()
+        val service = PebbleFitOxygenExportService(
+            settings, TestCipher(), client,
+            readHealth = { after, limit -> rows.filter { it.timestamp > after }.take(limit) },
+            readSessions = { _, _, _, _ -> emptyList() },
+        )
+        service.saveConfiguration("https://receiver.example", "secret")
+
+        val partial = service.syncNow()
+        assertEquals(3000, partial.uploaded, partial.message)
+        assertEquals(rows[2999].timestamp, settings.getLong("pebblefit_health_scan_cursor", 0L))
+        assertEquals(rows[2999].timestamp, settings.getLong("pebblefit_health_watermark", 0L))
+
+        val resumed = service.syncNow()
+        assertEquals(1, resumed.uploaded, resumed.message)
+        assertEquals(rows.last().timestamp, settings.getLong("pebblefit_health_watermark", 0L))
+        assertEquals(3, requests)
+    }
+
+    @Test
+    fun sessionPagesRespectReceiverLimitAndResumeEqualStartTypesAfterFailure() = runTest {
+        // Entry 1000 and 1001 share startTime but have different primary-key types.
+        val sessions = (1L..999L).map { overlay(1_700_000_000L + it, 1) } +
+            listOf(overlay(1_700_002_000L, 1), overlay(1_700_002_000L, 2))
+        var requests = 0
+        val accepted = mutableListOf<String>()
+        val client = HttpClient(MockEngine { request ->
+            requests++
+            val batch = Json.parseToJsonElement((request.body as TextContent).text)
+                .jsonObject.getValue("sessions").jsonArray
+            assertTrue(batch.size <= 1000)
+            if (requests == 2) respond("", HttpStatusCode.ServiceUnavailable)
+            else {
+                accepted += batch.map { it.jsonObject.getValue("id").jsonPrimitive.content }
+                respond("", HttpStatusCode.OK)
+            }
+        })
+        val settings = MapSettings()
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { _, _ -> emptyList() },
+            readSessions = { after, afterType, _, limit -> sessions.filter {
+                it.startTime > after || (it.startTime == after && it.type > afterType)
+            }.take(limit) })
+        service.saveConfiguration("https://receiver.example", "secret")
+        assertEquals(1000, service.syncNow().uploaded)
+        assertEquals(1, settings.getInt("pebblefit_session_scan_type", -1))
+        assertEquals(1, service.syncNow().uploaded)
+        assertEquals(1001, accepted.size)
+        assertEquals(1001, accepted.toSet().size)
+        assertTrue(accepted.contains("1700002000:2"))
+    }
+
+    @Test
+    fun invalidFullPageDoesNotHideValidRowsAndRejectedSessionsDoNotPoisonBatch() = runTest {
+        val invalid = (1L..3000L).map { sample(1_700_000_000L + it, 95, 1).copy(steps = 10001) }
+        val valid = sample(1_700_004_000L, 95, 1)
+        val rows = invalid + valid
+        val sessions = listOf(overlay(1_700_003_000L, 1).copy(duration = 172801L), overlay(1_700_004_000L, 1))
+        var requests = 0
+        val client = HttpClient(MockEngine { request ->
+            requests++
+            val body = Json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            assertTrue(body.getValue("records").jsonArray.all { it.jsonObject.getValue("steps").jsonPrimitive.content == "0" })
+            assertTrue(body.getValue("sessions").jsonArray.all { it.jsonObject.getValue("seconds").jsonPrimitive.content == "60" })
+            respond("", HttpStatusCode.OK)
+        })
+        val service = PebbleFitOxygenExportService(MapSettings(), TestCipher(), client,
+            readHealth = { after, limit -> rows.filter { it.timestamp > after }.take(limit) },
+            readSessions = { after, afterType, _, limit -> sessions.filter {
+                it.startTime > after || (it.startTime == after && it.type > afterType)
+            }.take(limit) })
+        service.saveConfiguration("https://receiver.example", "secret")
+        val result = service.syncNow()
+        assertEquals(2, result.uploaded)
+        assertTrue(result.message.contains("Skipped 3001 invalid records"))
+        assertEquals(2, requests)
+    }
+
+    private fun overlay(start: Long, type: Int) = OverlayDataEntity(
+        startTime = start, duration = 60L, type = type, steps = 0,
+        restingKiloCalories = 0, activeKiloCalories = 0, distanceCm = 0, offsetUTC = 0,
+    )
 
     private fun sample(timestamp: Long, percent: Int, quality: Int) = HealthDataEntity(
         timestamp = timestamp,

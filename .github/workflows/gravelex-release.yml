@@ -1,0 +1,69 @@
+name: GravelEx release
+on:
+  push:
+    tags: ['gravelex-v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gravelex-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      - name: Install SDK components
+        run: sdkmanager 'platforms;android-37' 'build-tools;37.0.0' 'ndk;28.2.13676358'
+      - name: Test and assemble unsigned release
+        run: >-
+          ./gradlew :libpebble3:jvmTest :pebble:testAndroidHostTest
+          :androidApp:assembleRelease --max-workers=4 --no-configuration-cache
+      - name: Sign and verify
+        env:
+          KEYSTORE_BASE64: ${{ secrets.GRAVELEX_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.GRAVELEX_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.GRAVELEX_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.GRAVELEX_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$KEYSTORE_BASE64" && test -n "$STORE_PASSWORD" && test -n "$KEY_ALIAS" && test -n "$KEY_PASSWORD"
+          private_dir="$(mktemp -d "$RUNNER_TEMP/gravelex-signing.XXXXXX")"
+          trap 'rm -rf "$private_dir"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$private_dir/release.jks"
+          printf '%s' "$STORE_PASSWORD" > "$private_dir/store-password"
+          printf '%s' "$KEY_PASSWORD" > "$private_dir/key-password"
+          mkdir -p dist
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
+            --ks "$private_dir/release.jks" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "file:$private_dir/store-password" --key-pass "file:$private_dir/key-password" \
+            --out dist/GravelEx.apk androidApp/build/outputs/apk/release/androidApp-release-unsigned.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs dist/GravelEx.apk | tee dist/signature.txt
+          grep -qiF "$(tr -d '\r\n' < docs/gravelex-signing-sha256.txt)" dist/signature.txt
+          "$ANDROID_HOME/build-tools/37.0.0/aapt2" dump badging dist/GravelEx.apk > dist/package.txt
+          grep -q "package: name='tdgs.gravel'" dist/package.txt
+          grep -q "application-label:'GravelEx'" dist/package.txt
+          if grep -q '^application-debuggable' dist/package.txt; then exit 1; fi
+          (cd dist && sha256sum GravelEx.apk > SHA256SUMS)
+      - name: Publish tagged release for Obtainium
+        if: startsWith(github.ref, 'refs/tags/gravelex-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/GravelEx.apk dist/SHA256SUMS dist/signature.txt \
+            --repo "$GITHUB_REPOSITORY" --title "GravelEx ${GITHUB_REF_NAME#gravelex-v}" \
+            --notes-file docs/GRAVELEX_RELEASE_NOTES.md --verify-tag

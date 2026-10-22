@@ -11,8 +11,8 @@ import kotlin.test.assertNotNull
 /**
  * Pins both exported PebbleKit ContentProvider authorities to this package.
  * PebbleKit 2 clients derive the authority from the companion's package name
- * (packageName + ".pebblekit"); classic PebbleKit clients use the fixed basalt
- * authority. Either authority string is build-valid, so a merge that reverts
+ * (packageName + ".pebblekit"); GravelEx uses its own basalt authority to permit co-installation.
+ * Legacy clients with a hardcoded Pebble authority need adaptation. Either authority string is build-valid, so a merge that reverts
  * the manifest to another value would compile fine and only fail at runtime
  * when a client app cannot find the provider.
  *
@@ -36,7 +36,7 @@ class PebbleKitProviderAuthorityTest {
 
     @Test
     fun classicBasaltAuthorityResolvesToThisPackage() {
-        val authority = "com.getpebble.android.provider.basalt"
+        val authority = "${context.packageName}.basalt"
         val provider = resolveProvider(authority)
         assertNotNull(provider, "no exported provider at $authority")
         assertEquals(context.packageName, provider.packageName)
