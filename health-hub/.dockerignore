@@ -1,0 +1,8 @@
+.env
+.env.*
+data
+backups
+downloads
+**/__pycache__
+**/.pytest_cache
+**/test_*.py

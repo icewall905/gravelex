@@ -243,7 +243,7 @@ class PebbleFitOxygenExportService(
         const val SESSION_TYPE_CURSOR_KEY = "pebblefit_session_scan_type"
         const val MIN_TIMESTAMP = 946684800L
         const val MAX_SESSIONS = 1000
-        const val DEFAULT_URL = "https://ph.tdgs.org"
+        const val DEFAULT_URL = ""
         const val MAX_PAGE = 3000
         const val LOOKBACK_SECONDS = 14L * 24L * 60L * 60L
         const val REQUEST_TIMEOUT_MS = 20_000L

@@ -21,3 +21,14 @@ iosApp/iosApp/GoogleService-Info.plist
 **/.cxx/
 # Bytecode from running the changelog parser tests locally.
 __pycache__/
+
+# Health hub instance configuration and private state
+/health-hub/.env
+/health-hub/.env.*
+!/health-hub/.env.example
+/health-hub/data/
+/health-hub/downloads/*
+!/health-hub/downloads/.gitkeep
+/health-hub/backups/
+/health-hub/.venv/
+/health-hub/.pytest_cache/

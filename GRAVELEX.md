@@ -10,7 +10,7 @@ The new package is a full watch-management app, not a companion. It can coexist 
 
 ## Direct health export
 
-In the watch's Health settings, open **Health data export**. Configure the HTTPS receiver URL and its history bearer token, enable export, and sync. The existing PebbleFit receiver routes records into the dashboard/history store and HA integration. Compatible destinations can implement the same authenticated JSON contract; arbitrary HA REST endpoints are not that contract.
+In the watch's Health settings, open **Health data export**. Configure your own HTTPS hub URL and its history bearer token, enable export, and sync. The existing PebbleFit receiver routes records into the dashboard/history store and HA integration. Compatible destinations can implement the same authenticated JSON contract; arbitrary HA REST endpoints are not that contract.
 
 Exports include minute HR (when present), steps, intensity, light intensity, active/resting kcal, distance metres and HR zone; sleep/deep sleep/naps and walk/run/open-workout sessions; SpO2 timestamp, percentage and unmodified quality byte. Missing readings stay absent. See [capability audit](docs/GRAVELEX_CAPABILITIES.md). Minute HR cannot yield HRV: retain the separate watch measurement path for beat intervals. No raw accelerometer, respiration or continuous beat stream is exposed by the inspected phone APIs.
 
@@ -48,3 +48,7 @@ The diagnostic Health Debug Stats refresh requests full history from the watch; 
 Version0.1.2 adds an SpO2 card to Health and a blood-oxygen setup/status view under Health settings. The card follows the selected day/week/month and shows observed readings with actual timestamps. Empty periods remain empty rather than zero. The setup view distinguishes the watch's reported monitoring switch, data stored on the phone, and the HTTPS export status. A switch not yet reported by the watch is shown as unknown, not assumed off.
 
 Last successful upload time and acknowledged batch count are retained across app restarts. They describe server acknowledgment, not sensor measurement time, and reset if you change server or token. Token contents stay hidden.
+
+## Deploy the complete hub
+
+The matching receiver, Pebble Health PWA, analytics, optional integrations and watch-app sources are in [health-hub](health-hub/README.md). Deployment-specific URLs, wearer details and credentials come from private environment configuration. A fresh phone installation has no preset server; existing saved URLs are retained.

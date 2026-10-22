@@ -1,0 +1,56 @@
+{
+  "name": "ha-health-sync",
+  "author": "self-hosted",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "HA Health Sync",
+    "uuid": "b41d5c42-8f24-4229-93dd-828ad2218452",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false,
+      "hiddenApp": false,
+      "onlyShownOnCommunication": false
+    },
+    "messageKeys": [
+      "steps",
+      "active_seconds",
+      "distance_meters",
+      "active_kcal",
+      "resting_kcal",
+      "sleep_seconds",
+      "sleep_restful_seconds",
+      "heart_rate_bpm",
+      "battery_percent",
+      "battery_charging",
+      "activity_count",
+      "activity_seconds",
+      "last_activity_type",
+      "last_activity_start",
+      "last_activity_seconds",
+      "ts",
+      "ack"
+    ],
+    "capabilities": [
+      "health",
+      "configurable"
+    ],
+    "resources": {
+      "media": []
+    }
+  }
+}

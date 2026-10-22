@@ -1,0 +1,39 @@
+x-common: &common
+  build: .
+  image: gravelex-health-hub:local
+  env_file: .env
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  volumes:
+    - health-data:/data
+    - ./downloads:/downloads:ro
+services:
+  web:
+    <<: *common
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8790}:8790"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8790/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  receiver:
+    <<: *common
+    command: ["gunicorn", "-w", "1", "-b", "0.0.0.0:9998", "--access-logfile", "-", "app:app"]
+    environment:
+      AUTH_TOKEN: "${AUTH_TOKEN:?Run scripts/init-env.sh first}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${RECEIVER_PORT:-9998}:9998"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9998/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  briefing:
+    <<: *common
+    profiles: [briefing]
+    command: ["python", "briefing.py", "--daemon"]
+volumes:
+  health-data:

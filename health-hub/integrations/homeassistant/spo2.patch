@@ -1,0 +1,87 @@
+--- a/custom_components/pebble_ha_integration/sensor/status.py
++++ b/custom_components/pebble_ha_integration/sensor/status.py
+@@ -8,6 +8,8 @@
+ 
+ from __future__ import annotations
+ 
++from datetime import UTC, datetime
++import math
+ from typing import TYPE_CHECKING
+ 
+ from custom_components.pebble_ha_integration.entity import PebbleWatchEntity
+@@ -85,6 +87,13 @@
+         state_class=SensorStateClass.MEASUREMENT,
+     ),
+     SensorEntityDescription(
++        key="spo2_pct",
++        translation_key="spo2_pct",
++        icon="mdi:water-percent",
++        native_unit_of_measurement=PERCENTAGE,
++        state_class=SensorStateClass.MEASUREMENT,
++    ),
++    SensorEntityDescription(
+         key="color",
+         translation_key="color",
+         entity_category=EntityCategory.DIAGNOSTIC,
+@@ -107,9 +116,48 @@
+     @property
+     def native_value(self) -> int | str | None:
+         """Return the current value of this status field."""
+-        return self.coordinator.data.get(self.entity_description.key)
++        value = self.coordinator.data.get(self.entity_description.key)
++        if self.entity_description.key == "spo2_pct":
++            return value if _valid_spo2(value) else None
++        return value
++
++    @property
++    def extra_state_attributes(self) -> dict[str, str | int] | None:
++        """Expose the measurement time and experimental source for valid SpO2."""
++        if self.entity_description.key != "spo2_pct":
++            return None
++        value = self.coordinator.data.get("spo2_pct")
++        if not _valid_spo2(value):
++            return None
++
++        attributes: dict[str, str | int] = {"source": "experimental"}
++        timestamp = self.coordinator.data.get("spo2_ts")
++        if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and math.isfinite(timestamp):
++            try:
++                attributes["measured_at"] = datetime.fromtimestamp(timestamp, UTC).isoformat()
++            except (OverflowError, OSError, ValueError):
++                pass
++
++        quality = self.coordinator.data.get("spo2_quality")
++        if isinstance(quality, int) and not isinstance(quality, bool) and 0 <= quality <= 255:
++            attributes["device_quality_raw"] = quality
++
++        samples = self.coordinator.data.get("spo2_samples_today")
++        if isinstance(samples, int) and not isinstance(samples, bool) and samples >= 0:
++            attributes["samples_today"] = samples
++        return attributes
+ 
+     @property
+     def available(self) -> bool:
+         """Return whether the watch is currently reporting this field."""
+         return super().available and self.entity_description.key in self.coordinator.data
++
++
++def _valid_spo2(value: object) -> bool:
++    """Return whether a raw oxygen percentage is finite and between 1 and 100."""
++    return (
++        isinstance(value, (int, float))
++        and not isinstance(value, bool)
++        and math.isfinite(value)
++        and 1 <= value <= 100
++    )
+--- a/custom_components/pebble_ha_integration/translations/en.json
++++ b/custom_components/pebble_ha_integration/translations/en.json
+@@ -44,6 +44,9 @@
+       "heart_rate_bpm": {
+         "name": "Heart Rate"
+       },
++      "spo2_pct": {
++        "name": "Blood Oxygen"
++      },
+       "color": {
+         "name": "Color"
+       }
