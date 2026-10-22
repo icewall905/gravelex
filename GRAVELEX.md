@@ -34,3 +34,11 @@ The four repository Actions secrets are `GRAVELEX_KEYSTORE_BASE64`, `GRAVELEX_KE
 ## Release
 
 Work on branch `gravelex`, retain full Git history/submodules, and run targeted parser/exporter tests plus release assembly. Version code is the Git commit count. Update `androidApp/version.properties` to the count of the release commit before tagging it `gravelex-v0.1.0` (then increment for later releases). Push the branch and tag; the GravelEx release workflow publishes the signed APK. The old upstream build matrix remains available manually. Do not use `LOCAL_RELEASE_BUILD=true` for public releases: that signs with a debug key.
+
+## Blood oxygen troubleshooting
+
+Version0.1.1 adds the missing `bloodOxygenPreferences` round trip. Phone Settings → Health → Blood Oxygen Monitoring controls the master switch on supported Time2 hardware. Its value remains unspecified until reported by the watch or deliberately set; saving unrelated settings does not turn it off. Sampling interval stays in watch Settings → Health.
+
+The watch sends oxygen in version14 minute records. Zero means no measurement. SpO2 must merge independently from step-count priority because a later update to the same minute may supply oxygen without adding steps. Diagnostics `HEALTH_FORMAT` and `HEALTH_OXYGEN` show packet format and valid/missing sample counts through ADB logs.
+
+The diagnostic Health Debug Stats refresh requests full history from the watch; the Health data export Sync button sends stored phone records to the HTTPS receiver. These are distinct steps. No supported public on-demand SpO2 SDK request was found; firmware background sampling can skip flat/off-wrist positions and attempts without accepted readings.

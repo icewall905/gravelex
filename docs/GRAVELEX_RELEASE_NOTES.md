@@ -1,8 +1,9 @@
-GravelEx is the TDGS health-export fork of de-Googled Gravel, installed as `tdgs.gravel`.
+GravelEx 0.1.1 fixes two missing pieces in SpO2 support:
 
-- Direct HTTPS export of minute heart rate, steps, intensity, calories and distance.
-- Sleep and workout sessions plus blood oxygen readings and original quality bytes.
-- Encrypted destination token, bounded history replay and retry without advancing failed uploads.
-- Independent app identity; no Google services required for direct export.
+- Sync the watch's Blood Oxygen Monitoring preference correctly and expose it in phone Health settings for Pebble Time 2 on firmware 4.41.1 or newer. An unknown setting stays unknown until reported or explicitly changed.
+- Preserve valid SpO2 readings when minute records are replayed with equal/lower step counts, and prevent newer movement-only records from erasing oxygen.
+- Add format and oxygen-count diagnostics for real watch packets without logging payloads or credentials.
 
-Install GravelEx.apk. For updates, add this GitHub repository to Obtainium and select the GravelEx APK. Keep the original Gravel installed until pairing and data export have been checked; only one phone app should actively connect to the watch. A fresh package does not inherit the original app's database or settings. HRV still requires the existing watch measurement app: minute heart-rate samples do not contain consecutive beat intervals.
+Install GravelEx.apk over GravelEx 0.1.0, or update through Obtainium. Package and permanent signing key are unchanged. Existing settings and data are retained.
+
+After updating, open Settings → Health → Blood Oxygen Monitoring and enable it. Set the sampling interval on the watch. Experimental background sampling may skip flat/off-wrist positions and can produce no valid result; transfer success alone does not prove an oxygen measurement. HRV continues through the existing watch measurement app.

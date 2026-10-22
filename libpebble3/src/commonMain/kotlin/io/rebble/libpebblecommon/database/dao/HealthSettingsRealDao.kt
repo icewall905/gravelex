@@ -7,6 +7,9 @@ import io.rebble.libpebblecommon.database.asMillisecond
 import io.rebble.libpebblecommon.database.entity.ActivityPrefsBlobItem
 import io.rebble.libpebblecommon.database.entity.ActivityPrefsValue
 import io.rebble.libpebblecommon.database.entity.ActivityPrefsValue.Companion.encodeToString
+import io.rebble.libpebblecommon.database.entity.BloodOxygenPreferencesBlobItem
+import io.rebble.libpebblecommon.database.entity.BloodOxygenPreferencesValue
+import io.rebble.libpebblecommon.database.entity.BloodOxygenPreferencesValue.Companion.encodeToString
 import io.rebble.libpebblecommon.database.entity.DistanceUnitsBlobItem
 import io.rebble.libpebblecommon.database.entity.HRMonitoringInterval
 import io.rebble.libpebblecommon.database.entity.HealthGender
@@ -96,6 +99,16 @@ interface HealthSettingsEntryRealDao : HealthSettingsEntryDao {
                         zone2Threshold = blob.zone2Threshold.get().toShort(),
                         zone3Threshold = blob.zone3Threshold.get().toShort(),
                     ).encodeToString()
+                }
+                "bloodOxygenPreferences" -> {
+                    if (write.value.size != 1) {
+                        return BlobResponse.BlobStatus.InvalidData
+                    }
+                    val blob = BloodOxygenPreferencesBlobItem(enabled = false)
+                    blob.fromBytes(value)
+                    val raw = blob.enabled.get().toInt()
+                    if (raw != 0 && raw != 1) return BlobResponse.BlobStatus.InvalidData
+                    BloodOxygenPreferencesValue(enabled = raw == 1).encodeToString()
                 }
                 else -> {
                     logger.w { "Unknown health settings key from watch: $key" }

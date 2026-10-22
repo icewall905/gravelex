@@ -8,7 +8,7 @@ private val logger = Logger.withTag("HealthDaoExt")
 
 /**
  * Inserts health data with priority based on step count. If data already exists for a timestamp,
- * only replaces it if the new data has more steps.
+ * keeps the higher-step movement record and merges independently arriving oxygen readings.
  */
 suspend fun HealthDao.insertHealthDataWithPriority(data: List<HealthDataEntity>) {
     var inserted = 0
@@ -20,32 +20,36 @@ suspend fun HealthDao.insertHealthDataWithPriority(data: List<HealthDataEntity>)
         if (existing == null) {
             insertHealthData(listOf(newData))
             inserted++
-        } else if (newData.steps > existing.steps) {
-            logger.d {
-                "Replacing data at timestamp ${newData.timestamp}: ${existing.steps} steps -> ${newData.steps} steps (gained ${newData.steps - existing.steps} steps)"
-            }
-            insertHealthData(listOf(newData))
-            replaced++
-        } else if (newData.steps < existing.steps) {
-            logger.d {
-                "Skipping data at timestamp ${newData.timestamp}: existing ${existing.steps} steps > new ${newData.steps} steps"
-            }
-            skipped++
         } else {
-            logger.d {
-                "Skipping duplicate data at timestamp ${newData.timestamp}: both have ${newData.steps} steps"
+            val merged = mergeHealthMinute(existing, newData)
+            if (merged != existing) {
+                insertHealthData(listOf(merged))
+                replaced++
+            } else {
+                skipped++
             }
-            skipped++
         }
     }
 
     val summary = buildString {
         append("Health data insert complete: ")
         if (inserted > 0) append("$inserted new, ")
-        if (replaced > 0) append("$replaced replaced (higher steps), ")
+        if (replaced > 0) append("$replaced updated (movement or oxygen), ")
         if (skipped > 0) append("$skipped skipped (lower/equal steps)")
     }
     logger.d { summary }
+}
+
+/** Movement and oxygen arrive independently: a duplicate step total can add SpO2. */
+internal fun mergeHealthMinute(existing: HealthDataEntity, incoming: HealthDataEntity): HealthDataEntity {
+    require(existing.timestamp == incoming.timestamp)
+    val movement = if (incoming.steps > existing.steps) incoming else existing
+    val oxygen = when {
+        incoming.spo2Percent in 1..100 -> incoming
+        existing.spo2Percent in 1..100 -> existing
+        else -> return movement
+    }
+    return movement.copy(spo2Percent = oxygen.spo2Percent, spo2Quality = oxygen.spo2Quality)
 }
 
 /**

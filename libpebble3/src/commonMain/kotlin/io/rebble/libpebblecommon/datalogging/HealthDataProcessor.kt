@@ -193,6 +193,10 @@ class HealthDataProcessor(
             return null
         }
 
+        logger.d {
+            "HEALTH_OXYGEN: samples=${records.size} valid=${records.count { it.spo2Percent in 1..100 }} " +
+                "missing=${records.count { it.spo2Percent == 0 }} latestTimestamp=${records.maxOf { it.timestamp }}"
+        }
         val totalSteps = records.sumOf { it.steps }
         val totalActiveKcal = records.sumOf { it.activeGramCalories } / 1000
         val totalRestingKcal = records.sumOf { it.restingGramCalories } / 1000

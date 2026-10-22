@@ -168,6 +168,8 @@ import io.rebble.libpebblecommon.database.entity.HRMonitoringInterval
 import io.rebble.libpebblecommon.database.entity.HealthGender
 import io.rebble.libpebblecommon.js.PKJSApp
 import io.rebble.libpebblecommon.metadata.WatchType
+import io.rebble.libpebblecommon.metadata.WatchHardwarePlatform
+import io.rebble.libpebblecommon.metadata.supportsBloodOxygen
 import io.rebble.libpebblecommon.packets.ProtocolCapsFlag
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -580,6 +582,12 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
             it is KnownPebbleDevice && it.capabilities.contains(
                 ProtocolCapsFlag.SupportsBlobDbVersion
             )
+        }
+    }
+    val anyWatchSupportsBloodOxygen = remember(watchesCastable) {
+        watchesCastable.any { watch ->
+            watch is KnownPebbleDevice &&
+                watch.watchType.supportsBloodOxygen(watch.runningFwVersion)
         }
     }
     val watchPrefs = watchPrefs()
@@ -1510,6 +1518,17 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                         libPebble.updateHealthSettings(
                             healthSettings.copy(hrmEnabled = it)
                         )
+                    },
+                ),
+                basicSettingsToggleItem(
+                    title = "Blood Oxygen Monitoring",
+                    description = "Allow the watch to measure blood oxygen saturation",
+                    topLevelType = TopLevelType.Phone,
+                    section = Section.Health,
+                    checked = healthSettings.bloodOxygenEnabled == true,
+                    show = { healthSettings.trackingEnabled && anyWatchSupportsBloodOxygen },
+                    onCheckChanged = { enabled ->
+                        libPebble.updateHealthSettings(healthSettings.copy(bloodOxygenEnabled = enabled))
                     },
                 ),
                 basicSettingsDropdownItem(

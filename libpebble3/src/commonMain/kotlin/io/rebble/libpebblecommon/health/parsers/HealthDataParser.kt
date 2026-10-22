@@ -49,6 +49,10 @@ fun parseStepsData(payload: ByteArray, itemSize: UShort): List<HealthDataEntity>
         buffer.getByte() // unused
         val sampleSize = buffer.getUByte().toInt()
         val recordNum = buffer.getUByte()
+        logger.d {
+            "HEALTH_FORMAT: version=$version itemSize=$itemSize sampleSize=$sampleSize samples=$recordNum " +
+                "oxygenFields=${version >= VERSION_FW_4_4_1 && sampleSize >= VERSION_FW_4_4_1_SAMPLE_SIZE}"
+        }
 
         val isNewerVersion = version > VERSION_FW_4_3 && sampleSize >= VERSION_FW_4_3_SAMPLE_SIZE
         if (!SUPPORTED_STEP_VERSIONS.contains(version) && !isNewerVersion) {

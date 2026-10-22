@@ -85,6 +85,19 @@ enum class WatchHardwarePlatform(val protocolNumber: UByte, private val _watchTy
     }
 }
 
+/** Pebble Time 2 blood oxygen controls are supported by production Obelix firmware 4.41.1+. */
+fun WatchHardwarePlatform.supportsBloodOxygen(firmwareVersion: String): Boolean {
+    if (this != WatchHardwarePlatform.CORE_OBELIX_PVT && this != WatchHardwarePlatform.CORE_OBELIX_DVT) {
+        return false
+    }
+    val parts = Regex("(\\d+)\\.(\\d+)\\.(\\d+)").find(firmwareVersion)?.groupValues?.drop(1)
+        ?.mapNotNull { it.toIntOrNull() } ?: return false
+    if (parts.size != 3) return false
+    return parts[0] > 4 ||
+        (parts[0] == 4 && parts[1] > 41) ||
+        (parts[0] == 4 && parts[1] == 41 && parts[2] >= 1)
+}
+
 @Serializer(WatchHardwarePlatform::class)
 class WatchHardwarePlatformSerializer {
     override val descriptor: SerialDescriptor

@@ -466,6 +466,9 @@ data class HealthSettings(
     val hrZone1Threshold: Short,
     val hrZone2Threshold: Short,
     val hrZone3Threshold: Short,
+    // null means this watch has not reported the preference yet. Do not sync a
+    // guessed false value to firmware that may already have SpO2 enabled.
+    val bloodOxygenEnabled: Boolean? = null,
 )
 
 /** Time range for displaying health data */
