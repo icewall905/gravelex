@@ -44,3 +44,7 @@ python3 reference/annotate_session.py reference-data/watch.json --condition quie
 ```
 
 Stress ratings in this example are placeholders, never inferred values. Enter actual contemporaneous observations. Breathing labels require an actual integer count and UNIX start/end timestamps within the saved capture, not an intended paced rate. Reports bind inputs with SHA-256 and preserve the raw captures. The default alignment uncertainty is an explicit assumption, not a measured clock/transport bound. See [VALIDATION-STUDY.md](../VALIDATION-STUDY.md) for the separate HRV, motion, breathing and stress gates.
+
+## PPI delivery semantics research
+
+`audit_ppi_delivery.py` audits raw watch records without deduplicating or reinterpreting them as validated beats. Positive delivery gaps and flattened event-index cadence are reported separately. See [PPI-DELIVERY-RESEARCH.md](../PPI-DELIVERY-RESEARCH.md): the fixed1Hz assumption in the current backend is not established by the firmware/API. No audit output enables calibration or changes the live analyzer.
