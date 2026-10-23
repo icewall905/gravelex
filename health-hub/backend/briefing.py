@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 import fitness
 
 log = logging.getLogger("pebble-health.briefing")
-FACTS_VERSION = 2
+FACTS_VERSION = 3
 PAGES = ("today", "sleep", "recovery", "training", "more")
 _running = threading.Lock()
 
@@ -178,6 +178,8 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "breathing_per_min": (last_hrv or {}).get("breaths_per_min"),
             "qualified_night_recordings_last_night": night_sessions_today, "night_recordings_planned": None,
             "stress_status": (s.get("stress") or {}).get("status"),
+            "monitor_diagnostics":(s.get("monitor_observations") or {}).get("diagnostics",{}),
+            "overnight_spot_pulse":(s.get("monitor_observations") or {}).get("nightly_pulse",[])[-7:],
             "hrv_comparable_series": identity,
             "hrv_capture_quality": {k:(s.get("hrv",{}).get("quality") or {}).get(k) for k in ("status","source","algorithm_version","motion")},
             "stress_observation": {k:(s.get("stress") or {}).get(k) for k in ("measured_at","age_seconds","expires_at","context","reason")},
@@ -200,7 +202,7 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "watch_battery_percent": status.get("battery_percent"),
             "hrv_app_version": _version(collector.get("collector_version")),
             "night_slots_armed": collector.get("schedule_ok"),
-            "next_night_recording": datetime.fromtimestamp(collector["next_wakeup"], tz).strftime("%a %H:%M") if collector.get("next_wakeup") else None,
+            "next_night_recording": datetime.fromtimestamp(collector["next_wakeup"], tz).strftime("%a %H:%M") if collector.get("next_wakeup",0)>s["now"] else None,
             "qualified_night_recordings_last_night": night_sessions_today, "night_recordings_planned": None,
             "minute_records_total": s.get("minute_records"),
         },

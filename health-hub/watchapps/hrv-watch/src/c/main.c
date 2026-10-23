@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include "schedule.h"
 #define CAPACITY 512
-#define COLLECTOR_VERSION 150
+#define COLLECTOR_VERSION 152
 static Window *window;
 static TextLayer *text;
 static uint16_t intervals[CAPACITY];
@@ -15,6 +15,7 @@ static bool running, ready, paired;
 static bool quiet, auto_pending, measurement_night;
 static bool nights_enabled;
 static AppTimer *night_watchdog;
+static AppTimer *capture_timer;
 static int32_t schedule_ok, schedule_error, next_wakeup, accel_rate_result;
 static uint32_t accel_callbacks, vibration_samples;
 static bool slot_started;
@@ -25,12 +26,23 @@ static uint16_t measurement_version=COLLECTOR_VERSION;
 static uint32_t hrv_events,zero_ppi_events,hr_events,hr_sum,hr_valid;
 static char firmware[16];
 static bool capacity_limited;
+static void finish(void);
 static void get_firmware(char *value,size_t size){WatchInfoVersion fw=watch_info_get_firmware_version();snprintf(value,size,"%u.%u.%u",fw.major,fw.minor,fw.patch);}
 static void check_phone(void *context);
 static void start(void);
 static void send_result(void);
 static void exit_night(void *context) { if(quiet) window_stack_pop_all(false); }
-static void night_timeout(void *context){night_watchdog=NULL;collector_phase=4;check_phone(NULL);app_timer_register(1000,exit_night,NULL);}
+static void night_timeout(void *context){
+  night_watchdog=NULL;
+  /* The capture timer normally finishes first. If it did not, force a
+     bounded completion before reporting the terminal phase. */
+  if(running){
+    finish();
+    if(night_watchdog){app_timer_cancel(night_watchdog);night_watchdog=NULL;}
+    collector_phase=4;check_phone(NULL);app_timer_register(1000,exit_night,NULL);return;
+  }
+  collector_phase=4;check_phone(NULL);app_timer_register(1000,exit_night,NULL);
+}
 static void close_soon(void) { if(quiet) app_timer_register(2500,exit_night,NULL); }
 static void schedule_nights(void) {
   schedule_ok=0;schedule_error=0;next_wakeup=0;
@@ -126,6 +138,9 @@ static void check_phone(void *context) {
     dict_write_int32(iter,MESSAGE_KEY_ts,time(NULL));app_message_outbox_send();}
 }
 static void finish(void) {
+  if(!running)return;
+  if(capture_timer){app_timer_cancel(capture_timer);capture_timer=NULL;}
+  if(night_watchdog){app_timer_cancel(night_watchdog);night_watchdog=NULL;}
   capacity_limited=count==CAPACITY && elapsed()<180000;
   running=false; ready=true;collector_phase=3;
   health_service_set_hrv_sample_period(0);
@@ -133,7 +148,12 @@ static void finish(void) {
   accel_data_service_unsubscribe();
   save_measurement();
   send_result();
+  /* Keep the scheduled app alive briefly for the phone transfer and an
+     explicit phase-3 status, then exit even if the phone is unavailable. */
+  app_timer_register(500,check_phone,NULL);
+  if(quiet)night_watchdog=app_timer_register(35000,night_timeout,NULL);
 }
+static void capture_timeout(void *context){capture_timer=NULL;if(running)finish();}
 static void on_health(HealthEventType type, void *context) {
   if(!running)return;
   if(type==HealthEventHeartRateUpdate){hr_events++;int bpm=health_service_peek_current_value(HealthMetricHeartRateBPM);if(bpm>0 && bpm<=240){hr_sum+=bpm;hr_valid++;}return;}
@@ -168,6 +188,7 @@ static void start(void) {
   check_phone(NULL);
   accel_raw_data_service_subscribe(25,on_motion);
   accel_rate_result=accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);
+  capture_timer=app_timer_register(180000,capture_timeout,NULL);
   if(quiet){if(night_watchdog)app_timer_cancel(night_watchdog);night_watchdog=app_timer_register(220000,night_timeout,NULL);}
 }
 static void tick(struct tm *tm,TimeUnits changed) {
@@ -241,6 +262,8 @@ int main(void){
  if(quiet){app_timer_register(4000,begin_night,NULL);night_watchdog=app_timer_register(220000,night_timeout,NULL);}
  health_service_events_subscribe(on_health,NULL);tick_timer_service_subscribe(SECOND_UNIT,tick);
  app_event_loop();
+ if(capture_timer){app_timer_cancel(capture_timer);capture_timer=NULL;}
+ if(night_watchdog){app_timer_cancel(night_watchdog);night_watchdog=NULL;}
  health_service_set_hrv_sample_period(0);health_service_set_heart_rate_sample_period(0);
  accel_data_service_unsubscribe();health_service_events_unsubscribe();tick_timer_service_unsubscribe();
  text_layer_destroy(text);window_destroy(window);

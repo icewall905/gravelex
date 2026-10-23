@@ -1,9 +1,9 @@
 /* Pebble Health service worker.
-   App shell: cache-first from a versioned cache.
+   App shell: network-first with a versioned offline fallback.
    /api/summary: network-first, falling back to the last good response.
    Writes (POST/PUT/…) and every other request go straight to the network. */
 'use strict';
-const VERSION = 'v18';
+const VERSION = 'v20';
 const SHELL_CACHE = 'pebble-health-shell-' + VERSION;
 const DATA_CACHE = 'pebble-health-data-v1';
 const SHELL = [
@@ -47,17 +47,28 @@ async function summary(request) {
 }
 
 async function shell(request) {
-  const cache = await caches.open(SHELL_CACHE);
-  const hit = await cache.match(request, { ignoreSearch: request.mode === 'navigate' });
-  if (hit) return hit;
+  const cache=await caches.open(SHELL_CACHE);
   try {
-    return await fetch(request);
-  } catch (err) {
-    if (request.mode === 'navigate') {
-      const page = await cache.match('index.html');
-      if (page) return page;
+    const response=await fetch(request);
+    if(response.ok) {
+      try {await cache.put(request,response.clone());} catch(cacheError) { /* Fresh network response still wins when storage is full. */ }
+      return response;
     }
-    throw err;
+    const hit=await cache.match(request,{ignoreSearch:request.mode==='navigate'});
+    if(hit)return hit;
+    if(request.mode==='navigate') {
+      const page=await cache.match('index.html');
+      if(page)return page;
+    }
+    return response;
+  } catch(error) {
+    const hit=await cache.match(request,{ignoreSearch:request.mode==='navigate'});
+    if(hit)return hit;
+    if(request.mode==='navigate') {
+      const page=await cache.match('index.html');
+      if(page)return page;
+    }
+    throw error;
   }
 }
 

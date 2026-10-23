@@ -17,6 +17,7 @@ import collection_health
 import provenance
 import training_ledger
 import readiness_history
+import monitor_observations
 import workout_edits
 import uuid
 from datetime import datetime, timedelta
@@ -373,6 +374,7 @@ def summary(days=42):
     with connect() as snapshot_db:
         readiness_history.persist_daily(snapshot_db, nightly['today'], nightly['readiness'], now)
         nightly['readiness_history']=readiness_history.read_history(snapshot_db, since, now)
+    monitors=monitor_observations.build(hrv_rows,now,TZ)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
     return {"wearer": os.environ.get("WEARER_NAME", ""), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
@@ -382,7 +384,7 @@ def summary(days=42):
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},
-      "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
+      "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
       "fitness": physiology.fitness(json.loads(body_row['value']) if body_row else None,
                                     (weight or {}).get('latest',{}).get('trend_kg'), config.get('hr_max'),
                                     fit_minutes, active_today, TZ, datetime.fromtimestamp(now,TZ).date()),

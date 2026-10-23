@@ -459,6 +459,12 @@ function legend(items) {
  * Data accessors
  * ================================================================== */
 const rec = () => D().recovery || {};
+function monitorExplanation(kind) {
+  const diag=D().monitor_observations?.diagnostics?.[kind] || {};
+  const labels={motion_uncalibrated:'Motion calibration has not been validated',motion_unknown:'Motion evidence is missing',quality_insufficient:'Interval quality is insufficient',strict_qualification_missing:'No clear qualified breathing rhythm',reported_hr_missing:'No direct pulse summary',reported_hr_invalid:'Invalid pulse summary'};
+  const reasons=Object.entries(diag.exclusion_reasons || {}).map(([key,count])=>`${labels[key] || key.replaceAll('_',' ')} (${count})`).join('; ');
+  return `${diag.received ?? 0} recordings received; ${diag.eligible ?? 0} eligible.${reasons ? ' '+reasons+'.' : ''}${diag.last_measured_at ? ' Latest capture: '+fmtDateTime(diag.last_measured_at)+'.' : ''}`;
+}
 const byNight = (arr, key) => { const m = new Map(); (arr || []).forEach(r => { if (r && r[key]) m.set(r[key], r); }); return m; };
 function nightItems(n, key) {
   const m = byNight(rec().nights, 'night');
@@ -593,38 +599,30 @@ const CARDS = {
   },
 
   rhr() {
-    const n = lastNight(), items = nightItems(7, 'resting_hr');
-    const has = items.some(i => isNum(i.v));
-    const wk = avg(items.map(i => i.v));
-    return card('rhr', 'Resting heart rate', { link: 'rhr' },
-      has ? [
-        big(isLastNight(n) ? fmt(n.resting_hr) : '—', isLastNight(n) ? 'bpm last night' : 'no reading last night', !isLastNight(n)),
-        stats([['7-night average', fmt(wk), 'bpm']]),
-        lineChart({ items, H: 100, unit: 'bpm', label: 'Resting heart rate, last 7 nights' }),
-      ] : pending('No overnight readings yet', 'Resting heart rate comes from the scheduled night recordings of the HRV watch app.'));
+    const rows=D().monitor_observations?.nightly_pulse || [], latest=rows.at(-1);
+    const map=byNight(rows,'night'),items=dateSpan(7).map(day=>({key:day,label:day,v:map.get(day)?.pulse ?? null}));
+    return card('rhr','Overnight pulse',{link:'rhr',chip:expChip()},
+      latest ? [big(fmt(latest.pulse,1),'bpm · last recorded'),h('p',{class:'lede'},`Measured ${fmtDateTime(latest.observed_at)} · ${latest.observations} spot recording(s).${latest.night!==todayISO() ? ' No newer night reading received.' : ''}`),
+        lineChart({items,H:100,unit:'bpm',label:'Recorded overnight spot pulse'})] : pending('No overnight pulse saved',monitorExplanation('pulse')),
+      h('p',{class:'foot'},'Direct pulse observations, separate from HRV qualification. These spot recordings are not yet validated resting heart rate and do not enter readiness.'));
   },
 
   breath() {
-    const items = nightItems(7, 'breaths_per_min');
-    const has = items.some(i => isNum(i.v)), n = lastNight();
-    return card('breath', 'Breathing rate', { link: 'breath', chip: expChip() },
-      has ? [
-        big(isLastNight(n) && isNum(n.breaths_per_min) ? fmt(n.breaths_per_min, 1) : '—', 'breaths/min overnight', !(isLastNight(n) && isNum(n.breaths_per_min))),
-        lineChart({ items, H: 100, unit: 'br/min', fmtV: v => fmt(v, 1), label: 'Breathing rate, last 7 nights' }),
-      ] : pending('No reliable overnight reading yet', 'Breathing rate is shown only for nights where the signal was clear enough.'));
+    const items=nightItems(7,'breaths_per_min'),has=items.some(i=>isNum(i.v)),n=lastNight();
+    return card('breath','Breathing rate',{link:'breath',chip:expChip()},has ? [
+      big(isLastNight(n) && isNum(n.breaths_per_min) ? fmt(n.breaths_per_min,1) : '—','breaths/min overnight',!(isLastNight(n)&&isNum(n.breaths_per_min))),
+      lineChart({items,H:100,unit:'br/min',label:'Qualified overnight breathing estimates'})] : pending('Recording qualification blocked',monitorExplanation('breathing')),
+      h('p',{class:'foot'},'Requires a usable interval signal, calibrated motion and a clear breathing rhythm. More elapsed nights alone cannot qualify a rejected recording.'));
   },
 
   stress() {
-    const st = D().stress || {};
-    const score = st.experimental_score;
-    const building = st.status === 'baseline_building' || !isNum(score);
-    return card('stress', 'Stress', { link: 'stress', chip: expChip() },
-      building
-        ? pending(st.status === 'baseline_building' ? 'Building baseline' : 'No score yet', 'Needs two weeks of comparable daytime spot checks before a score means anything.',
-          { n: st.baseline_days || 0, of: st.required_days || 14, unit: 'days', label: 'Baseline days' })
-        : [big(fmt(score), 'of 100'), h('p', { class: 'lede' }, stressWord(score))]);
+    const st=D().stress || {},manual=((D().hrv || {}).analysis || {}).baseline_progress?.manual || {};
+    const score=st.context==='manual' ? st.experimental_score : null;
+    const diag=D().monitor_observations?.diagnostics?.stress || {};
+    return card('stress','Daytime stress check',{link:'stress',chip:expChip()},
+      isNum(score) ? [big(fmt(score),'of 100'),h('p',{class:'lede'},stressWord(score))] : pending(diag.eligible ? 'Building a comparable baseline' : 'Recording qualification blocked',monitorExplanation('stress')),
+      h('p',{class:'foot'},`${diag.received ?? 0} daytime recordings across ${diag.received_manual_days ?? 0} days received. ${manual.adequate_baseline_days ?? 0} / 14 prior comparable qualified days. This is a spot arousal estimate, not continuous stress monitoring.`));
   },
-
   steps() {
     const lt = D().latest || {}, st = lt.status || {};
     const fresh = isNum(lt.ts) && isoOf(new Date(lt.ts * 1000)) === isoOf(new Date());
@@ -965,16 +963,16 @@ const DETAIL = {
   },
 
   rhr: {
-    title: 'Resting heart rate', m: 'rhr',
+    title: 'Overnight spot pulse', m: 'rhr',
     render() {
-      const span = dateSpan(S.range), m = byNight(rec().nights, 'night');
-      const items = bucket(span, d => ({ v: (m.get(d) || {}).resting_hr ?? null }), 'avg');
-      const vals = span.map(d => (m.get(d) || {}).resting_hr);
-      return [card('rhr', 'Overnight resting heart rate', { cls: 'wide' },
-        items.some(i => isNum(i.v)) ? [lineChart({ items, W: chartW(), H: 180, unit: 'bpm', label: 'Resting heart rate per night' }),
+      const span=dateSpan(S.range),m=byNight(D().monitor_observations?.nightly_pulse || [],'night');
+      const items=bucket(span,d=>({v:m.get(d)?.pulse ?? null}),'avg');
+      const vals=span.map(d=>m.get(d)?.pulse);
+      return [card('rhr', 'Recorded overnight spot pulse', { cls: 'wide' },
+        items.some(i => isNum(i.v)) ? [lineChart({ items, W: chartW(), H: 180, unit: 'bpm', label: 'Recorded overnight spot pulse' }),
           stats([['Average', fmt(avg(vals)), 'bpm'], ['Lowest', fmt(Math.min(...vals.filter(isNum))), 'bpm'], ['Nights', `${vals.filter(isNum).length} of ${span.length}`]])]
-          : pending('No overnight readings in this range', 'Resting heart rate comes from the scheduled night recordings of the HRV watch app.'),
-        info('About resting heart rate', 'Taken from the average beat interval of the night recordings. A rise of several beats over your usual level often follows hard training, illness, alcohol or short sleep.'))];
+          : pending('No overnight pulse in this range',monitorExplanation('pulse')),
+        info('About overnight pulse','Median direct pulse summaries from comparable scheduled captures. Actual night dates and gaps are retained. This is not validated resting heart rate and does not qualify readiness.'))];
     },
   },
 
@@ -987,7 +985,7 @@ const DETAIL = {
       return [card('breath', 'Overnight breathing rate', { chip: expChip(), cls: 'wide' },
         items.some(i => isNum(i.v)) ? [lineChart({ items, W: chartW(), H: 180, unit: 'br/min', fmtV: v => fmt(v, 1), label: 'Breathing rate per night' }),
           stats([['Average', fmt(avg(vals), 1), 'br/min'], ['Nights', `${vals.filter(isNum).length} of ${span.length}`]])]
-          : pending('No reliable readings in this range', 'Breathing rate is estimated from the rhythm of heartbeats and shown only when that rhythm is clear.'),
+          : pending('Recording qualification blocked',monitorExplanation('breathing')),
         info('About breathing rate', 'Estimated from how heart rate rises and falls with each breath during night recordings. Nights with an unclear signal are left blank.'))];
     },
   },
@@ -1000,8 +998,8 @@ const DETAIL = {
       const bp = ((D().hrv || {}).analysis || {}).baseline_progress || {};
       return [
         card('stress', 'Arousal score', { chip: expChip(), cls: 'wide' },
-          isNum(st.experimental_score) ? [big(fmt(st.experimental_score), 'of 100'), h('p', { class: 'lede' }, stressWord(st.experimental_score))]
-            : pending(st.status === 'baseline_building' ? 'Building baseline' : 'No score yet', st.reason, { n: st.baseline_days || 0, of: st.required_days || 14, unit: 'days' }),
+          st.context==='manual' && isNum(st.experimental_score) ? [big(fmt(st.experimental_score), 'of 100'), h('p', { class: 'lede' }, stressWord(st.experimental_score))]
+            : pending('Daytime recording status',monitorExplanation('stress')),
           Object.keys(bp).length ? stats(Object.entries(bp).map(([k, v]) => [`${cap(k)} baseline`, `${v.adequate_baseline_days ?? 0} of ${v.required_days ?? 14}`, 'days'])) : null,
           info('How the stress score works',
             'Each daytime spot check is compared with your own earlier spot checks taken in the same way. Lower HRV than usual maps to a higher score.',
@@ -1103,8 +1101,10 @@ function compRow(name, comp, weight) {
 }
 
 function spotChecks(pts) {
+  pts=pts.filter(point=>point.context==='manual');
   const ok = pts.filter(p => isNum(p.experimental_rmssd_ms));
-  const q = (D().hrv || {}).quality || {};
+  const allQuality=(D().hrv || {}).quality || {};
+  const q=allQuality.context==='manual' ? allQuality : {};
   return card('hrv', 'Daytime spot checks', { chip: expChip(), cls: 'wide' },
     pts.length ? [
       lineChart({ items: pts.slice(-30).map(p => ({ key: isoOf(new Date(p.ts * 1000)), label: isoOf(new Date(p.ts * 1000)), v: p.experimental_rmssd_ms ?? null, hollow: p.context !== 'scheduled', note: `${fmtClock(p.ts)}, ${p.context || 'manual'}, ${String(p.quality || '').replace(/_/g, ' ')}` })), W: chartW(), H: 160, unit: 'ms', label: 'Recent HRV recordings' }),

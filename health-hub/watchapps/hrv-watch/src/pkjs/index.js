@@ -2,8 +2,16 @@
 var ENDPOINT='https://pebble-health.example.lan/fitness/hrv';
 var AUTH_TOKEN=localStorage.getItem('pebblefit_hrv_token')||'';
 var uploading=false;
+var retryTimer=null,retryAttempt=0;
+var RETRY_BASE_MS=5000,RETRY_MAX_MS=300000,RETRY_LIMIT=8;
 function queue(){try{return JSON.parse(localStorage.getItem('pebblefit_hrv_queue')||'[]');}catch(e){return [];}}
 function store(q){localStorage.setItem('pebblefit_hrv_queue',JSON.stringify(q));}
+function clearRetry(){if(retryTimer!==null){clearTimeout(retryTimer);retryTimer=null;}}
+function retryLater(){
+ if(retryTimer!==null||retryAttempt>=RETRY_LIMIT)return;
+ var delay=Math.min(RETRY_MAX_MS,RETRY_BASE_MS*Math.pow(2,retryAttempt++));
+ retryTimer=setTimeout(function(){retryTimer=null;upload();},delay);
+}
 function reply(code,ts){var msg={ack:code};if(ts)msg.ack_ts=ts;Pebble.sendAppMessage(msg);}
 function decode(bytes,width){var result=[];for(var i=0;i<bytes.length;i+=width){var n=0;for(var j=0;j<width;j++)n+=(bytes[i+j]&255)*Math.pow(256,j);result.push(n);}return result;}
 function decodeSigned(bytes){return decode(bytes,4).map(function(v){return v>2147483647?v-4294967296:v;});}
@@ -23,7 +31,7 @@ function preflight(){
 }
 function upload(){
  if(uploading)return;
- var q=queue();if(!q.length){preflight();return;}
+ var q=queue();if(!q.length){retryAttempt=0;clearRetry();preflight();return;}
  if(!AUTH_TOKEN){reply(2,q[0].ts);return;}
  var sample=q[0],req=new XMLHttpRequest();uploading=true;
  req.open('POST',ENDPOINT,true);req.timeout=20000;
@@ -31,12 +39,16 @@ function upload(){
  req.onload=function(){
   uploading=false;
   if(req.status>=200&&req.status<300){
-   store(queue().filter(function(s){return s.ts!==sample.ts;}));reply(1,sample.ts);
+   retryAttempt=0;clearRetry();store(queue().filter(function(s){return s.ts!==sample.ts;}));reply(1,sample.ts);
    if(queue().length)upload();
-  }else reply(req.status===401?3:1000+req.status,sample.ts);
+  }else if(req.status===401){reply(3,sample.ts);}
+  else {
+   reply(1000+req.status,sample.ts);
+   if(req.status===408||req.status===429||req.status>=500)retryLater();
+  }
  };
- req.onerror=function(){uploading=false;reply(4,sample.ts);};
- req.ontimeout=function(){uploading=false;reply(5,sample.ts);};req.send(JSON.stringify(sample));
+ req.onerror=function(){uploading=false;reply(4,sample.ts);retryLater();};
+ req.ontimeout=function(){uploading=false;reply(5,sample.ts);retryLater();};req.send(JSON.stringify(sample));
 }
 Pebble.addEventListener('showConfiguration',function(){Pebble.openURL('https://pebble-health.example.lan/pair?kind=hrv');});
 Pebble.addEventListener('webviewclosed',function(e){
