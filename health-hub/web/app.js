@@ -459,9 +459,11 @@ function legend(items) {
  * Data accessors
  * ================================================================== */
 const rec = () => D().recovery || {};
+const ppiSourceUnverified = () => D().hrv?.quality?.stream === 'batched_ppi_unverified';
+const PPI_SOURCE_EXPLANATION = 'The watch delivered batched optical PPI readings. Consecutive-beat continuity is not verified, so these recordings cannot yet supply HRV, breathing or stress scores. More baseline days alone will not resolve this.';
 function monitorExplanation(kind) {
   const diag=D().monitor_observations?.diagnostics?.[kind] || {};
-  const labels={motion_uncalibrated:'Motion calibration has not been validated',motion_unknown:'Motion evidence is missing',quality_insufficient:'Interval quality is insufficient',strict_qualification_missing:'No clear qualified breathing rhythm',reported_hr_missing:'No direct pulse summary',reported_hr_invalid:'Invalid pulse summary'};
+  const labels={beat_continuity_unverified:'Consecutive-beat continuity is unverified',motion_uncalibrated:'Motion calibration has not been validated',motion_unknown:'Motion evidence is missing',quality_insufficient:'Interval quality is insufficient',strict_qualification_missing:'No clear qualified breathing rhythm',reported_hr_missing:'No direct pulse summary',reported_hr_invalid:'Invalid pulse summary'};
   const reasons=Object.entries(diag.exclusion_reasons || {}).map(([key,count])=>`${labels[key] || key.replaceAll('_',' ')} (${count})`).join('; ');
   return `${diag.received ?? 0} recordings received; ${diag.eligible ?? 0} eligible.${reasons ? ' '+reasons+'.' : ''}${diag.last_measured_at ? ' Latest capture: '+fmtDateTime(diag.last_measured_at)+'.' : ''}`;
 }
@@ -591,7 +593,9 @@ const CARDS = {
     const building = st.status === 'baseline_building';
     return card('hrv', 'HRV status', { link: 'hrv', chip: st.provisional ? chip('Provisional', '', st.reason) : expChip() },
       h('p', { class: 'status-word', style: { fontSize: '20px' } }, word),
-      building
+      ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
+        ? pending('Beat continuity is unverified', PPI_SOURCE_EXPLANATION)
+        : building
         ? pending('Learning your usual range', 'HRV is measured by short recordings at night. A usual range needs enough earlier nights.',
           { n: st.baseline_nights || 0, of: st.required_baseline_nights || 14, unit: 'nights', label: 'Baseline nights' })
         : [hrvGauge(st), stats([['Last night', fmt(st.last_night_rmssd_ms), 'ms'], ['Nights this week', isNum(st.nights_this_week) ? `${st.nights_this_week} of 7` : '—']])],
@@ -956,7 +960,7 @@ const DETAIL = {
         card('hrv', 'Nightly HRV', { cls: 'wide' },
           has ? [lineChart({ items, W: chartW(), H: 180, unit: 'ms', band: isNum(st.baseline_low_ms) ? { lo: st.baseline_low_ms, hi: st.baseline_high_ms } : null, label: 'Nightly HRV' }),
             legend([['line', 'Nightly RMSSD'], ['soft', 'Usual range'], ['gap', 'No usable recording']])]
-            : pending('No usable overnight recordings in this range', 'Enable night recordings in the HRV watch app.')),
+            : pending(ppiSourceUnverified() ? 'Beat continuity is unverified' : 'No usable overnight recordings in this range', ppiSourceUnverified() ? PPI_SOURCE_EXPLANATION : 'Enable night recordings in the HRV watch app.')),
         spotChecks(pts),
       ];
     },
@@ -1251,11 +1255,13 @@ function devicesView() {
         : pending('The HRV app has not reported yet', 'Install it on the watch and open it once.')),
     card('hrv', 'HRV measurement quality', { cls: 'wide', chip: expChip() },
       d.hrv && d.hrv.quality ? (() => {
-        const q=d.hrv.quality, motion=q.motion || {};
-        return [h('p',{class:'lede'},motion.reason || 'Interval and motion quality are being checked.'),
+        const q=d.hrv.quality, motion=q.motion || {}, delivery=q.delivery || {};
+        return [h('p',{class:'lede'},q.stream==='batched_ppi_unverified' ? PPI_SOURCE_EXPLANATION : (motion.reason || 'Interval and motion quality are being checked.')),
           h('dl',{class:'kv'},kv('Taken',fmtDateTime(d.hrv.ts)),
             kv('Eligibility',String(q.status || 'unknown').replace(/_/g,' ')),
             kv('Method',String(q.metric || 'unknown').replace(/_/g,' ')),
+            q.stream==='batched_ppi_unverified' ? kv('PPI delivery',`${delivery.event_count ?? delivery.total_delivered ?? 0} readings; ${delivery.batch_groups_exact_same_offset ?? delivery.batch_count ?? 0} multiple-reading arrival groups`) : null,
+            q.stream==='batched_ppi_unverified' ? kv('Largest arrival group',`${delivery.max_batch_size ?? 0} readings (arrival timing only)`) : null,
             kv('Firmware / collector',`${motion.firmware || 'unknown'} / ${motion.collector_version ?? 'unknown'}`),
             kv('Motion assessment',String(motion.status || 'unknown').replace(/_/g,' ')),
             kv('Mean movement delta',isNum(motion.normalized_mean) ? `${fmt(motion.normalized_mean,2)} collector units/transition` : 'Unknown'),

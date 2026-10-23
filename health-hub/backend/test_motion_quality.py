@@ -7,11 +7,13 @@ import hrv
 
 
 def capture(**overrides):
+    # Untagged synthetic interval fixture isolates the legacy motion gates.
+    # Actual Pebble event streams use the separate unverified-batch tests.
     return dict({'motion_samples':4501,'motion_total':4500,'motion_source':'raw_accelerometer',
                  'firmware':'test-fw','collector_version':150,'vibration_status':'unknown',
                  'offsets_ms':[i*1000 for i in range(181)],
                  'ppi':[int(900+20*math.sin(i/5)) for i in range(181)],
-                 'stream_semantics':'latest_ppi_updates','scheduled':True}, **overrides)
+                 'scheduled':True}, **overrides)
 
 
 @pytest.fixture

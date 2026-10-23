@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 import fitness
 
 log = logging.getLogger("pebble-health.briefing")
-FACTS_VERSION = 3
+FACTS_VERSION = 4
 PAGES = ("today", "sleep", "recovery", "training", "more")
 _running = threading.Lock()
 
@@ -181,7 +181,18 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "monitor_diagnostics":(s.get("monitor_observations") or {}).get("diagnostics",{}),
             "overnight_spot_pulse":(s.get("monitor_observations") or {}).get("nightly_pulse",[])[-7:],
             "hrv_comparable_series": identity,
-            "hrv_capture_quality": {k:(s.get("hrv",{}).get("quality") or {}).get(k) for k in ("status","source","algorithm_version","motion")},
+            "hrv_capture_quality": {k:(s.get("hrv",{}).get("quality") or {}).get(k) for k in
+                                    ("status","source","algorithm_version","metric","stream",
+                                     "delivery","reasons","motion")},
+            # Delivered-PPI variation is intentionally kept out of briefing
+            # facts: it is a transport diagnostic and must never be phrased as
+            # HRV, readiness, stress, or breathing.
+            "hrv_source_blocked_reason": (
+                "beat continuity unverified; delivered PPI variation is diagnostic only"
+                if ((s.get("hrv",{}).get("quality") or {}).get("stream") == "batched_ppi_unverified"
+                    or (s.get("hrv",{}).get("quality") or {}).get("metric") == "delivered_ppi_variation_unverified"
+                    or (s.get("hrv",{}).get("quality") or {}).get("status") == "beat_continuity_unverified")
+                else None),
             "stress_observation": {k:(s.get("stress") or {}).get(k) for k in ("measured_at","age_seconds","expires_at","context","reason")},
             "nights": [{"night": n["night"], "hrv_ms": n["rmssd_ms"], "pulse_bpm": n["resting_hr"], "breathing": n["breaths_per_min"]} for n in hrv_recent],
             "link_sleep_hours_vs_hrv_rank_correlation": sleep_vs_hrv,
@@ -219,6 +230,7 @@ Rules:
 - Use ONLY the facts given. Every number you write must appear in the facts (you may round it). Never calculate new numbers.
 - Missing (null) values mean "not measured yet": say so briefly when it matters, never guess.
 - Scores here are experimental personal estimates, not medical measurements. Never diagnose or give medical advice.
+- Batched PPI delivery diagnostics are transport observations only. Never call them HRV/RMSSD, readiness, stress, breathing, or a cadence failure; report the source-blocked reason when present.
 - SpO2 is experimental optical spot sampling. State its actual measurement date and sparse coverage when discussed. Do not infer sleep apnea, hypoxia duration, diagnosis, recovery benefit or normality from it. No samples means unknown, not zero.
 - Prefer comparisons with the person's own averages over absolute judgements.
 - The "focus" is one practical, specific suggestion for today, grounded in the facts.

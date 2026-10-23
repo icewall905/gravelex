@@ -10,13 +10,14 @@ import analyze_breathing
 
 def _fixture(tmp_path, *, gap=None, count=18):
     watch = tmp_path / "watch.json"
-    ppi = [1000 + 100 * __import__('math').sin(2 * __import__('math').pi * 0.2 * i) for i in range(151)]
+    # Explicit synthetic uniform-clock data exercise the legacy spectral path.
+    # Actual Pebble tagged deliveries are blocked in the regression below.
+    ppi = [1200 + 100 * __import__('math').sin(2 * __import__('math').pi * 0.2 * i) for i in range(151)]
     offsets = [i * 1000 for i in range(151)]
     if gap is not None:
         offsets[gap] += 4000
     watch.write_text(json.dumps({"ts": 1000, "payload": {"ppi": ppi, "offsets_ms": offsets,
-                                                               "motion_samples": 10, "motion_total": 0,
-                                                               "stream_semantics": "latest_ppi_updates"}}))
+                                                               "motion_samples": 10, "motion_total": 0}}))
     annotation = tmp_path / "labels.json"
     annotation.write_text(json.dumps({"capture": {"sha256": hashlib.sha256(watch.read_bytes()).hexdigest()},
                                       "observed_breath_count": count,
@@ -64,6 +65,20 @@ def test_annotation_window_cannot_bypass_current_watch_gating(tmp_path):
     report = analyze_breathing.analyze_breathing(watch, annotation)
     assert report["candidate"] is None
     assert report["watch_diagnostic"]["status"] != "experimental"
+
+
+def test_batched_ppi_cannot_gain_a_breathing_clock_from_annotation(tmp_path):
+    watch, annotation = _fixture(tmp_path)
+    payload = json.loads(watch.read_text())
+    payload['payload']['stream_semantics'] = 'latest_ppi_updates'
+    watch.write_text(json.dumps(payload))
+    value = json.loads(annotation.read_text())
+    value['capture']['sha256'] = hashlib.sha256(watch.read_bytes()).hexdigest()
+    annotation.write_text(json.dumps(value))
+    report = analyze_breathing.analyze_breathing(watch, annotation)
+    assert report['candidate'] is None
+    assert report['difference_breaths_per_min'] is None
+    assert report['watch_diagnostic']['stream'] == 'batched_ppi_unverified'
 
 
 def test_write_failure_propagates(tmp_path):

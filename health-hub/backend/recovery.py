@@ -94,7 +94,16 @@ def nightly_hrv(analysed: list[tuple[float, dict[str, Any]]]) -> list[dict[str, 
     """
     by_night: dict[date, list[dict[str, Any]]] = {}
     for ts, q in analysed:
-        if q.get("context") != "scheduled" or q.get("status") != "experimental" or not q.get("experimental_rmssd_ms"):
+        # A delivered-PPI variation is a transport diagnostic.  Require the
+        # physiological series identity as well as the old quality gates so a
+        # future analyzer cannot accidentally make it a recovery input by
+        # returning a generic experimental status.
+        batched = (q.get("stream") == "batched_ppi_unverified"
+                   or q.get("metric") == "delivered_ppi_variation_unverified"
+                   or q.get("algorithm_version") == "hrv-v3-batched-ppi"
+                   or q.get("status") == "beat_continuity_unverified")
+        if (q.get("context") != "scheduled" or q.get("status") != "experimental"
+                or batched or not q.get("experimental_rmssd_ms")):
             continue
         night = _night_of(ts)
         if night is not None:

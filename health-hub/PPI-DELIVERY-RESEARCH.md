@@ -1,10 +1,10 @@
 # PPI delivery research: PebbleOS4.41.1
 
-Research date:23October2026. Production algorithm and eligibility gates remain unchanged by this investigation.
+Research date:23October2026. The source investigation is followed by a software correction documented below; no physiological qualification or motion policy is enabled.
 
 ## Finding
 
-The current backend interpretation is not established by the API: `stream_semantics=latest_ppi_updates` forces every event into a uniformly sampled1Hz tachogram. That tag is written by our bridge, not supplied as a physiological contract by the watch. Approximately1s positive arrival gaps describe batch delivery, not the spacing of every PPI value. A flattened list with multiple values per delivery cannot be assigned an evenly spaced clock just because sampling was requested with period1.
+The former backend interpretation was not established by the API: `stream_semantics=latest_ppi_updates` forced every event into a uniformly sampled1Hz tachogram. That tag is written by our bridge, not supplied as a physiological contract by the watch. Approximately1s positive arrival gaps describe batch delivery, not the spacing of every PPI value. A flattened list with multiple values per delivery cannot be assigned an evenly spaced clock just because sampling was requested with period1.
 
 Different PPI values at equal arrival offsets are legitimate delivered records and must not be silently deduplicated. Our collector reads once synchronously in each HRV event handler. Existing captures remain raw and reproducible. Do not relabel them validated beat intervals or calculate a correction factor from counters.
 
@@ -51,3 +51,9 @@ python3 -m pytest reference/test_audit_ppi_delivery.py
 ```
 
 The audit does not modify recordings or production settings. Outputs are private and exclusively created; use a new filename for each report. Keep biometric summaries and raw captures out of public Git history.
+
+## Software correction delivered
+
+Tagged latest_ppi_updates/batched_ppi_unverified recordings now use algorithmhrv-v3-batched-ppi and methoddelivered_ppi_variation_unverified. Equal-arrival records remain intact; no uniform interpolation or physiological clock is assigned. Optional delivered-adjacent variation is a separate diagnostic and cannot become RMSSD, respiration, HRV/stress baseline or readiness. Source identity retains firmware/collector. New untagged watch uploads project to the unverified method while the raw observation journal retains the original input. Existing raw database records are not rewritten.
+
+Delivery groups are inferred from equal callback arrival offsets, not claimed as original vendor batch IDs. UI and LLM facts explain the source block; motion diagnostics and direct overnight pulse remain independent. Legacy analysis code and explicit synthetic fixtures remain separate for reproducibility. Earlier actual watch records with a legacy latest_ppi_updatestag are reinterpreted through the corrected method on read, with a new algorithm identity; previous private reports remain archived. Source continuity instrumentation is still required before any genuine-beat HRV promotion.

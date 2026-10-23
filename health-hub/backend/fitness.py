@@ -290,7 +290,12 @@ def hrv_ingest(data):
     payload['motion_source']='raw_accelerometer' if data.get('motion_source')=='raw_accelerometer' else 'processed_accelerometer'
     payload['vibration_status']='unknown' if payload['motion_source']=='raw_accelerometer' else 'flagged_samples_excluded'
     if payload['vibration_status']=='unknown':payload['vibration_samples']=None
-    if data.get('stream_semantics')=='latest_ppi_updates':payload['stream_semantics']='latest_ppi_updates'
+    # All newly ingested watch PPI is delivered through the public callback;
+    # without a source tag its beat continuity is unknown.  Keep the original
+    # upload in the provenance journal, and only normalize the derived session
+    # projection.  Existing rows are never rewritten.
+    stream = data.get('stream_semantics')
+    payload['stream_semantics'] = stream if stream in ('latest_ppi_updates', 'batched_ppi_unverified') else 'batched_ppi_unverified'
     with connect() as db:
         provenance.record_observation(db, "hrv_capture", "hrv-watch", ts, now, data)
         db.execute("INSERT OR REPLACE INTO hrv_sessions VALUES(?,?,?)", (f"ppi:{ts}", ts, json.dumps(payload)))

@@ -139,6 +139,145 @@ def _respiration(values: list[float], period_ms: float, context: str) -> dict[st
                                            if context != "scheduled" else "breathing peak not distinct enough")}
 
 
+def _batched_ppi_session(payload: dict[str, Any], ppis: list[Any], offsets: list[Any]) -> dict[str, Any]:
+    """Analyze delivery of PPI results without assigning them a beat clock.
+
+    Pebble's public callback does not identify a beat, so equal arrival offsets
+    are retained as separate delivered records.  The adjacent variation below
+    is a descriptive property of delivery order, not HRV and never feeds a
+    physiological baseline.
+    """
+    if any(not _finite_number(value) for value in ppis + offsets):
+        raise ValueError("batched PPI values and offsets must be finite numbers")
+    series = []
+    reasons: list[str] = []
+    valid: list[tuple[int, float, float]] = []
+    for index, (ppi, offset) in enumerate(zip(ppis, offsets)):
+        item = {"index": index, "offset_ms": offset, "ppi_ms": ppi, "accepted": False, "reason": None}
+        if not _finite_number(ppi) or not MIN_PPI_MS <= float(ppi) <= MAX_PPI_MS:
+            item["reason"] = "outside_plausible_range"
+        elif not _finite_number(offset) or float(offset) < 0:
+            item["reason"] = "invalid_arrival_offset"
+        elif float(offset) < WARMUP_MS:
+            item["reason"] = "warmup"
+        else:
+            item["accepted"] = True
+            valid.append((index, float(ppi), float(offset)))
+        series.append(item)
+
+    # Keep the same artifact rejection rule as the legacy diagnostic, while
+    # retaining every raw record in cleaned_intervals for replay/audit.
+    for pos, (index, ppi, _offset) in enumerate(valid):
+        neighbours = [x[1] for x in valid[max(0, pos - 2):pos] + valid[pos + 1:pos + 3]]
+        baseline = median(neighbours) if neighbours else None
+        if baseline and abs(ppi - baseline) / baseline > 0.20:
+            series[index]["accepted"] = False
+            series[index]["reason"] = "abrupt_relative_change"
+    accepted = [(item["index"], float(item["ppi_ms"]), float(item["offset_ms"]))
+                for item in series if item["accepted"]]
+    for item in series:
+        if item["reason"]:
+            reasons.append(item["reason"])
+
+    # Only adjacent delivered values in the same intact raw run are compared.
+    # Equal offsets are valid batch members; reverse offsets and long gaps split.
+    pairs: list[tuple[float, float]] = []
+    for left, right in zip(accepted, accepted[1:]):
+        gap = right[2] - left[2]
+        if right[0] != left[0] + 1:
+            reasons.append("rejected_sample_splits_delivery_run")
+        elif gap < 0:
+            reasons.append("nonmonotonic_arrival_times")
+        elif gap > MAX_ARRIVAL_GAP_MS:
+            reasons.append("oversized_arrival_gap")
+        else:
+            pairs.append((left[1], right[1]))
+
+    ordered = all(_finite_number(x) for x in offsets) and all(b >= a for a, b in zip(offsets, offsets[1:]))
+    if not ordered:
+        reasons.append("nonmonotonic_arrival_times")
+    span_ms = max((x[2] for x in accepted), default=0.0) - min((x[2] for x in accepted), default=0.0)
+    variation = round((sum((b - a) ** 2 for a, b in pairs) / len(pairs)) ** 0.5, 3) if pairs else None
+
+    positive_gaps = [float(b) - float(a) for a, b in zip(offsets, offsets[1:])
+                     if _finite_number(a) and _finite_number(b) and b > a]
+    offset_index_slope = _sample_period(offsets) if ordered else None
+    batch_sizes = []
+    batch_groups = []
+    i = 0
+    while i < len(offsets):
+        if not _finite_number(offsets[i]):
+            i += 1
+            continue
+        j = i + 1
+        while j < len(offsets) and offsets[j] == offsets[i]:
+            j += 1
+        if j - i > 1:
+            batch_sizes.append(j - i)
+            batch_groups.append({"offset_ms": offsets[i], "size": j - i})
+        i = j
+    equal_offset_different_value_pairs = sum(1 for a, b in zip(series, series[1:])
+                                             if a["offset_ms"] == b["offset_ms"]
+                                             and a["ppi_ms"] != b["ppi_ms"])
+    delivery = {
+        "event_count": len(ppis),
+        "batch_count": len(batch_sizes),
+        "batch_groups": batch_groups,
+        "batch_groups_exact_same_offset": len(batch_sizes),
+        "max_batch_size": max(batch_sizes, default=1 if offsets else 0),
+        "total_delivered": len(ppis),
+        "median_positive_arrival_gap_ms": round(median(positive_gaps), 3) if positive_gaps else None,
+        "offset_index_slope_ms": round(offset_index_slope, 3) if offset_index_slope is not None else None,
+        "index_period_ms": round(offset_index_slope, 3) if offset_index_slope is not None else None,
+        "equal_offset_different_value_pairs": equal_offset_different_value_pairs,
+        "clock": "arrival_time_only",
+        "beat_continuity": "unverified",
+    }
+    motion = _motion(payload)
+    post_warmup = [item for item in series if item["reason"] != "warmup"]
+    artifact_rejected = sum(1 for item in post_warmup if not item["accepted"])
+    retained_fraction = round(len(accepted) / len(series), 4) if series else 0.0
+    status = "beat_continuity_unverified"
+    if not ordered or len(pairs) < MIN_INTERVALS - 1 or span_ms < MIN_SPAN_MS:
+        status = "insufficient"
+        if len(pairs) < MIN_INTERVALS - 1:
+            reasons.append("fewer_than_60_delivered_adjacent_pairs")
+        if span_ms < MIN_SPAN_MS:
+            reasons.append("post_warmup_span_under_60_seconds")
+    return {
+        "status": status,
+        "source": f"pebble_ppi:firmware={payload.get('firmware', 'unknown')}:collector={payload.get('collector_version', 'unknown')}",
+        "algorithm_version": "hrv-v3-batched-ppi",
+        "diagnostic_rmssd_ms": None,
+        "diagnostic_delivered_ppi_variation_ms": variation,
+        "quality": status,
+        "validated": False,
+        "experimental_rmssd_ms": None,
+        "metric": "delivered_ppi_variation_unverified",
+        "stream": "batched_ppi_unverified",
+        "sample_period_ms": None,
+        "mean_rr_ms": round(sum(x[1] for x in accepted) / len(accepted), 3) if accepted else None,
+        "respiration": None,
+        "cleaned_intervals": series,
+        "original_count": len(series),
+        "retained_count": len(accepted),
+        "retained_fraction": retained_fraction,
+        "artifact_fraction": round(artifact_rejected / max(1, len(post_warmup)), 4),
+        "consecutive_pairs": 0,
+        "delivered_adjacent_pairs": len(pairs),
+        "span_ms": round(span_ms, 3),
+        "arrival_batches": {"duplicate_offset_count": sum(1 for a, b in zip(offsets, offsets[1:]) if a == b),
+                            "duplicate_group_count": len(batch_sizes)},
+        "delivery": delivery,
+        "sum_ppi_ms": round(sum(x[1] for x in accepted), 3),
+        "sum_ppi_over_span": None,
+        "cadence_consistent": None,
+        "motion": motion,
+        "context": _context(payload),
+        "reasons": sorted(set(reasons)),
+    }
+
+
 def analyze_session(payload: dict[str, Any]) -> dict[str, Any]:
     """Return UI-ready quality diagnostics for one raw session.
 
@@ -152,6 +291,9 @@ def analyze_session(payload: dict[str, Any]) -> dict[str, Any]:
     offsets = payload.get("offsets_ms", [])
     if not isinstance(ppis, list) or not isinstance(offsets, list) or len(ppis) != len(offsets):
         raise ValueError("ppi and offsets_ms must be paired arrays")
+
+    if payload.get("stream_semantics") in {"latest_ppi_updates", "batched_ppi_unverified"}:
+        return _batched_ppi_session(payload, ppis, offsets)
 
     series = []
     reasons: list[str] = []
@@ -304,6 +446,9 @@ def analyze_session(payload: dict[str, Any]) -> dict[str, Any]:
 def _prior_days(rows, current):
     current_day = datetime.fromtimestamp(current['ts'], LOCAL_TZ).date()
     return [r for r in rows if all(r[k] == current[k] for k in ('context','metric','source','algorithm_version'))
+            and r.get('metric') != 'delivered_ppi_variation_unverified'
+            and r.get('algorithm_version') != 'hrv-v3-batched-ppi'
+            and r.get('stream') != 'batched_ppi_unverified'
             and r['adequate_motion'] and r['experimental_rmssd_ms'] is not None
             and 1 <= (current_day-datetime.fromisoformat(r['date']).date()).days <= 28]
 
@@ -328,7 +473,7 @@ def analyze_history(sessions: list[dict[str, Any]], now: float | None = None) ->
         quality = analyze_session(payload)
         ts = row.get("ts", payload.get("ts"))
         context = quality["context"]
-        point = {"ts": ts, "experimental_rmssd_ms": quality["experimental_rmssd_ms"], "quality": quality["status"], "context": context, "metric": quality["metric"], "source_validation": "unvalidated", "motion": quality["motion"], "source": quality["source"], "algorithm_version": quality["algorithm_version"]}
+        point = {"ts": ts, "experimental_rmssd_ms": quality["experimental_rmssd_ms"], "quality": quality["status"], "context": context, "metric": quality["metric"], "stream": quality.get("stream"), "source_validation": "unvalidated", "motion": quality["motion"], "source": quality["source"], "algorithm_version": quality["algorithm_version"]}
         points.append(point)
         if _finite_number(ts) and 946684800 <= ts <= now:
             day = datetime.fromtimestamp(ts, LOCAL_TZ).date().isoformat()
@@ -340,12 +485,19 @@ def analyze_history(sessions: list[dict[str, Any]], now: float | None = None) ->
         for (ctx, day, source, algorithm), values in sorted(by_day.items()):
             if ctx != context:
                 continue
-            good = [v for v in values if v["status"] == "experimental" and v["motion"]["available"]]
+            good = [v for v in values if v["status"] == "experimental" and v["motion"]["available"]
+                    and v.get("metric") != "delivered_ppi_variation_unverified"
+                    and v.get("stream") != "batched_ppi_unverified"
+                    and v.get("algorithm_version") != "hrv-v3-batched-ppi"]
             # Never pool beat-to-beat RMSSD with tachogram-reconstructed RMSSD.
             metrics = [v["metric"] for v in good]
             metric = max(sorted(set(metrics)), key=metrics.count) if metrics else None
             usable = [v["experimental_rmssd_ms"] for v in good if v["metric"] == metric]
-            rows.append({"date": day, "context": context, "source": source, "algorithm_version": algorithm, "metric": metric, "experimental_rmssd_ms": round(median(usable), 3) if usable else None, "sessions": len(values), "adequate_motion": bool(usable), "quality": "experimental" if usable else "insufficient"})
+            rows.append({"date": day, "context": context, "source": source, "algorithm_version": algorithm,
+                         "metric": metric, "stream": (good[0].get("stream") if good else None),
+                         "experimental_rmssd_ms": round(median(usable), 3) if usable else None,
+                         "sessions": len(values), "adequate_motion": bool(usable),
+                         "quality": "experimental" if usable else "insufficient"})
         day_summaries.extend(rows)
         candidates = [p for p in points if p['context'] == context and _finite_number(p['ts']) and 946684800 <= p['ts'] <= now]
         anchor = max(candidates, key=lambda p: p['ts']) if candidates else None
@@ -374,6 +526,10 @@ def analyze_history(sessions: list[dict[str, Any]], now: float | None = None) ->
                              "lower current value maps to higher arousal; no clinical interpretation") if current["context"] == "scheduled" else stress["method"]
         if now-current['ts'] > max_age:
             stress.update(status='stale', reason='Latest observation is historical; record a new measurement for a current score')
+        elif current.get('stream') == 'batched_ppi_unverified' or current.get('metric') == 'delivered_ppi_variation_unverified' or current.get('algorithm_version') == 'hrv-v3-batched-ppi':
+            stress['status'] = 'quality_insufficient'
+            stress['reason'] = ('Batched PPI beat continuity is unverified; more baseline days or motion '
+                                'calibration alone cannot qualify this source.')
         elif current['experimental_rmssd_ms'] is None or not current['motion']['eligible']:
             stress['status']='quality_insufficient'
             stress['reason']='Current recording excluded: ' + current['motion']['reason'] if not current['motion']['eligible'] else 'Current recording fails interval-quality checks; a longer baseline alone will not fix this'

@@ -93,6 +93,16 @@ def _integrity(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _continuity_blocked(quality: dict[str, Any] | None) -> bool:
+    """Whether PPI delivery is explicitly unsuitable for physiology."""
+    if not quality:
+        return False
+    return (quality.get("status") == "beat_continuity_unverified"
+            or quality.get("stream") == "batched_ppi_unverified"
+            or quality.get("metric") == "delivered_ppi_variation_unverified"
+            or quality.get("algorithm_version") == "hrv-v3-batched-ppi")
+
+
 def _diag(received: int, eligible: int, reasons: Counter[str], *, latest_receipt: float | None = None,
           last_measured: float | None = None, now: float | None = None) -> dict[str, Any]:
     out = {"received": received, "eligible": eligible, "excluded": received - eligible,
@@ -177,7 +187,9 @@ def build(sessions: list[dict[str, Any]], now: float | None = None, tz: str | Zo
         if valid_ts and context == "scheduled" and _night_of(float(ts), zone) is not None:
             breathing_received += 1
             resp = quality.get("respiration") if quality else None
-            if not quality or quality.get("status") != "experimental":
+            if _continuity_blocked(quality):
+                breathing_reasons["beat_continuity_unverified"] += 1
+            elif not quality or quality.get("status") != "experimental":
                 breathing_reasons[quality.get("status", "quality_insufficient") if quality else "quality_insufficient"] += 1
             elif not isinstance(resp, dict) or resp.get("reliable") is not True:
                 breathing_reasons["strict_qualification_missing"] += 1
@@ -197,7 +209,7 @@ def build(sessions: list[dict[str, Any]], now: float | None = None, tz: str | Zo
             if quality:
                 series = "|".join(str(quality.get(key) or "unknown") for key in ("source", "metric", "algorithm_version"))
                 stress_series[series]["received"] += 1
-            qualified = bool(quality and quality.get("status") == "experimental" and quality.get("experimental_rmssd_ms") is not None
+            qualified = bool(quality and not _continuity_blocked(quality) and quality.get("status") == "experimental" and quality.get("experimental_rmssd_ms") is not None
                             and quality.get("motion", {}).get("eligible", False))
             if qualified:
                 stress_eligible += 1
@@ -205,7 +217,7 @@ def build(sessions: list[dict[str, Any]], now: float | None = None, tz: str | Zo
                 if series is not None:
                     stress_series[series]["eligible"] += 1
             else:
-                stress_reasons[quality.get("status", "quality_insufficient") if quality else "quality_insufficient"] += 1
+                stress_reasons["beat_continuity_unverified" if _continuity_blocked(quality) else (quality.get("status", "quality_insufficient") if quality else "quality_insufficient")] += 1
         elif context == "manual" and not valid_ts:
             stress_reasons["timestamp_invalid_or_future"] += 1
 
