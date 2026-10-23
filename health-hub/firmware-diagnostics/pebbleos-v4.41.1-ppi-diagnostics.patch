@@ -1,0 +1,259 @@
+diff --git a/drivers/hrm/Kconfig b/drivers/hrm/Kconfig
+index 6d915f6..9c07653 100644
+--- a/drivers/hrm/Kconfig
++++ b/drivers/hrm/Kconfig
+@@ -23,6 +23,14 @@ config HRM_HRV
+       HRV library. Off by default; HRV is only sampled while an app holds
+       an HRV subscription.
+ 
++config HRM_PPI_DIAGNOSTICS
++    bool "PPI diagnostic instrumentation"
++    depends on HRM_HRV && LOG_HASHED
++    default n
++    help
++      Keep Goodix HRV result identity and delivery metadata in firmware logs.
++      This is diagnostic-only and does not change HRV processing.
++
+ config HRM_QEMU
+     bool "QEMU"
+     default y if SOC_QEMU
+diff --git a/drivers/hrm/gh3x2x.c b/drivers/hrm/gh3x2x.c
+index c90dea4..66ec715 100644
+--- a/drivers/hrm/gh3x2x.c
++++ b/drivers/hrm/gh3x2x.c
+@@ -3,6 +3,7 @@
+ 
+ #include <pbl/drivers/hrm.h>
+ #include <pbl/drivers/hrm/gh3x2x.h>
++#include <pbl/drivers/rtc.h>
+ #include <pbl/logging/logging.h>
+ #include <pbl/services/analytics/analytics.h>
+ 
+@@ -210,22 +211,76 @@ void gh3x2x_spo2_result_report(uint8_t pct, uint8_t confidence, uint8_t valid_le
+   hrm_manager_new_data_cb(&hrm_data);
+ }
+ #ifdef CONFIG_HRM_HRV
+-void gh3x2x_hrv_result_report(const int32_t *rri, int32_t confidence, int32_t valid_num) {
++static void prv_hrv_result_report(const int32_t *rri, int32_t confidence, int32_t valid_num,
++                                  uint32_t frame_id, bool diagnostic) {
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++  static uint32_t s_result_id;
++  const uint32_t result_id = diagnostic ? ++s_result_id : 0;
++  const uint32_t observed_ticks = diagnostic ? rtc_get_ticks() : 0;
++  const int32_t original_valid_num = valid_num;
++#else
++  UNUSED_VAR(frame_id);
++  UNUSED_VAR(diagnostic);
++#endif
+   PBL_LOG_DBG("GH3X2X HRV n=%" PRId32 " (conf=%" PRId32 ", wear=%u)", valid_num, confidence,
+               HRM->state->is_wear);
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++  if (diagnostic) {
++    PBL_LOG_DBG("PPI_DIAG v=1 stage=result rid=%" PRIu32 " frame=%" PRIu32
++                " count=%" PRId32 " confidence=%" PRId32 " wear=%u ticks=%" PRIu32,
++                result_id, frame_id, original_valid_num, confidence, HRM->state->is_wear,
++                observed_ticks);
++  }
++#endif
+   if (!HRM->state->is_wear) {
+     HRMData hrm_data = {};
+     hrm_data.features = HRMFeature_HRV;
+     hrm_data.hrv_quality = HRMQuality_OffWrist;
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++    if (diagnostic) {
++      hrm_data.ppi_diag_result_id = result_id;
++      hrm_data.ppi_diag_frame_id = frame_id;
++      hrm_data.ppi_diag_observed_ticks = observed_ticks;
++      hrm_data.ppi_diag_valid_num = original_valid_num;
++      hrm_data.ppi_diag_confidence = confidence;
++      hrm_data.ppi_diag_wear = 0;
++      hrm_data.ppi_diag_accepted = 1;
++      hrm_data.ppi_diag_present = 1;
++      PBL_LOG_DBG("PPI_DIAG v=1 stage=interval rid=%" PRIu32
++                  " index=0 ppi=0 quality=%d ticks=%" PRIu32 " accepted=1 skip=0",
++                  result_id, hrm_data.hrv_quality, observed_ticks);
++    }
++#endif
+     hrm_manager_new_data_cb(&hrm_data);
+     return;
+   }
++  if (valid_num < 0) {
++    valid_num = 0;
++  }
+   if (valid_num > GH3X2X_HRV_MAX_RRI_PER_RESULT) {
+     valid_num = GH3X2X_HRV_MAX_RRI_PER_RESULT;
+   }
++  if (valid_num == 0) {
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++    if (diagnostic) {
++      PBL_LOG_DBG("PPI_DIAG v=1 stage=interval rid=%" PRIu32
++                  " index=0 ppi=0 quality=%d ticks=%" PRIu32 " accepted=0 skip=2",
++                  result_id, HRMQuality_Worst, observed_ticks);
++    }
++#endif
++  }
+   for (int32_t i = 0; i < valid_num; i++) {
+     if ((rri[i] <= 0) || (rri[i] > UINT16_MAX)) {
+       // Not a plausible RR interval; don't let the uint16_t cast wrap it into one
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++      if (diagnostic) {
++        const int skip = (rri[i] <= 0) ? 2 : 3;
++        PBL_LOG_DBG("PPI_DIAG v=1 stage=interval rid=%" PRIu32
++                    " index=%" PRId32 " ppi=%" PRId32 " quality=%d ticks=%" PRIu32
++                    " accepted=0 skip=%d",
++                    result_id, i, rri[i], HRMQuality_Worst, observed_ticks, skip);
++      }
++#endif
+       continue;
+     }
+     HRMData hrm_data = {};
+@@ -242,9 +297,37 @@ void gh3x2x_hrv_result_report(const int32_t *rri, int32_t confidence, int32_t va
+     } else {
+       hrm_data.hrv_quality = HRMQuality_Worst;
+     }
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++    if (diagnostic) {
++      hrm_data.ppi_diag_result_id = result_id;
++      hrm_data.ppi_diag_frame_id = frame_id;
++      hrm_data.ppi_diag_observed_ticks = observed_ticks;
++      hrm_data.ppi_diag_result_index = (uint16_t)i;
++      hrm_data.ppi_diag_valid_num = original_valid_num;
++      hrm_data.ppi_diag_confidence = confidence;
++      hrm_data.ppi_diag_wear = 1;
++      hrm_data.ppi_diag_accepted = 1;
++      hrm_data.ppi_diag_present = 1;
++      PBL_LOG_DBG("PPI_DIAG v=1 stage=interval rid=%" PRIu32
++                  " index=%" PRId32 " ppi=%" PRIu16 " quality=%d ticks=%" PRIu32
++                  " accepted=1 skip=0",
++                  result_id, i, hrm_data.hrv_ppi_ms, hrm_data.hrv_quality, observed_ticks);
++    }
++#endif
+     hrm_manager_new_data_cb(&hrm_data);
+   }
+ }
++
++void gh3x2x_hrv_result_report(const int32_t *rri, int32_t confidence, int32_t valid_num) {
++  prv_hrv_result_report(rri, confidence, valid_num, 0, false);
++}
++
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++void gh3x2x_hrv_diag_bridge(const int32_t *rri, int32_t confidence, int32_t valid_num,
++                            uint32_t frame_id) {
++  prv_hrv_result_report(rri, confidence, valid_num, frame_id, true);
++}
++#endif
+ #endif
+ 
+ void gh3x2x_wear_evt_notify(bool is_wear) {
+diff --git a/fw/applib/health_service.c b/fw/applib/health_service.c
+index 0ff6e73..a7d92b1 100644
+--- a/fw/applib/health_service.c
++++ b/fw/applib/health_service.c
+@@ -7,6 +7,7 @@
+ #include "health_service_private.h"
+ 
+ #include <pbl/logging/logging.h>
++#include <pbl/drivers/rtc.h>
+ #include <pbl/services/activity/activity.h>
+ #include <pbl/services/hrm/hrm_manager.h>
+ #include <pbl/services/time.h>
+@@ -787,6 +788,17 @@ PBL_T_STATIC void prv_health_event_handler(PebbleEvent *e, void *context) {
+     }
+   }
+ 
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++  if (e->health_event.type == HealthEventHRVUpdate &&
++      e->health_event.data.hrv_update.ppi_diag_present) {
++    const HealthEventHRVUpdateData *hrv = &e->health_event.data.hrv_update;
++    PBL_LOG_DBG("PPI_DIAG v=1 stage=app rid=%" PRIu32 " index=%" PRIu16
++                " ppi=%" PRIu16 " quality=%d ticks=%" PRIu32 " accepted=%" PRIu8 " skip=0",
++                hrv->ppi_diag_result_id, hrv->ppi_diag_result_index, hrv->ppi_ms,
++                hrv->quality, rtc_get_ticks(), hrv->ppi_diag_accepted);
++  }
++#endif
++
+   state->event_handler(e->health_event.type, state->context);
+ 
+   // If we crossed an alert threshold, generate a metric alert event
+diff --git a/fw/applib/health_service.h b/fw/applib/health_service.h
+index 6934a5b..abcf63e 100644
+--- a/fw/applib/health_service.h
++++ b/fw/applib/health_service.h
+@@ -551,6 +551,17 @@ typedef struct {
+ typedef struct {
+   uint16_t ppi_ms;
+   HRMQuality quality : 8;
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++  uint32_t ppi_diag_result_id;
++  uint32_t ppi_diag_frame_id;
++  uint32_t ppi_diag_observed_ticks;
++  uint16_t ppi_diag_result_index;
++  int32_t ppi_diag_valid_num;
++  int32_t ppi_diag_confidence;
++  uint8_t ppi_diag_wear;
++  uint8_t ppi_diag_accepted;
++  uint8_t ppi_diag_present;
++#endif
+ } HealthEventHRVUpdateData;
+ 
+ //! @internal
+diff --git a/fw/services/hrm/hrm_manager.c b/fw/services/hrm/hrm_manager.c
+index 8e38d3a..d722b92 100644
+--- a/fw/services/hrm/hrm_manager.c
++++ b/fw/services/hrm/hrm_manager.c
+@@ -670,12 +670,31 @@ void hrm_manager_new_data_cb(const HRMData *data) {
+       .type = PEBBLE_HEALTH_SERVICE_EVENT,
+       .health_event = {
+         .type = HealthEventHRVUpdate,
+-        .data.hrv_update = {
++          .data.hrv_update = {
+           .ppi_ms = data->hrv_ppi_ms,
+           .quality = data->hrv_quality,
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++          .ppi_diag_result_id = data->ppi_diag_result_id,
++          .ppi_diag_frame_id = data->ppi_diag_frame_id,
++          .ppi_diag_observed_ticks = data->ppi_diag_observed_ticks,
++          .ppi_diag_result_index = data->ppi_diag_result_index,
++          .ppi_diag_valid_num = data->ppi_diag_valid_num,
++          .ppi_diag_confidence = data->ppi_diag_confidence,
++          .ppi_diag_wear = data->ppi_diag_wear,
++          .ppi_diag_accepted = data->ppi_diag_accepted,
++          .ppi_diag_present = data->ppi_diag_present,
++#endif
+         },
+       },
+     };
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++    if (data->ppi_diag_present) {
++      PBL_LOG_DBG("PPI_DIAG v=1 stage=manager rid=%" PRIu32 " index=%" PRIu16
++                  " ppi=%" PRIu16 " quality=%d ticks=%" PRIu32 " accepted=%" PRIu8 " skip=0",
++                  data->ppi_diag_result_id, data->ppi_diag_result_index, data->hrv_ppi_ms,
++                  data->hrv_quality, rtc_get_ticks(), data->ppi_diag_accepted);
++    }
++#endif
+     event_put(&health_event);
+   }
+ #endif
+diff --git a/include/pbl/services/hrm/hrm_manager.h b/include/pbl/services/hrm/hrm_manager.h
+index dc71a95..3517836 100644
+--- a/include/pbl/services/hrm/hrm_manager.h
++++ b/include/pbl/services/hrm/hrm_manager.h
+@@ -268,6 +268,18 @@ typedef struct {
+   /** HRV quality. */
+   HRMQuality hrv_quality;
+ 
++#ifdef CONFIG_HRM_PPI_DIAGNOSTICS
++  uint32_t ppi_diag_result_id;
++  uint32_t ppi_diag_frame_id;
++  uint32_t ppi_diag_observed_ticks;
++  uint16_t ppi_diag_result_index;
++  int32_t ppi_diag_valid_num;
++  int32_t ppi_diag_confidence;
++  uint8_t ppi_diag_wear;
++  uint8_t ppi_diag_accepted;
++  uint8_t ppi_diag_present;
++#endif
++
+   /** Blood oxygen saturation, in percent. */
+   uint8_t spo2_percent;
+   /** SpO2 quality. */
