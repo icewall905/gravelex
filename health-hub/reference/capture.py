@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import time
+import sys
+from bluez_device import resolve_existing_device
 from ble_rr import HEART_RATE_SERVICE,HEART_RATE_MEASUREMENT,decode_measurement,segmented_diagnostics
 
 
@@ -26,10 +28,15 @@ async def run(args):
     # Exclusive creation prevents erasing an earlier reference recording.
     descriptor=os.open(output,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     started=time.monotonic();sequence=0;rr=[];segments=[[]];packets=0;parse_errors=0;last_packet_at=None
+    stages=[];current_stage=None;recording_started=None;notification_window_seconds=None
+    recording_completed=False;error_stage=None
     disconnected=asyncio.Event()
     with os.fdopen(descriptor,'w',buffering=1) as stream:
         def record(value):
             stream.write(json.dumps(value,allow_nan=False)+'\n')
+        def stage(name):
+            nonlocal current_stage
+            current_stage=name;stages.append(name);record({'type':'stage','stage':name,'at':time.time()})
         def disconnected_callback(_):
             disconnected.set()
         record({'type':'session','format_version':1,'label':args.label,
@@ -64,23 +71,51 @@ async def run(args):
             record(base)
         error=None
         try:
-            async with BleakClient(args.address,disconnected_callback=disconnected_callback,timeout=20) as client:
+            stage('connect')
+            try:
+                known=await asyncio.wait_for(resolve_existing_device(args.address),timeout=5)
+            except asyncio.TimeoutError:
+                known=None
+            async with BleakClient(known or args.address,disconnected_callback=disconnected_callback,timeout=30) as client:
                 record({'type':'connected','at':time.time(),'device_address':args.address})
-                await client.start_notify(HEART_RATE_MEASUREMENT,on_measurement)
+                stage('subscribe')
+                await client.start_notify(HEART_RATE_MEASUREMENT,on_measurement,**({'bluez':{'use_start_notify':True}} if sys.platform=='linux' else {}))
+                stage('record')
+                recording_started=time.monotonic()
                 try:
                     await asyncio.wait_for(disconnected.wait(),timeout=args.duration)
                     error='Device disconnected; continuity is unknown. Capture stopped without reconnecting.'
+                    error_stage='record'
                 except asyncio.TimeoutError:
-                    pass
+                    recording_completed=True
+                    notification_window_seconds=time.monotonic()-recording_started
+                    stage('completed')
                 if client.is_connected:
-                    await client.stop_notify(HEART_RATE_MEASUREMENT)
+                    stage('stop_notify')
+                    try:
+                        await client.stop_notify(HEART_RATE_MEASUREMENT)
+                    except Exception as failure:
+                        if error is None:
+                            error=type(failure).__name__+': '+str(failure)
+                            error_stage='stop_notify'
+                stage('disconnect')
         except Exception as failure:
-            error=type(failure).__name__+': '+str(failure)
+            if error is None:error=type(failure).__name__+': '+str(failure)
+            if error_stage is None:error_stage=current_stage
+        if recording_started is not None and notification_window_seconds is None:
+            notification_window_seconds=time.monotonic()-recording_started
+        if recording_completed and 'completed' not in stages:
+            stage('completed')
         record({'type':'summary','ended_at':time.time(),'packets':packets,'parse_errors':parse_errors,
-                'error':error,'diagnostic':segmented_diagnostics(segments),
+                'error':error,'error_stage':error_stage,'stages':stages,
+                'recording_completed':recording_completed,
+                'notification_window_seconds':notification_window_seconds,
+                'diagnostic':segmented_diagnostics(segments),
                 'qualified_reference':False,
                 'note':'Reference eligibility requires review of gaps, contact and artifacts; no automatic watch calibration.'})
-    print(json.dumps({'output':str(output),'packets':packets,'rr_intervals':len(rr),'parse_errors':parse_errors,'error':error}))
+    print(json.dumps({'output':str(output),'packets':packets,'rr_intervals':len(rr),'parse_errors':parse_errors,
+                      'error':error,'error_stage':error_stage,'recording_completed':recording_completed,
+                      'notification_window_seconds':notification_window_seconds}))
     if error or not rr:
         raise SystemExit(1)
 

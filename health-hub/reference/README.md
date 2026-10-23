@@ -27,3 +27,20 @@ Outputs are mode 0600, exclusively created and Git-ignored under `reference-data
 6. Follow [MOTION-CALIBRATION.md](../MOTION-CALIBRATION.md). A quiet/moving mean-delta threshold requires actual separation and reference evidence; no threshold is automatically inferred or enabled by this recorder.
 
 Passing decoder fixtures or receiving a few RR intervals does not validate motion filtering, reconstructed HRV, sleep, stress, readiness or medical accuracy. F03/F14/F16/F30 remain field-gated as documented in the roadmap.
+
+## Linux connection diagnostics
+
+The recorder can resolve an already paired or connected device from BlueZ without requiring it to advertise again. On Linux it uses Bleak 2.1's explicit StartNotify option: the default AcquireNotify path failed with EOF during local testing. Other platforms retain their default notification path.
+
+Run only one reference subscriber during validation; close diagnostic notification tools first. Inspect packet timing and total RR duration against wall time. In a local paired trial, identical packets appeared twice a few milliseconds apart and summed to twice the elapsed duration. Preserve such raw captures, mark them unsuitable for reference qualification, and investigate the transport rather than silently deleting identical RR values (legitimate consecutive intervals can match). A completed notification window and an error during disconnect are recorded separately.
+
+## Offline analysis and labels
+
+```sh
+python3 reference/analyze_pair.py reference-data/reference.jsonl reference-data/watch.json \
+  --output reference-data/pair-report.json
+python3 reference/annotate_session.py reference-data/watch.json --condition quiet-seated \
+  --phase tuning --stress-before 2 --output reference-data/labels.json
+```
+
+Stress ratings in this example are placeholders, never inferred values. Enter actual contemporaneous observations. Breathing labels require an actual integer count and UNIX start/end timestamps within the saved capture, not an intended paced rate. Reports bind inputs with SHA-256 and preserve the raw captures. The default alignment uncertainty is an explicit assumption, not a measured clock/transport bound. See [VALIDATION-STUDY.md](../VALIDATION-STUDY.md) for the separate HRV, motion, breathing and stress gates.
