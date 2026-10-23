@@ -2,8 +2,9 @@
 #include <pebble.h>
 #include <stdlib.h>
 #include "schedule.h"
+#include "motion_windows.h"
 #define CAPACITY 512
-#define COLLECTOR_VERSION 152
+#define COLLECTOR_VERSION 153
 static Window *window;
 static TextLayer *text;
 static uint16_t intervals[CAPACITY];
@@ -73,6 +74,11 @@ static void woke(WakeupId id,int32_t cookie) {
   quiet=true;auto_pending=true;slot_started=false;begin_night(NULL);
 }
 static uint32_t motion, motion_samples;
+static uint16_t motion_window_samples[MOTION_WINDOW_COUNT];
+static uint16_t motion_window_transitions[MOTION_WINDOW_COUNT];
+static uint32_t motion_window_totals[MOTION_WINDOW_COUNT];
+static uint32_t motion_window_peaks[MOTION_WINDOW_COUNT];
+static bool motion_windows_valid;
 static int16_t px, py, pz;
 static bool previous;
 static char display[160];
@@ -106,6 +112,14 @@ static void send_result(void) {
   dict_write_uint32(iter,MESSAGE_KEY_hr_valid,hr_valid);
   dict_write_cstring(iter,MESSAGE_KEY_firmware,firmware);
   dict_write_uint8(iter,MESSAGE_KEY_capacity_limited,capacity_limited);
+  if(measurement_version==COLLECTOR_VERSION && motion_windows_valid) {
+    dict_write_data(iter,MESSAGE_KEY_motion_window_totals,(uint8_t*)motion_window_totals,sizeof(motion_window_totals));
+    dict_write_data(iter,MESSAGE_KEY_motion_window_samples,(uint8_t*)motion_window_samples,sizeof(motion_window_samples));
+    dict_write_data(iter,MESSAGE_KEY_motion_window_transitions,(uint8_t*)motion_window_transitions,sizeof(motion_window_transitions));
+    dict_write_data(iter,MESSAGE_KEY_motion_window_peaks,(uint8_t*)motion_window_peaks,sizeof(motion_window_peaks));
+    dict_write_uint16(iter,MESSAGE_KEY_motion_window_ms,MOTION_WINDOW_MS);
+    dict_write_uint8(iter,MESSAGE_KEY_motion_window_version,MOTION_WINDOW_VERSION);
+  }
   app_message_outbox_send();
   text_layer_set_text(text,"Uploading raw intervals…\nKeep this app open.");
 }
@@ -119,6 +133,10 @@ static void save_measurement(void) {
   persist_write_int(34,motion_samples);
   persist_write_int(35,accel_callbacks);persist_write_int(36,vibration_samples);persist_write_int(37,accel_rate_result);persist_write_bool(38,raw_motion);persist_write_int(39,measurement_version);
   persist_write_int(61,hrv_events);persist_write_int(62,zero_ppi_events);persist_write_int(63,hr_events);persist_write_int(64,hr_sum);persist_write_int(65,hr_valid);persist_write_string(66,firmware);persist_write_bool(67,capacity_limited);
+  persist_write_data(68,motion_window_totals,sizeof(motion_window_totals));
+  persist_write_data(69,motion_window_samples,sizeof(motion_window_samples));
+  persist_write_data(70,motion_window_transitions,sizeof(motion_window_transitions));
+  persist_write_data(71,motion_window_peaks,sizeof(motion_window_peaks));
   persist_write_int(30,count);
 }
 static void check_phone(void *context) {
@@ -169,7 +187,9 @@ static void on_motion(AccelRawData *data,uint32_t n,uint64_t timestamp) {
   accel_callbacks++;
   for(uint32_t i=0;i<n;i++) {
     motion_samples++;
-    if(previous) motion+=abs(data[i].x-px)+abs(data[i].y-py)+abs(data[i].z-pz);
+    uint32_t delta=previous?motion_axis_delta(data[i].x,data[i].y,data[i].z,px,py,pz):0;
+    if(previous) motion+=delta;
+    motion_window_add_sample(elapsed(),motion_window_samples,motion_window_transitions,motion_window_totals,motion_window_peaks,delta,previous);
     px=data[i].x;py=data[i].y;pz=data[i].z;previous=true;
   }
 }
@@ -180,6 +200,11 @@ static void start(void) {
   get_firmware(firmware,sizeof(firmware));capacity_limited=false;
   measurement_version=COLLECTOR_VERSION;hrv_events=0;zero_ppi_events=0;hr_events=0;hr_sum=0;hr_valid=0;
   count=0; motion=0; motion_samples=0; previous=false;accel_callbacks=0;vibration_samples=0;
+  memset(motion_window_samples,0,sizeof(motion_window_samples));
+  memset(motion_window_transitions,0,sizeof(motion_window_transitions));
+  memset(motion_window_totals,0,sizeof(motion_window_totals));
+  memset(motion_window_peaks,0,sizeof(motion_window_peaks));
+  motion_windows_valid=true;
   persist_delete(30);measurement_night=quiet;auto_pending=false;
   time_ms(&start_sec,&start_ms);
   if(!health_service_set_hrv_sample_period(1)) {text_layer_set_text(text,"HRV request rejected.\nFirmware 4.32+ required.");close_soon();return;}
@@ -196,7 +221,7 @@ static void tick(struct tm *tm,TimeUnits changed) {
   uint32_t seconds=elapsed()/1000;
   if(seconds==8 && !accel_callbacks){accel_data_service_unsubscribe();accel_raw_data_service_subscribe(25,on_motion);accel_rate_result=accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);}
   if(seconds>=180){finish();return;}
-  if(quiet || (seconds>1 && seconds%30!=0))return;
+  if(quiet)return;
   snprintf(display,sizeof(display),"Rest your arm\nBreathe normally\n%lu seconds left\n%u pulse intervals\nRaw diagnostic only",(unsigned long)(180-seconds),count);
   text_layer_set_text(text,display);
 }
@@ -256,6 +281,22 @@ int main(void){
   count=(uint16_t)saved;ready=true;start_sec=persist_read_int(31);motion=(uint32_t)persist_read_int(32);measurement_night=persist_read_bool(33);motion_samples=persist_read_int(34);
   for(int i=0;i<CAPACITY*2/256;i++)persist_read_data(40+i,((uint8_t*)intervals)+i*256,256);
   for(int i=0;i<CAPACITY*4/256;i++)persist_read_data(50+i,((uint8_t*)offsets)+i*256,256);
+  memset(motion_window_samples,0,sizeof(motion_window_samples));
+  memset(motion_window_transitions,0,sizeof(motion_window_transitions));
+  memset(motion_window_totals,0,sizeof(motion_window_totals));
+  memset(motion_window_peaks,0,sizeof(motion_window_peaks));
+  motion_windows_valid=false;
+  if(measurement_version==COLLECTOR_VERSION &&
+     persist_get_size(68)==sizeof(motion_window_totals) &&
+     persist_get_size(69)==sizeof(motion_window_samples) &&
+     persist_get_size(70)==sizeof(motion_window_transitions) &&
+     persist_get_size(71)==sizeof(motion_window_peaks)) {
+    persist_read_data(68,motion_window_totals,sizeof(motion_window_totals));
+    persist_read_data(69,motion_window_samples,sizeof(motion_window_samples));
+    persist_read_data(70,motion_window_transitions,sizeof(motion_window_transitions));
+    persist_read_data(71,motion_window_peaks,sizeof(motion_window_peaks));
+    motion_windows_valid=true;
+  }
   text_layer_set_text(text,"Saved measurement.\nSelect: retry upload\nDown: new test");
  }
  app_timer_register(1500,check_phone,NULL);

@@ -28,3 +28,13 @@ The current collector sums `abs(dx)+abs(dy)+abs(dz)` between adjacent accelerome
 7. Verify the More → HRV measurement quality card and fresh actual uploads. Retain raw data and the previous configuration so interpretation can be audited or rolled back.
 
 A motion policy only qualifies the collection heuristic. Reconstructed 1 Hz RR does not become genuine beat timing, nor does passing these checks independently validate readiness, stress, breathing or a clinical measure. F03 remains open for field calibration; F16 covers reference HRV validation.
+
+## Brief-movement challenge and collector153
+
+The prospective whole-session-mean candidate failed a user-labeled15–30second movement burst during an otherwise quiet180s capture. Interval-quality rejection happened separately and does not rescue the motion heuristic. The candidate was not retuned or deployed. Earlier recordings probably included notifications with unknown timing; the burst test spans the user's transition to notifications disabled. Those are mixed-condition development evidence, not vibration-free controls.
+
+Collector153/watch1.5.3 adds36five-second buckets. Each stores sample count, transition count, summed adjacent-axis delta and largest transition delta. Buckets are assigned at callback receipt time; batches and scheduling jitter make these approximate windows, not exact sample timestamps. Global counters retain their previous meaning. Saved old152captures do not acquire invented windows. Missing/corrupt153window data cannot qualify.
+
+A153policy must additionally declare exact motion_window_version1 and window_ms5000, max_window_mean_delta, max_transition_delta, and min_window_coverage. Per-window coverage and burst/peak limits must pass as well as whole-session coverage/mean. No operational numerical limits ship or are inferred from the earlier152means. Unknown vibration stays unknown; window timing alone cannot identify notification vibration.
+
+After installing153, record a notification-disabled quiet capture, then a notification-disabled15–30s burst capture, preserving actual timing/range. Use these as development evidence for the new source version, then freeze proposed limits before new held-out quiet/burst repeats. Separately characterize notification interruptions and overnight behavior. A policy matching152never applies to153. New windows improve observability; they do not establish HRV, breathing or stress validity.

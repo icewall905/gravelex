@@ -18,6 +18,7 @@ import provenance
 import training_ledger
 import readiness_history
 import monitor_observations
+import motion_quality
 import workout_edits
 import uuid
 from datetime import datetime, timedelta
@@ -266,10 +267,15 @@ def hrv_ingest(data):
         if offset < previous:
             raise ValueError("Event times must be ordered")
         previous = offset
+    motion_total = number(data.get("motion_total", 0), 0, 4294967295, "motion")
+    motion_samples = number(data.get("motion_samples",0), 0, 100000, "motion sample count")
+    normalized_windows = None
+    if 'motion_windows' in data:
+        normalized_windows = motion_quality.validate_windows(data['motion_windows'], motion_total, motion_samples)
     # Raw diagnostic only: event cadence does not establish consecutive beats.
     payload = {"ppi": ppi, "offsets_ms": offsets, "duration_ms": offsets[-1],
-               "count": len(ppi), "context": "scheduled" if data.get("scheduled") is True else "manual", "motion_total": number(data.get("motion_total", 0), 0, 4294967295, "motion"),
-               "motion_samples": number(data.get("motion_samples",0), 0, 100000, "motion sample count"),
+               "count": len(ppi), "context": "scheduled" if data.get("scheduled") is True else "manual", "motion_total": motion_total,
+               "motion_samples": motion_samples,
                "validated": False, "rmssd": None}
     payload['firmware']=str(data.get('firmware','unknown'))[:32]
     payload['capacity_limited']=data.get('capacity_limited') is True
@@ -279,6 +285,8 @@ def hrv_ingest(data):
     for key in ('collector_version','accel_callbacks','vibration_samples'):
         payload[key]=int(number(data.get(key,0),0,100000,'Collector '+key))
     payload['accel_rate_result']=int(number(data.get('accel_rate_result',0),-10000,10000,'Acceleration status'))
+    if normalized_windows is not None:
+        payload['motion_windows'] = normalized_windows
     payload['motion_source']='raw_accelerometer' if data.get('motion_source')=='raw_accelerometer' else 'processed_accelerometer'
     payload['vibration_status']='unknown' if payload['motion_source']=='raw_accelerometer' else 'flagged_samples_excluded'
     if payload['vibration_status']=='unknown':payload['vibration_samples']=None

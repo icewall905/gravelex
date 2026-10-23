@@ -67,3 +67,9 @@ HRV device acceptance (2026-10-23): installed1.5.2 through GravelEx's Android do
 ## Private reference study follow-up (2026-10-23)
 
 Actual chest-strap RR is confirmed. Original captures and raw paired watch exports are retained in private reference-data with SHA-256 inventory and verified local archive; no biometrics are committed. A full360s clean candidate recorded370RR without parse errors; teardown EOF is explicitly separate from successful recording. Earlier duplicate-notification and early-disconnect attempts remain preserved and excluded from accuracy claims. See VALIDATION-STUDY.md for evidence, independent breathing/stress labels and separate field gates. No production motion threshold, breathing qualification or stress baseline was fabricated.
+
+## Short-window motion follow-up
+
+A brief labeled movement burst escaped the whole-session mean cutoff; no threshold was enabled or retuned. Collector153/watch1.5.3 now preserves five-second sample/transition totals and peaks with callback-receipt timing. Backend checks reconcile window/global counters, require explicit window-aware policies, and keep raw/legacy data distinct. More displays highest window mean and transition peak; shellv21. Earlier test notification timing is unknown, and notifications were disabled during the burst test: retain that confound. New153quiet/burst recordings and held-out tests remain required before any policy activation.
+
+Windowed motion delivery acceptance: independent review approved,225backend/reference tests plus JS retry/SW and hostC accumulator pass; SDK4.33.1 Emerybuild passes. Production database/source/PBW backup and rollback images retained before receiver/web/briefing update. Receiverhealth and shellv21 verified; phone document-provider import succeeded and server received collector153phase1 from actualwatch. Manual windows/quiet/burst acceptance still pending; no motionpolicy activated.

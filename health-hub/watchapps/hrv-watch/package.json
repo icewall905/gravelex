@@ -1,7 +1,7 @@
 {
   "name": "pebblefit-hrv-diagnostic",
   "author": "PebbleFit",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "dependencies": {},
   "pebble": {
@@ -43,7 +43,13 @@
       "hr_sum",
       "hr_valid",
       "firmware",
-      "capacity_limited"
+      "capacity_limited",
+      "motion_window_totals",
+      "motion_window_samples",
+      "motion_window_transitions",
+      "motion_window_peaks",
+      "motion_window_ms",
+      "motion_window_version"
     ],
     "capabilities": [
       "health",

@@ -33,7 +33,13 @@ declare -A OUTPUTS=(
 for app in hrv-watch history-watch today-watch watchapp; do
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  cp -R "$SOURCE_DIR/$app/." "$tmp/"
+  python3 - "$SOURCE_DIR/$app" "$tmp" <<'PY'
+import shutil
+import sys
+
+shutil.copytree(sys.argv[1], sys.argv[2], dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns('build', 'dist', 'node_modules', '.git', '.lock-waf*'))
+PY
   python3 - "$tmp/src/pkjs/index.js" "$PUBLIC_URL" <<'PY'
 from pathlib import Path
 import sys

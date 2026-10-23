@@ -1259,9 +1259,11 @@ function devicesView() {
             kv('Firmware / collector',`${motion.firmware || 'unknown'} / ${motion.collector_version ?? 'unknown'}`),
             kv('Motion assessment',String(motion.status || 'unknown').replace(/_/g,' ')),
             kv('Mean movement delta',isNum(motion.normalized_mean) ? `${fmt(motion.normalized_mean,2)} collector units/transition` : 'Unknown'),
+            kv('Highest 5-second movement',isNum(motion.max_window_mean) ? `${fmt(motion.max_window_mean,2)} collector units/transition` : 'Not recorded by this collector'),
+            kv('Largest movement transition',isNum(motion.max_window_delta) ? `${fmt(motion.max_window_delta,0)} collector units` : 'Not recorded by this collector'),
             kv('Motion coverage',isNum(motion.coverage_fraction) ? `${fmt(motion.coverage_fraction*100)}% of calibrated rate` : 'No matching calibration'),
             kv('Algorithm',q.algorithm_version || 'Legacy')),
-          h('p',{class:'foot'},'Uncalibrated recordings remain stored for diagnostics. They do not contribute to HRV recovery or stress scores. Genuine beat intervals and reconstructed tachograms use separate baselines.')];
+          h('p',{class:'foot'},'Motion windows use callback receipt times, not exact sample timestamps. Uncalibrated recordings remain stored for diagnostics and do not contribute to HRV recovery or stress scores. Genuine beat intervals and reconstructed tachograms use separate baselines.')];
       })() : pending('No HRV quality report yet','Open the HRV watch app to save a recording.')),
     card('device', 'Watch apps', { cls: 'wide' },
       h('p', { class: 'lede', style: { marginTop: 0 } }, 'Install these on the watch, then pair each one in the phone app. HRV and History upload to this server; Today only reads the daily summary.'),
