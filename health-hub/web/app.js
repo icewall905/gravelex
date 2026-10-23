@@ -660,7 +660,7 @@ const CARDS = {
       stats([['7-day load', fmt(lt.load7)], ['Acute', fmt(lt.acute, 1)], ['Chronic', fmt(lt.chronic, 1)], ['Form', isNum(lt.form) ? signed(lt.form) : '—']]),
       items.some(i => isNum(i.v)) ? [barChart({ items, H: 100, unit: 'load', label: 'Daily training load, last 7 days' }),
         legend([['', 'Recorded'], ['partial', 'Partly recorded'], ['gap', 'Unknown']])] : null,
-      warming ? pending('Fitness and fatigue need history', `Needs 42 consecutive confirmed days to estimate chronic load; ${lt.baseline_days || 0} so far.`, { n: lt.baseline_days || 0, of: 42, unit: 'days' }) : null);
+      warming ? pending('Fitness and fatigue need history', `Needs 42 consecutive confirmed days to estimate chronic load; ${D().training_ledger?.confirmed_consecutive_days ?? lt.baseline_days ?? 0} finished days so far.`, { n: D().training_ledger?.confirmed_consecutive_days ?? lt.baseline_days ?? 0, of: 42, unit: 'days' }) : null);
   },
 
   workouts(limit = 3, full) {
@@ -887,14 +887,15 @@ const DETAIL = {
             h('div', { style: { width: '128px' } }, ring(r.score, { size: 128, stroke: 12 })),
             h('div', { style: { flex: '1', minWidth: '180px' } },
               h('p', { class: 'status-word', style: { fontSize: '22px' } }, readinessWord(r.score)),
-              h('p', { class: 'lede' }, isNum(r.score) ? 'A weighted mix of the inputs below. 50 means a typical day for you.' : (r.reason || 'Not enough inputs yet.')))),
+              h('p', { class: 'lede' }, isNum(r.score) ? 'An experimental weighted mix of the inputs below.' : (r.reason || 'Not enough inputs yet.')))),
           h('div', { class: 'comps' }, names.map(k => compRow(COMPONENT_NAMES[k] || k, comps[k], weights[k]))),
+          h('p',{class:'foot'},`${r.components_count ?? Object.keys(comps).length} of ${r.total_components ?? 4} inputs · ${isNum(r.effective_weight_coverage) ? fmt(r.effective_weight_coverage*100) : '—'}% configured weight covered${r.provisional ? ' · provisional' : ''}`),
           missingList(r.missing),
           info('How readiness works',
-            'Each input is scored against your own recent history: 50 is your normal, higher is better rested. The score is the weighted mean of the inputs that are available.',
+            'HRV, resting HR and load are compared with personal baselines. Sleep uses duration against your target and timing regularity. The score combines available inputs and remains experimental.',
             'Missing inputs are left out rather than guessed. With fewer than two inputs, or without overnight HRV or sleep, no score is shown.',
             r.method ? `Method: ${r.method}.` : null)),
-        h('p', { class: 'foot' }, 'Readiness history is not stored yet, so only today is shown.'),
+        readinessHistoryCard(),
       ];
     },
   },
@@ -1048,7 +1049,7 @@ const DETAIL = {
       return [
         card('train', 'Now', { chip: lt.status !== 'ready' ? chip('Building baseline') : null, cls: 'wide' },
           stats([['7-day load', fmt(lt.load7), lt.known_days7 != null ? `${lt.known_days7}/7 days known` : ''], ['Acute', fmt(lt.acute, 1), 'fatigue'], ['Chronic', fmt(lt.chronic, 1), 'fitness'], ['Form', isNum(lt.form) ? signed(lt.form) : '—']]),
-          lt.status !== 'ready' ? pending('Chronic load needs six weeks', `Needs 42 consecutive confirmed days; ${lt.baseline_days || 0} so far. Confirm days in the calendar below.`, { n: lt.baseline_days || 0, of: 42, unit: 'days' }) : null,
+          lt.status !== 'ready' ? pending('Chronic load needs six weeks', `Needs 42 consecutive confirmed days; ${D().training_ledger?.confirmed_consecutive_days ?? lt.baseline_days ?? 0} finished days so far. Confirm days in the calendar below.`, { n: D().training_ledger?.confirmed_consecutive_days ?? lt.baseline_days ?? 0, of: 42, unit: 'days' }) : null,
           h('p', { class: 'lede' }, `Load method: ${prof.load_method === 'rpe' ? 'session effort' : 'heart rate'}${isNum(prof.hr_max) ? `, max HR ${prof.hr_max} bpm` : ''}. `, h('a', { href: '#more' }, 'Change')),
           info('How training load works',
             'Each workout gets a load from time in heart-rate zones, or from minutes times your effort rating. Acute load is the last week; chronic load is the last six weeks. Form is chronic minus acute.',
@@ -1109,6 +1110,58 @@ function spotChecks(pts) {
       h('p', { class: 'lede', style: { fontSize: '13.5px' } }, `${ok.length} of ${pts.length} recent recordings were clean enough to use. Gaps include recordings excluded by interval quality, missing motion calibration or movement.`),
       isNum(q.experimental_rmssd_ms) ? stats([['Latest', fmt(q.experimental_rmssd_ms, 1), 'ms'], ['Beats kept', isNum(q.retained_fraction) ? `${fmt(q.retained_fraction * 100)}%` : '—'], ['Taken', fmtClock((D().hrv || {}).ts)]]) : null,
     ] : pending('No spot checks yet', 'Open the HRV app on the watch and keep still for three minutes.'));
+}
+
+function trainingReviewCard() {
+  const ledger=D().training_ledger;
+  if (!ledger) return null;
+  const controls=[];
+  const ack=h('input',{type:'checkbox'}), error=h('p',{class:'sheet-error','aria-live':'polite'});
+  const rows=(ledger.days || []).slice().reverse().map(day=>{
+    const include=h('input',{type:'checkbox','aria-label':`Review ${day.date}`});
+    const status=h('select',{'aria-label':`Confirmation for ${day.date}`},
+      ['unknown','complete','rest'].map(value=>h('option',{value,selected:value===(day.confirmation || 'unknown')},cap(value))));
+    controls.push({include,status,day});
+    return h('li',null,h('span',{class:'t'},`${day.date} · ${day.status}`),
+      h('span',{class:'s'},`${day.workouts.length} sessions · HR load ${fmt(day.recorded_hr_load)} · effort load ${fmt(day.recorded_rpe_load)}${isNum(day.hr_coverage_pct) ? ` · HR coverage ${fmt(day.hr_coverage_pct,1)}%` : ''}`),
+      (day.blockers || []).length ? h('span',{class:'s'},day.blockers.join('; ')) : null,
+      h('span',{class:'acts'},include,status));
+  });
+  const save=h('button',{class:'btn',type:'button',onclick:async e=>{
+    const days=controls.filter(x=>x.include.checked).map(x=>({date:x.day.date,status:x.status.value}));
+    if (!days.length || !ack.checked) {error.textContent='Select dates and acknowledge that you reviewed their training history.';return;}
+    const button=e.currentTarget;button.disabled=true;error.textContent='';
+    try {await api('api/days/batch','POST',{acknowledged:true,days});toast('Reviewed days saved');await load(true);}
+    catch (failure) {error.textContent=failure.message;}
+    finally {button.disabled=false;}
+  }},'Save selected reviews');
+  return card('calendar','Training history review',{cls:'wide'},
+    stats([['Consecutive finished days',`${ledger.confirmed_consecutive_days} / ${ledger.required_days}`],['Baseline ends',ledger.baseline_end],['Open today',ledger.today.date]]),
+    h('p',{class:'lede'},`${ledger.blockers.length} date(s) block a complete 42-day baseline. Missing coverage is not rest; recorded session loads remain useful before the baseline matures.`),
+    h('details',{class:'info'},h('summary',null,'Review dates and exact blockers'),h('ul',{class:'list'},rows),
+      h('label',null,ack,' I reviewed these dates and know whether all training was recorded.'),error,save));
+}
+
+function readinessHistoryCard() {
+  const recovery=rec(), current=recovery.readiness || {};
+  const rows=recovery.readiness_history || [], byDay=new Map();
+  rows.forEach(row=>{if (!byDay.has(row.day)) byDay.set(row.day,row);});
+  const history=[...byDay.values()].sort((a,b)=>a.day.localeCompare(b.day));
+  const comparable=[];
+  if (history.length) {
+    const end=recovery.today || history.at(-1).day;
+    const last=Date.parse(end+'T00:00:00Z');
+    const first=Math.max(Date.parse(history[0].day+'T00:00:00Z'),last-89*86400000);
+    for (let stamp=first;stamp<=last;stamp+=86400000) {
+      const day=new Date(stamp).toISOString().slice(0,10), row=byDay.get(day);
+      comparable.push({key:day,label:day,v:row?.comparability_key===current.comparability_key ? row.readiness.score : null});
+    }
+  }
+  return card('ready','Comparable readiness history',{cls:'wide',chip:expChip()},
+    comparable.some(row=>isNum(row.v)) ? lineChart({items:comparable,W:chartW(),H:160,label:'Readiness with the same input set and method',unit:'of 100'}) : pending('History building','Snapshots begin when this version is deployed. Missing days are not reconstructed.'),
+    h('p',{class:'foot'},'Only snapshots with the current input set and method appear on this line. A changed method or input set leaves a gap.'),
+    h('details',{class:'info'},h('summary',null,'Stored snapshot methods'),h('ul',{class:'list'},rows.slice(0,30).map(row=>h('li',null,
+      h('span',{class:'t'},`${row.day} · ${fmt(row.readiness.score)}`),h('span',{class:'s'},`${row.readiness.components_count ?? '?'} / 4 inputs · ${row.formula_version} · ${row.comparability_key.slice(0,10)}`))))));
 }
 
 function minuteProvenancePanel() {
@@ -1435,7 +1488,7 @@ const PAGES = {
     return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), CARDS.breath(), oxygenCard(), CARDS.stress())];
   },
   training() {
-    return [pageHead('Training', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('training'), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
+    return [pageHead('Training', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('training'), trainingReviewCard(), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
   },
   more() {
     return [pageHead('More'), h('div', { class: 'feed' },

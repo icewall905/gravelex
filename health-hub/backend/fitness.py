@@ -15,6 +15,8 @@ import physiology
 import oxygen
 import collection_health
 import provenance
+import training_ledger
+import readiness_history
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -323,19 +325,27 @@ def summary(days=42):
     earliest=max(earliest,datetime.fromtimestamp(now,TZ).date()-timedelta(days=729))
     full_days=[str(earliest+timedelta(days=i)) for i in range((datetime.fromtimestamp(now,TZ).date()-earliest).days+1)]
     load=training.analyze(workouts,list(training_minutes.values()),full_days,config['hr_max'],config['load_method'],confirmations)
+    ledger=training_ledger.build(load, confirmations, collection['daily'], datetime.fromtimestamp(now,TZ).date())
     full_history=load['history']
+    finished=next((row for row in full_history if row['date']==ledger['baseline_end']),{})
+    load['latest'].update(baseline_days=ledger['confirmed_consecutive_days'],status=ledger['status'],
+                         baseline_end=ledger['baseline_end'],
+                         acute=finished.get('acute'),chronic=finished.get('chronic'),form=finished.get('form'))
     load['history']=[r for r in load['history'] if r['date']>=str(start_day)]
     load['workouts']=[w for w in load['workouts'] if w['start']>=since]
     workouts=load['workouts'];history=load['history']
     recovery=hrv_analytics.analyze_history(hrv_rows, now=now)
     nightly=recovery_model.build([(r['ts'],hrv_analytics.analyze_session(r['payload'])) for r in hrv_rows if r['ts']>=now-70*86400],
                                  sleep_rows,snapshot_sleep,full_history,now,seed=seed)
+    with connect() as snapshot_db:
+        readiness_history.persist_daily(snapshot_db, nightly['today'], nightly['readiness'], now)
+        nightly['readiness_history']=readiness_history.read_history(snapshot_db, since, now)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
     return {"wearer": os.environ.get("WEARER_NAME", ""), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
       "last_received": latest["received"] if latest else None,
       "sync_age_seconds": now - latest["received"] if latest else None,
-      "collection_health": collection, "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
+      "training_ledger": ledger, "collection_health": collection, "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},
@@ -392,6 +402,32 @@ def refresh_hrv_token(token):
     with connect() as db:
         db.execute("UPDATE pairing_tokens SET expires=? WHERE hash=? AND expires>?", (
             int(time.time()) + 30 * 86400, hashlib.sha256(token.encode()).hexdigest(), int(time.time())))
+
+
+def confirm_days_batch(data):
+    if data.get('acknowledged') is not True:
+        raise ValueError('Explicitly acknowledge that the selected dates were reviewed')
+    today=datetime.now(TZ).date()
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        workouts=[dict(r) for r in db.execute('SELECT * FROM workouts ORDER BY start')]
+        minutes={}
+        for workout in workouts:
+            for row in db.execute('SELECT * FROM minutes WHERE ts>=? AND ts<?',(workout['start'],workout['start']+workout['seconds'])):
+                minutes[row['ts']]=dict(row)
+        settings={r['key']:json.loads(r['value']) for r in db.execute('SELECT * FROM settings')}
+        analyzed=training.analyze(workouts,list(minutes.values()),[],settings.get('hr_max'),settings.get('load_method','hr'))
+        items=training_ledger.validate_batch(data.get('days'),analyzed['workouts'],today)
+        if any(datetime.fromisoformat(item['date']).date()<today-timedelta(days=730) for item in items):
+            raise ValueError('Dates must be within the last 730 days')
+        stamp=int(time.time())
+        provenance.record_observation(db,'day_review','manual',stamp,stamp,{'days':items,'acknowledged':True})
+        for item in items:
+            if item['status']=='unknown':
+                db.execute('DELETE FROM day_confirmations WHERE day=?',(item['date'],))
+            else:
+                db.execute('INSERT OR REPLACE INTO day_confirmations VALUES(?,?,?)',(item['date'],item['status'],stamp))
+    return {'updated':len(items),'days':items}
 
 
 def confirm_day(data):

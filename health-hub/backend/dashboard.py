@@ -162,6 +162,14 @@ def api_workouts():
         return {"error": str(error)}, 400
 
 
+@app.post("/api/days/batch")
+def api_days_batch():
+    try:
+        return fitness.confirm_days_batch(_json_body())
+    except (ValueError,TypeError,KeyError) as error:
+        return {"error":str(error)},400
+
+
 @app.post("/api/days")
 def api_days():
     try:

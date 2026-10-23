@@ -7,6 +7,8 @@ earlier nights, never the night being judged.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 
 import math
 from datetime import date, datetime, timedelta
@@ -36,6 +38,7 @@ SLEEP_NEED_S = 8 * 3600
 SEED_MIN_NIGHTS = 4           # earlier Pebble nights needed for a provisional level
 PROVISIONAL_RECENT = 3        # recent nights compared against that level
 
+READINESS_FORMULA_VERSION = "readiness-v2"
 READINESS_WEIGHTS = {"hrv": 0.30, "resting_hr": 0.20, "sleep": 0.25, "training_load": 0.25}
 
 
@@ -314,7 +317,10 @@ def training_state(history: list[dict[str, Any]], chronic_days: int = 42,
 
 def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_latest: dict[str, Any] | None,
               today: date, seed: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Weighted mean of available components; each is 0-100 with 50 = your normal."""
+    """Experimental weighted mean. HRV/resting HR/load are relative to baseline;
+    sleep scores absolute duration against need and recent timing regularity.
+    Different available input sets must not be treated as one comparable series.
+    """
     components: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
     comparable = _current_series(hrv_nights, today)
@@ -366,8 +372,17 @@ def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_
 
     weight = sum(READINESS_WEIGHTS[k] for k in components)
     out: dict[str, Any] = {"components": components, "missing": missing, "weights": READINESS_WEIGHTS,
-                           "method": "weighted mean of available components, 50 = your normal; experimental",
+                           "method": "experimental weighted mean; HRV/resting HR/load relative to baseline; sleep duration against need and timing regularity",
                            "comparable_series": _series_info(_series(last)) if last else None}
+    identity = {"formula_version": READINESS_FORMULA_VERSION,
+                "input_keys": sorted(components), "comparable_series": out["comparable_series"]}
+    out.update(components_count=len(components), available_count=len(READINESS_WEIGHTS),
+               total_components=len(READINESS_WEIGHTS), effective_weight_coverage=round(weight, 6),
+               provisional=len(components) < len(READINESS_WEIGHTS) or
+                           any(c.get("provisional", False) for c in components.values()),
+               formula_version=READINESS_FORMULA_VERSION, method_identity=identity,
+               comparability_key=hashlib.sha256(json.dumps(identity, sort_keys=True,
+                   separators=(",", ":")).encode()).hexdigest())
     if len(components) < 2 or not ({"hrv", "sleep"} & set(components)):
         out.update(score=None, status="insufficient",
                    reason="Needs at least two inputs including overnight HRV or sleep")

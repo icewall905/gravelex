@@ -23,6 +23,8 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -46,18 +48,24 @@ class PlatformHealthSync(
 
     /** Start observing health data updates and app foreground events, auto-syncing to the platform. */
     fun startAutoSync(scope: CoroutineScope) {
+        // Direct export is independent of Health Connect/GMS permissions and availability.
+        scope.launch {
+            while (isActive) {
+                oxygenExport.syncIfDue()
+                delay(60_000L)
+            }
+        }
         scope.launch {
             libPebble.healthDataUpdated.collect {
+                oxygenExport.syncIfDue()
                 sync()
-                oxygenExport.syncNow()
             }
         }
         scope.launch {
             sync()
-            oxygenExport.syncNow()
             appResumed.appResumed.collect {
-                sync()
                 oxygenExport.syncNow()
+                sync()
             }
         }
     }

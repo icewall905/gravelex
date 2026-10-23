@@ -347,6 +347,99 @@ class PebbleFitOxygenExportServiceTest {
         assertEquals(2, requests)
     }
 
+    @Test
+    fun durableBackoffStopsPeriodicRequestsAndManualSuccessResetsIt() = runTest {
+        var requests = 0
+        val settings = MapSettings()
+        val row = sample(1_700_000_000L, 96, 1)
+        val client = HttpClient(MockEngine {
+            requests++
+            respond("", if (requests == 1) HttpStatusCode.InternalServerError else HttpStatusCode.OK)
+        })
+        fun service() = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { after, _ -> listOf(row).filter { it.timestamp > after } },
+            readSessions = { _, _, _, _ -> emptyList() })
+        val first = service()
+        first.saveConfiguration("https://health.example", "token")
+        assertTrue(first.syncNow().retryableFailure)
+        assertEquals(1, first.consecutiveFailures)
+        assertTrue(first.nextRetryAt > first.lastAttemptAt)
+        val restarted = service()
+        restarted.syncIfDue()
+        assertEquals(1, requests)
+        assertEquals(1, restarted.syncNow().uploaded)
+        assertEquals(0, restarted.consecutiveFailures)
+        assertEquals(0L, restarted.nextRetryAt)
+    }
+
+    @Test
+    fun fullReconciliationIsBoundedResumesAndFindsLateOldHistory() = runTest {
+        val settings = MapSettings()
+        val client = HttpClient(MockEngine { respond("", HttpStatusCode.OK) })
+        var reads = 0
+        var late = false
+        val old = sample(1_000_000_000L, 96, 1)
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { after, _ ->
+                reads++
+                if (late) listOf(old).filter { it.timestamp > after }
+                else listOf(sample(maxOf(after + 1, 1_700_000_000L), 96, 1))
+            }, readSessions = { _, _, _, _ -> emptyList() })
+        service.saveConfiguration("https://health.example", "token")
+        assertEquals(4, service.syncNow().uploaded)
+        assertEquals(4, reads)
+        assertEquals(0L, service.lastReconciliationAt)
+        val cursor = settings.getLong("pebblefit_health_scan_cursor", 0L)
+        assertTrue(cursor > old.timestamp)
+        late = true
+        service.syncNow() // EOF completes the existing scan.
+        assertTrue(service.lastReconciliationAt > 0)
+        settings.putLong("gravelex_export_reconciled", 0L) // next weekly scan due
+        assertEquals(1, service.syncNow().uploaded)
+        assertTrue(service.lastReconciliationAt > 0)
+    }
+
+    @Test
+    fun cancellationDoesNotAcknowledgeOrCompleteHistoricalScan() = runTest {
+        val settings = MapSettings()
+        val entered = CompletableDeferred<Unit>()
+        val client = HttpClient(MockEngine {
+            entered.complete(Unit)
+            awaitCancellation()
+        })
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { after, _ -> listOf(sample(1_700_000_000L, 96, 1)).filter { it.timestamp > after } },
+            readSessions = { _, _, _, _ -> emptyList() })
+        service.saveConfiguration("https://health.example", "token")
+        val run = async { service.syncNow() }
+        entered.await()
+        run.cancel()
+        run.join()
+        assertEquals(946684799L, settings.getLong("pebblefit_health_scan_cursor", 0L))
+        assertEquals(0L, settings.getLong("pebblefit_health_watermark", 0L))
+        assertEquals(0L, service.lastReconciliationAt)
+        assertFalse(service.status.value.busy)
+    }
+
+    @Test
+    fun automaticPollingAfterEofDoesNotReplayUnchangedHistory() = runTest {
+        val settings = MapSettings()
+        var requests = 0
+        val row = sample(1_700_000_000L, 95, 1)
+        val client = HttpClient(MockEngine { requests++; respond("", HttpStatusCode.OK) })
+        val service = PebbleFitOxygenExportService(settings, TestCipher(), client,
+            readHealth = { after, _ -> listOf(row).filter { it.timestamp > after } },
+            readSessions = { _, _, _, _ -> emptyList() })
+        service.saveConfiguration("https://health.example", "token")
+        service.syncIfDue()
+        assertEquals(1, requests)
+        repeat(3) {
+            settings.putLong("gravelex_export_next_poll", 0L) // next scheduled poll
+            service.syncIfDue()
+        }
+        assertEquals(1, requests)
+    }
+
     private fun overlay(start: Long, type: Int) = OverlayDataEntity(
         startTime = start, duration = 60L, type = type, steps = 0,
         restingKiloCalories = 0, activeKiloCalories = 0, distanceCm = 0, offsetUTC = 0,

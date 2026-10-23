@@ -27,11 +27,14 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.time.Clock
+import kotlin.time.TimeSource
+import kotlin.time.Duration.Companion.seconds
 
 data class OxygenExportStatus(
     val message: String = "No sync run yet.",
     val uploaded: Int = 0,
     val busy: Boolean = false,
+    val retryableFailure: Boolean = false,
 )
 
 data class OxygenExportSaveResult(val saved: Boolean, val message: String)
@@ -59,6 +62,17 @@ class PebbleFitOxygenExportService(
     val status: StateFlow<OxygenExportStatus> = _status
     private var configurationVersion = 0L
 
+    val lastAttemptAt: Long get() = settings.getLong(LAST_ATTEMPT_KEY, 0L)
+    val consecutiveFailures: Int get() = settings.getInt(FAILURES_KEY, 0)
+    val nextRetryAt: Long get() = settings.getLong(NEXT_RETRY_KEY, 0L)
+    val lastReconciliationAt: Long get() = settings.getLong(RECONCILED_KEY, 0L)
+
+    /** A foreground/manual request may bypass backoff; the periodic worker must respect it. */
+    suspend fun syncIfDue(): OxygenExportStatus {
+        if (!enabled || Clock.System.now().epochSeconds < maxOf(nextRetryAt, settings.getLong(NEXT_POLL_KEY, 0L))) return _status.value
+        return syncNow(automatic = true)
+    }
+
     val baseUrl: String get() = settings.getString(URL_KEY, DEFAULT_URL).trimEnd('/')
     val enabled: Boolean get() = settings.getBoolean("gravelex_export_enabled", false)
     val tokenConfigured: Boolean get() = settings.hasKey(TOKEN_KEY)
@@ -82,6 +96,7 @@ class PebbleFitOxygenExportService(
             if (tokenInput.isNotBlank()) tokenSetting.set(tokenInput.trim())
             if (changedServer || tokenInput.isNotBlank()) {
                 clearCursors()
+                listOf(LAST_ATTEMPT_KEY, FAILURES_KEY, NEXT_RETRY_KEY, RECONCILED_KEY, RECONCILING_KEY, CORRECTIONS_KEY, SWEEP_KEY, NEXT_POLL_KEY, SESSION_WATERMARK_TYPE_KEY).forEach(settings::remove)
                 settings.remove(LAST_UPLOAD_AT_KEY)
                 settings.remove(LAST_UPLOAD_COUNT_KEY)
             }
@@ -115,10 +130,29 @@ class PebbleFitOxygenExportService(
         catch (_: Exception) { "Connection failed. Check the URL and network." }
     }
 
-    suspend fun syncNow(): OxygenExportStatus = syncMutex.withLock {
+    suspend fun syncNow(automatic: Boolean = false): OxygenExportStatus = syncMutex.withLock {
+        // Recheck after acquiring the mutex: another trigger may have just failed
+        // or completed while this automatic request was waiting.
+        if (automatic && (!enabled || Clock.System.now().epochSeconds <
+                maxOf(nextRetryAt, settings.getLong(NEXT_POLL_KEY, 0L)))) return@withLock _status.value
         _status.value = OxygenExportStatus(message = "Syncing…", busy = true)
         try {
-            syncLocked().also { _status.value = it }
+            if (enabled) settings.putLong(LAST_ATTEMPT_KEY, Clock.System.now().epochSeconds)
+            syncLocked(automatic).also {
+                if (enabled && tokenConfigured) {
+                    if (it.retryableFailure) {
+                        val failures = (consecutiveFailures + 1).coerceAtMost(20)
+                        settings.putInt(FAILURES_KEY, failures)
+                        val delay = (60L * (1L shl (failures - 1).coerceAtMost(10))).coerceAtMost(21600L)
+                        settings.putLong(NEXT_RETRY_KEY, Clock.System.now().epochSeconds + delay)
+                    } else {
+                        settings.putLong(NEXT_POLL_KEY, Clock.System.now().epochSeconds + 60L)
+                        settings.putInt(FAILURES_KEY, 0)
+                        settings.putLong(NEXT_RETRY_KEY, 0L)
+                    }
+                }
+                _status.value = it
+            }
         } catch (e: CancellationException) {
             _status.value = OxygenExportStatus("Sync cancelled; it can be retried.")
             throw e
@@ -127,19 +161,43 @@ class PebbleFitOxygenExportService(
         }
     }
 
-    private suspend fun syncLocked(): OxygenExportStatus {
+    private suspend fun syncLocked(automatic: Boolean): OxygenExportStatus {
         if (!enabled) return OxygenExportStatus("Health data export is disabled.")
         if (!settings.hasKey(TOKEN_KEY)) return OxygenExportStatus("Add a bearer token first.")
         val config = stableConfig() ?: return OxygenExportStatus("Settings changed or token is unavailable. Try again.")
+        // Re-use durable page cursors for a weekly full reconciliation. Never declare
+        // it complete until both streams reach EOF; process death resumes the scan.
+        val due = Clock.System.now().epochSeconds - lastReconciliationAt >= RECONCILE_SECONDS
+        if (due && !settings.getBoolean(RECONCILING_KEY, false) &&
+            !settings.hasKey(HEALTH_CURSOR_KEY) && !settings.hasKey(SESSION_CURSOR_KEY)) {
+            settings.putLong(HEALTH_CURSOR_KEY, MIN_TIMESTAMP - 1L)
+            settings.putLong(SESSION_CURSOR_KEY, MIN_TIMESTAMP - 1L)
+            settings.putInt(SESSION_TYPE_CURSOR_KEY, -1)
+            settings.putBoolean(RECONCILING_KEY, true)
+            settings.putBoolean(SWEEP_KEY, true)
+        }
+        // Routine automatic polling is incremental. Only daily correction sweeps (or
+        // an explicit manual request) replay the 14-day window; weekly scans reach EOF.
+        val correctionsDue = Clock.System.now().epochSeconds - settings.getLong(CORRECTIONS_KEY, 0L) >= 86400L
+        if (!settings.hasKey(HEALTH_CURSOR_KEY) && !settings.hasKey(SESSION_CURSOR_KEY) &&
+            (correctionsDue || !automatic)) {
+            settings.putLong(HEALTH_CURSOR_KEY, (settings.getLong(HEALTH_WATERMARK_KEY, 0L) - LOOKBACK_SECONDS).coerceAtLeast(0L))
+            settings.putLong(SESSION_CURSOR_KEY, (settings.getLong(SESSION_WATERMARK_KEY, 0L) - LOOKBACK_SECONDS).coerceAtLeast(0L))
+            settings.putInt(SESSION_TYPE_CURSOR_KEY, -1)
+            settings.putBoolean(SWEEP_KEY, true)
+        }
+        val started = TimeSource.Monotonic.markNow()
+        var pages = 0
         var healthWatermark = settings.getLong(HEALTH_WATERMARK_KEY, 0L)
         var sessionWatermark = settings.getLong(SESSION_WATERMARK_KEY, 0L)
-        var healthCursor = settings.getLong(HEALTH_CURSOR_KEY, (healthWatermark - LOOKBACK_SECONDS).coerceAtLeast(0L))
-        var sessionCursor = settings.getLong(SESSION_CURSOR_KEY, (sessionWatermark - LOOKBACK_SECONDS).coerceAtLeast(0L))
-        var sessionTypeCursor = settings.getInt(SESSION_TYPE_CURSOR_KEY, -1)
+        var healthCursor = settings.getLong(HEALTH_CURSOR_KEY, healthWatermark)
+        var sessionCursor = settings.getLong(SESSION_CURSOR_KEY, sessionWatermark)
+        var sessionTypeCursor = settings.getInt(SESSION_TYPE_CURSOR_KEY, settings.getInt(SESSION_WATERMARK_TYPE_KEY, -1))
         var uploaded = 0
         var skipped = 0
         return try {
-            while (true) {
+            while (pages < MAX_PAGES_PER_RUN && started.elapsedNow() < 60.seconds) {
+                pages++
                 val now = Clock.System.now().epochSeconds
                 // Scan boundaries come from raw database pages, so rejected records cannot
                 // hide later valid records. Acknowledgment still precedes cursor writes.
@@ -149,6 +207,14 @@ class PebbleFitOxygenExportService(
                     .filter { it.startTime > sessionCursor || (it.startTime == sessionCursor && it.type > sessionTypeCursor) }
                     .sortedWith(compareBy({ it.startTime }, { it.type })).take(MAX_SESSIONS)
                 if (healthPage.isEmpty() && sessionPage.isEmpty()) {
+                    if (settings.getBoolean(RECONCILING_KEY, false)) {
+                        settings.putLong(RECONCILED_KEY, Clock.System.now().epochSeconds)
+                        settings.putBoolean(RECONCILING_KEY, false)
+                    }
+                    if (settings.getBoolean(SWEEP_KEY, false)) {
+                        settings.putLong(CORRECTIONS_KEY, Clock.System.now().epochSeconds)
+                        settings.putBoolean(SWEEP_KEY, false)
+                    }
                     settings.remove(HEALTH_CURSOR_KEY)
                     settings.remove(SESSION_CURSOR_KEY)
                     settings.remove(SESSION_TYPE_CURSOR_KEY)
@@ -183,7 +249,7 @@ class PebbleFitOxygenExportService(
                         setBody(body)
                     }
                     if (configurationVersion != config.version) return OxygenExportStatus("Settings changed; upload can be retried.", uploaded)
-                    if (response.status.value !in 200..299) return OxygenExportStatus("Upload failed (HTTP ${response.status.value}); will retry.", uploaded)
+                    if (response.status.value !in 200..299) return OxygenExportStatus("Upload failed (HTTP ${response.status.value}); will retry.", uploaded, retryableFailure = true)
                     settings.putLong(LAST_UPLOAD_AT_KEY, Clock.System.now().epochSeconds)
                     settings.putInt(LAST_UPLOAD_COUNT_KEY, rows.size + sessions.size)
                 }
@@ -197,18 +263,26 @@ class PebbleFitOxygenExportService(
                     val last = sessionPage.last()
                     sessionCursor = last.startTime
                     sessionTypeCursor = last.type
-                    if (sessions.isNotEmpty()) sessionWatermark = maxOf(sessionWatermark, sessions.maxOf { it.startTime })
+                    if (sessions.isNotEmpty()) {
+                        val newest = sessions.maxWith(compareBy({ it.startTime }, { it.type }))
+                        if (newest.startTime > sessionWatermark) {
+                            sessionWatermark = newest.startTime
+                            settings.putInt(SESSION_WATERMARK_TYPE_KEY, newest.type)
+                        } else if (newest.startTime == sessionWatermark) {
+                            settings.putInt(SESSION_WATERMARK_TYPE_KEY, maxOf(settings.getInt(SESSION_WATERMARK_TYPE_KEY, -1), newest.type))
+                        }
+                    }
                     settings.putLong(SESSION_WATERMARK_KEY, sessionWatermark)
                     settings.putLong(SESSION_CURSOR_KEY, sessionCursor)
                     settings.putInt(SESSION_TYPE_CURSOR_KEY, sessionTypeCursor)
                 }
                 uploaded += rows.size + sessions.size
             }
-            @Suppress("UNREACHABLE_CODE") OxygenExportStatus("Sync complete.", uploaded)
-        } catch (_: HttpRequestTimeoutException) { OxygenExportStatus("Upload timed out; will retry.", uploaded) }
-        catch (_: TimeoutCancellationException) { OxygenExportStatus("Upload timed out; will retry.", uploaded) }
+            OxygenExportStatus("Uploaded $uploaded records; more history remains for the next run.", uploaded)
+        } catch (_: HttpRequestTimeoutException) { OxygenExportStatus("Upload timed out; will retry.", uploaded, retryableFailure = true) }
+        catch (_: TimeoutCancellationException) { OxygenExportStatus("Upload timed out; will retry.", uploaded, retryableFailure = true) }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { OxygenExportStatus("Upload failed; will retry.", uploaded) }
+        catch (_: Exception) { OxygenExportStatus("Upload failed; will retry.", uploaded, retryableFailure = true) }
     }
 
     private fun stableConfig(): ExportConfig? {
@@ -232,6 +306,17 @@ class PebbleFitOxygenExportService(
     }
 
     private companion object {
+        const val NEXT_POLL_KEY = "gravelex_export_next_poll"
+        const val SWEEP_KEY = "gravelex_export_sweeping"
+        const val CORRECTIONS_KEY = "gravelex_export_corrections"
+        const val SESSION_WATERMARK_TYPE_KEY = "gravelex_session_watermark_type"
+        const val LAST_ATTEMPT_KEY = "gravelex_export_last_attempt"
+        const val FAILURES_KEY = "gravelex_export_failures"
+        const val NEXT_RETRY_KEY = "gravelex_export_next_retry"
+        const val RECONCILED_KEY = "gravelex_export_reconciled"
+        const val RECONCILING_KEY = "gravelex_export_reconciling"
+        const val RECONCILE_SECONDS = 7L * 86400L
+        const val MAX_PAGES_PER_RUN = 4
         const val URL_KEY = "pebblefit_oxygen_url"
         private const val LAST_UPLOAD_AT_KEY = "gravelex_last_upload_at"
         private const val LAST_UPLOAD_COUNT_KEY = "gravelex_last_upload_count"
