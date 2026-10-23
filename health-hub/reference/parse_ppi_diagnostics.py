@@ -34,7 +34,7 @@ RANGES = {
     "rid": (0, U32_MAX), "frame": (0, U32_MAX),
     "ticks": (0, U32_MAX), "count": (-(2**31), 2**31 - 1),
     "confidence": (-(2**31), 2**31 - 1), "wear": (0, 1),
-    "index": (0, 3), "ppi": (-(2**31), 2**31 - 1), "quality": (0, 255),
+    "index": (0, 3), "ppi": (-(2**31), 2**31 - 1), "quality": (-1, 255),
     "accepted": (0, 1), "skip": (0, 4),
 }
 

@@ -118,6 +118,18 @@ def test_off_wrist_result_seeds_only_slot_zero() -> None:
     assert [(g["rid"], g["index"]) for g in result["groups"]] == [(7, 0)]
 
 
+def test_off_wrist_quality_minus_one_is_valid_across_delivery_stages() -> None:
+    text = "\n".join([
+        line("result").replace("count=2", "count=1").replace("wear=1", "wear=0"),
+        line("interval").replace("quality=2", "quality=-1"),
+        line("manager").replace("quality=2", "quality=-1"),
+        line("app").replace("quality=2", "quality=-1"),
+    ])
+    result = parse_diagnostics(text)
+    assert not result["malformed_ppi_diag"]
+    assert all(record["quality"] == -1 for record in result["matched_lines"] if "quality" in record)
+
+
 def test_uint32_boundaries_are_accepted() -> None:
     text = line("result", rid=4294967295, ticks=4294967295).replace("frame=22", "frame=4294967295")
     result = parse_diagnostics(text)
