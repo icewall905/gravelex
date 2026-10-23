@@ -97,3 +97,8 @@ The activity module also uses `CONFIG_SERVICE_ACTIVITY_LOG_LEVEL_INFO=y`: its ex
 - Sixteen parser/transformer tests and isolated driver checks in both option states pass. The full target build was performed with diagnostics enabled; a full diagnostics-disabled firmware build has not been repeated.
 - Private artifacts, hashes, configuration and build logs are retained under the ignored `health-hub/reference-data/firmware-diagnostics-20261023/`. No binary/vendor sources are published with this patch package.
 - No flashing or hardware validation was performed.
+
+
+## Preflight status
+
+See [PREFLIGHT.md](PREFLIGHT.md) for the latest offline verification, dual-slot builds, validated rollback artifacts and remaining live-device prerequisites. Offline preparation is complete; the disconnected watch has not been cleared to flash. `verify_pbz.py` provides read-only archive/size/CRC checks using `--pebbleos-source PATH BUNDLE...`; it does not check a connected watch. `decode_ppi_logs.py` decodes PPI-only hashed records using the exact matching build dictionary.
