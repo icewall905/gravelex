@@ -222,7 +222,7 @@ static void tick(struct tm *tm,TimeUnits changed) {
   if(seconds==8 && !accel_callbacks){accel_data_service_unsubscribe();accel_raw_data_service_subscribe(25,on_motion);accel_rate_result=accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);}
   if(seconds>=180){finish();return;}
   if(quiet)return;
-  snprintf(display,sizeof(display),"Rest your arm\nBreathe normally\n%lu seconds left\n%u pulse intervals\nRaw diagnostic only",(unsigned long)(180-seconds),count);
+  snprintf(display,sizeof(display),"Rest your arm\nBreathe normally\n%lu:%02lu remaining\n%u pulse intervals\nRaw diagnostic only",(unsigned long)((180-seconds)/60),(unsigned long)((180-seconds)%60),count);
   text_layer_set_text(text,display);
 }
 static void select_click(ClickRecognizerRef ref,void *context){quiet=false;window_set_background_color(window,GColorWhite);text_layer_set_background_color(text,GColorWhite);text_layer_set_text_color(text,GColorBlack);if(night_watchdog){app_timer_cancel(night_watchdog);night_watchdog=NULL;}start();}
