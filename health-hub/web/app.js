@@ -723,6 +723,7 @@ function workoutRow(w) {
     h('span', { class: 's' }, sub),
     h('span', { class: 'acts' },
       h('button', { type: 'button', class: 'btn small', onclick: () => openRpe(w), 'aria-label': isNum(w.rpe) ? `Effort ${w.rpe} of 10, change` : 'Add effort' }, isNum(w.rpe) ? `Effort ${fmt(w.rpe)}` : 'Add effort'),
+      w.id ? h('button',{type:'button',class:'btn small',onclick:()=>openWorkoutEdit(w)},'Edit') : null,
       w.id ? h('button', { type: 'button', class: 'btn small', onclick: () => toggleIgnore(w) }, w.ignored ? 'Restore' : 'Exclude') : null));
 }
 
@@ -776,7 +777,7 @@ function watchHero() {
       h('div', null,
         h('p', { class: 'watch-score-label' }, h('a', { class: 'card-link', href: '#d/ready' }, 'Readiness')),
         h('p', { class: 'watch-score-word' }, readinessWord(score)),
-        h('p', { class: 'watch-reason' }, isNum(score) ? 'Compared with your own normal, where 50 is a typical day.' : (r.reason || 'Not enough inputs yet.')))),
+        h('p', { class: 'watch-reason' }, isNum(score) ? 'Experimental summary of the available recovery inputs; check coverage and missing inputs below.' : (r.reason || 'Not enough inputs yet.')))),
     h('dl', { class: 'watch-vitals' },
       vital('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null),
       vital('heart', 'Resting HR', isLastNight(n) && isNum(n.resting_hr) ? `${fmt(n.resting_hr)} bpm` : null),
@@ -1343,12 +1344,61 @@ function rpeScale(initial, onPick) {
   return [h('div', { class: 'rpe', role: 'group', 'aria-label': 'Perceived effort from 1 to 10' }, btns), h('div', { class: 'rpe-words', 'aria-hidden': 'true' }, h('span', null, 'Very easy'), h('span', null, 'Maximal'))];
 }
 
+function workoutRevisionRequest(w, values) {
+  return {...values, operation_id:crypto.randomUUID(), expected_revisions:{[w.id]:w.edit_revision ?? 0},expected_fingerprints:{[w.id]:w.edit_fingerprint}};
+}
+function openWorkoutEdit(w) {
+  const localTime=ts=>{const date=new Date(ts*1000);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,19);};
+  const kind=h('input',{type:'text',maxlength:40,value:w.kind || 'workout'});
+  const start=h('input',{type:'datetime-local',step:1,value:localTime(w.start),required:true});
+  const minutes=h('input',{type:'number',min:1,max:1440,step:'any',value:w.seconds/60,required:true});
+  const split=h('input',{type:'datetime-local',step:1,value:localTime(w.start+Math.floor(w.seconds/2)),required:true});
+  const candidates=(D().workouts || []).filter(other=>other.id!==w.id && !other.ignored && !w.ignored && other.start<=w.start+w.seconds && other.start+other.seconds>=w.start);
+  const merge=h('select',{'aria-label':'Recording to merge'},h('option',{value:''},'Choose an overlapping or adjacent recording'),candidates.map(other=>h('option',{value:other.id},`${cap(other.kind)} · ${fmtDateTime(other.start)} · ${Math.round(other.seconds/60)} min`)));
+  const error=h('p',{class:'sheet-error',role:'alert'});
+  const run=async (button,body)=>{
+    button.disabled=true;error.textContent='';
+    try {await api('api/workout-edits','POST',body);closeSheet();toast('Correction saved; review affected training dates again');await load(true);}
+    catch(failure) {error.textContent=failure.message+' Refresh before retrying if this session changed.';button.disabled=false;}
+  };
+  const save=h('button',{type:'submit',class:'btn primary'},'Save correction');
+  const form=h('form',{onsubmit:event=>{event.preventDefault();run(save,workoutRevisionRequest(w,{operation:'edit',id:w.id,type:kind.value.trim(),start:Math.floor(new Date(start.value).getTime()/1000),end:Math.floor(new Date(start.value).getTime()/1000)+Math.round(Number(minutes.value)*60)}));}},
+    h('div',{class:'form-grid'},h('label',{class:'field'},'Activity',kind),h('label',{class:'field'},'Started (this browser’s local time)',start),h('label',{class:'field'},'Minutes',minutes)),save);
+  const splitButton=h('button',{type:'button',class:'btn',onclick:event=>run(event.currentTarget,workoutRevisionRequest(w,{operation:'split',id:w.id,at:Math.floor(new Date(split.value).getTime()/1000)}))},'Split recording');
+  const mergeButton=h('button',{type:'button',class:'btn',onclick:event=>{
+    const other=candidates.find(item=>item.id===merge.value);
+    if(!other){error.textContent='Choose another recording to merge.';return;}
+    run(event.currentTarget,{operation:'merge',operation_id:crypto.randomUUID(),ids:[w.id,other.id],keeper_id:w.id,expected_revisions:{[w.id]:w.edit_revision ?? 0,[other.id]:other.edit_revision ?? 0},expected_fingerprints:{[w.id]:w.edit_fingerprint,[other.id]:other.edit_fingerprint}});
+  }},'Merge into this recording');
+  openSheet(h('h2',null,'Correct workout'),h('p',null,'Original imports are preserved. Corrections recalculate heart-rate coverage and clear affected day confirmations. Load belongs to the local start date; crossing midnight does not split it automatically.'),form,
+    h('details',{class:'info'},h('summary',null,'Split or merge'),h('label',{class:'field'},'Split at (this browser’s local time)',split),splitButton,h('p',null,'A merge uses the combined continuous time span and keeps this recording’s activity and effort. The other recording is excluded.'),merge,mergeButton),error,
+    h('div',{class:'btn-row'},h('button',{type:'button',class:'btn',onclick:()=>openWorkoutAudit(w)},'Correction history'),h('button',{type:'button',class:'btn',onclick:closeSheet},'Cancel')));
+}
+async function openWorkoutAudit(w) {
+  const output=h('div',null,'Loading correction history…');
+  openSheet(h('h2',null,'Workout correction history'),output,h('button',{type:'button',class:'btn',onclick:closeSheet},'Close'));
+  try {
+    const response=await api(`api/workout-edits?id=${encodeURIComponent(w.id)}`);
+    const rows=response.history || [];
+    const describe=record=>`${cap(record.kind)} · ${fmtDateTime(record.start)} · ${fmt(record.seconds/60,1)} min · effort ${fmt(record.rpe)}${record.ignored ? ' · excluded' : ''}`;
+    output.replaceChildren(rows.length ? h('ul',{class:'list'},rows.map(row=>{
+      const undo=h('button',{type:'button',class:'btn small',onclick:async()=>{
+        undo.disabled=true;
+        try {await api('api/workout-edits','POST',{operation:'undo',operation_id:crypto.randomUUID(),target_operation_id:row.operation_id,expected_revisions:Object.fromEntries(row.after.map(record=>[record.id,record.edit_revision])),expected_fingerprints:Object.fromEntries(row.after.map(record=>[record.id,record.edit_fingerprint]))});closeSheet();toast('Correction reversed; review affected dates again');await load(true);}
+        catch(failure){toast(failure.message,true);undo.disabled=false;}
+      }},'Undo this correction');
+      return h('li',null,h('span',{class:'t'},`${cap(row.operation)} · ${fmtDateTime(row.observed_at)}`),
+        h('p',null,'Before: ',row.before.map(describe).join('; ')),h('p',null,'After: ',row.after.map(describe).join('; ')),undo);
+    })) : h('p',null,'No corrections have been saved for this recording.'));
+  } catch(failure) {output.textContent=failure.message;}
+}
+
 function openRpe(w) {
   let val = isNum(w.rpe) ? Math.round(w.rpe) : null;
   const err = h('p', { class: 'sheet-error', role: 'alert', hidden: true });
   const save = h('button', { type: 'button', class: 'btn primary', disabled: val == null, onclick: async () => {
     save.disabled = true; err.hidden = true;
-    try { await api('api/workouts', 'POST', { id: w.id, start: w.start, seconds: w.seconds, rpe: val }); closeSheet(); toast('Effort saved'); load(true); }
+    try { await api('api/workouts', 'POST', workoutRevisionRequest(w,{id:w.id,rpe:val})); closeSheet(); toast('Effort saved'); load(true); }
     catch (x) { err.textContent = x.message; err.hidden = false; save.disabled = false; }
   } }, 'Save effort');
   openSheet(h('h2', null, 'How hard was it?'),
@@ -1358,11 +1408,12 @@ function openRpe(w) {
 }
 
 async function toggleIgnore(w) {
-  try { await api('api/workouts', 'POST', { id: w.id, ignored: !w.ignored }); toast(w.ignored ? 'Workout restored' : 'Workout excluded'); load(true); }
+  try { await api('api/workouts', 'POST', workoutRevisionRequest(w,{id:w.id,ignored:!w.ignored})); toast(w.ignored ? 'Workout restored' : 'Workout excluded'); load(true); }
   catch (x) { toast(x.message, true); }
 }
 
 function openWorkoutForm() {
+  const operation_id=crypto.randomUUID();
   const now = new Date(); now.setMinutes(now.getMinutes() - 60, 0, 0);
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   let rpe = null;
@@ -1377,7 +1428,7 @@ function openWorkoutForm() {
     if (!isNum(ts)) { err.textContent = 'Enter when the workout started.'; err.hidden = false; return; }
     if (rpe == null) { err.textContent = 'Pick an effort from 1 to 10.'; err.hidden = false; return; }
     save.disabled = true;
-    try { await api('api/workouts', 'POST', { type: type.value.trim() || 'workout', start: ts, seconds: Math.round(Number(mins.value) * 60), rpe }); closeSheet(); toast('Workout logged'); load(true); }
+    try { await api('api/workouts', 'POST', {operation_id, type: type.value.trim() || 'workout', start: ts, seconds: Math.round(Number(mins.value) * 60), rpe }); closeSheet(); toast('Workout logged'); load(true); }
     catch (x) { err.textContent = x.message; err.hidden = false; save.disabled = false; }
   } },
   h('h2', null, 'Log a workout'),

@@ -17,6 +17,8 @@ import collection_health
 import provenance
 import training_ledger
 import readiness_history
+import workout_edits
+import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -146,8 +148,13 @@ def ingest(data):
                 db.execute("""INSERT INTO sleep_sessions(id,start,seconds,kind) VALUES(?,?,?,?)
                   ON CONFLICT(id) DO UPDATE SET seconds=excluded.seconds""", (ident, start, seconds, kind))
                 continue
+            before=next((row for row in workout_edits.effective_rows(db) if row['id']==ident),None)
             db.execute("""INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,NULL,'pebble')
               ON CONFLICT(id) DO UPDATE SET seconds=excluded.seconds""", (ident, start, seconds, kind))
+            after=next(row for row in workout_edits.effective_rows(db) if row['id']==ident)
+            keys=('start','seconds','kind','rpe','ignored')
+            if before is None or any(before.get(key)!=after.get(key) for key in keys):
+                invalidate_workout_days(db,[row for row in (before,after) if row is not None])
     return ts
 
 
@@ -171,28 +178,54 @@ def profile(data=None):
     return {'hr_max':values.get('hr_max'), 'load_method':values.get('load_method','hr')}
 
 
-def add_workout(data):
-    if 'ignored' in data:
-        if not isinstance(data['ignored'],bool):raise ValueError('ignored must be true or false')
-        with connect() as db:
-            result=db.execute('UPDATE workouts SET ignored=? WHERE id=?',(int(data['ignored']),str(data.get('id',''))))
-            if not result.rowcount:raise ValueError('Workout not found')
-        return data['id']
-    now = int(time.time())
-    rpe = float(number(data.get("rpe"), 1, 10, "Perceived effort"))
-    if data.get("id"):
-        # Rating an existing (possibly watch-detected) workout: its own start
-        # and duration stand, so they are not re-validated here.
-        with connect() as db:
-            if not db.execute("UPDATE workouts SET rpe=? WHERE id=?", (rpe, str(data["id"])[:120])).rowcount:
-                raise ValueError("Workout not found")
-        return str(data["id"])[:120]
-    start = int(number(data.get("start"), 946684800, now + 300, "Workout start"))
-    seconds = int(number(data.get("seconds"), 60, 86400, "Duration"))
-    ident = f"manual:{start}"
+def invalidate_workout_days(db, rows):
+    for row in rows:
+        first=datetime.fromtimestamp(row['start'],TZ).date()
+        last=datetime.fromtimestamp(row['start']+row['seconds']-1,TZ).date()
+        for offset in range((last-first).days+1):
+            db.execute('DELETE FROM day_confirmations WHERE day=?',(str(first+timedelta(days=offset)),))
+
+
+def edit_workouts(data):
     with connect() as db:
-        db.execute("INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,?,'manual') ON CONFLICT(id) DO UPDATE SET rpe=excluded.rpe,seconds=excluded.seconds",
-                   (ident, start, seconds, str(data.get("type", "workout"))[:40], rpe))
+        db.execute('BEGIN IMMEDIATE')
+        return workout_edits.apply_operation(db,data,observed_at=int(time.time()))
+
+
+def workout_edit_history(ident):
+    with connect() as db:
+        return workout_edits.history(db,ident)
+
+
+def add_workout(data):
+    if data.get('id'):
+        # Existing sessions are corrected through audited overlays, never raw imports.
+        values={key:data[key] for key in ('rpe','ignored') if key in data}
+        if not values:raise ValueError('Choose effort or exclusion to change')
+        edit_workouts(dict(values,id=data['id'],operation='edit',
+            operation_id=data.get('operation_id'),expected_revisions=data.get('expected_revisions'),expected_fingerprints=data.get('expected_fingerprints')))
+        return str(data['id'])
+    now=int(time.time())
+    rpe=float(number(data.get('rpe'),1,10,'Perceived effort'))
+    start=int(number(data.get('start'),946684800,now+300,'Workout start'))
+    seconds=int(number(data.get('seconds'),60,86400,'Duration'))
+    operation_id=str(data.get('operation_id') or uuid.uuid4())
+    if len(operation_id)>80:raise ValueError('Operation ID is too long')
+    ident='manual:'+operation_id
+    kind=str(data.get('type','workout')).strip()[:40] or 'workout'
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        existing=db.execute('SELECT * FROM workouts WHERE id=?',(ident,)).fetchone()
+        if existing:
+            if any(existing[key]!=value for key,value in [('start',start),('seconds',seconds),('rpe',rpe),('kind',kind)]):
+                raise ValueError('Operation ID already used for another workout')
+            return ident
+        provenance.record_observation(db,'manual_workout','manual',start,now,{'id':ident,'start':start,'seconds':seconds,'kind':kind,'rpe':rpe})
+        db.execute("INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,?,'manual')",(ident,start,seconds,kind,rpe))
+        # New evidence requires another explicit review of the affected calendar dates.
+        first=datetime.fromtimestamp(start,TZ).date();last=datetime.fromtimestamp(start+seconds-1,TZ).date()
+        for ago in range((last-first).days+1):
+            db.execute('DELETE FROM day_confirmations WHERE day=?',(str(first+timedelta(days=ago)),))
     return ident
 
 
@@ -271,7 +304,7 @@ def summary(days=42):
     with connect() as db:
         latest = db.execute("SELECT * FROM reports WHERE source NOT IN ('phone-history','watch-history','gravelex') ORDER BY ts DESC LIMIT 1").fetchone()
         minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? ORDER BY ts", (since,))]
-        workouts = [dict(r) for r in db.execute("SELECT * FROM workouts ORDER BY start DESC")]
+        workouts = workout_edits.effective_rows(db)
         training_minutes = {}
         for workout in workouts:
             for row in db.execute("SELECT * FROM minutes WHERE ts>=? AND ts<?", (workout["start"],workout["start"]+workout["seconds"])):
@@ -410,7 +443,7 @@ def confirm_days_batch(data):
     today=datetime.now(TZ).date()
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        workouts=[dict(r) for r in db.execute('SELECT * FROM workouts ORDER BY start')]
+        workouts=workout_edits.effective_rows(db)
         minutes={}
         for workout in workouts:
             for row in db.execute('SELECT * FROM minutes WHERE ts>=? AND ts<?',(workout['start'],workout['start']+workout['seconds'])):
@@ -438,7 +471,8 @@ def confirm_day(data):
     if status not in ('complete','rest','unknown'):raise ValueError('Choose complete, rest, or unknown')
     with connect() as db:
         if status=='rest':
-            for row in db.execute('SELECT start FROM workouts WHERE ignored=0'):
+            for row in workout_edits.effective_rows(db):
+                if row.get('ignored'):continue
                 if datetime.fromtimestamp(row['start'],TZ).date()==day:raise ValueError('This day has workouts. Confirm it complete or exclude duplicate sessions first.')
         if status=='unknown':db.execute('DELETE FROM day_confirmations WHERE day=?',(str(day),))
         else:db.execute('INSERT OR REPLACE INTO day_confirmations VALUES(?,?,?)',(str(day),status,int(time.time())))

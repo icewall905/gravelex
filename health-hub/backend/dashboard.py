@@ -21,6 +21,7 @@ import fitness
 import oxygen
 import provenance
 import watch_api
+import workout_edits
 
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent / "web"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -154,10 +155,27 @@ def api_profile():
         return {"error": str(error)}, 400
 
 
+@app.get("/api/workout-edits")
+def api_workout_history():
+    return {"history":fitness.workout_edit_history(request.args.get('id',''))}
+
+
+@app.post("/api/workout-edits")
+def api_workout_edit():
+    try:
+        return fitness.edit_workouts(_json_body())
+    except workout_edits.ConflictError as error:
+        return {"error":str(error)},409
+    except (ValueError,TypeError,KeyError) as error:
+        return {"error":str(error)},400
+
+
 @app.post("/api/workouts")
 def api_workouts():
     try:
         return {"id": fitness.add_workout(_json_body())}, 201
+    except workout_edits.ConflictError as error:
+        return {"error":str(error)},409
     except (ValueError, TypeError) as error:
         return {"error": str(error)}, 400
 

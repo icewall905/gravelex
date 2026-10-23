@@ -49,3 +49,11 @@ Phone exports persist retries/backoff and resume bounded acknowledged pages. Aut
 The local BLE reference recorder under reference/ retains raw standard Heart Rate Measurement packets and RR intervals in private exclusive mode600 files. It requires no Garmin/Google service. A known paired Garmin HRM Pro-series strap has been identified on the user's computer, but actual RR capability and aligned optical/reference comparison still require an awake worn strap. No calibration threshold or serious-HRV accuracy claim follows from decoder tests.
 
 Hosted release diagnosis: the workflow requested nonexistent platforms;android-37; the available SDK package is platforms;android-37.0. The package correction still needs a successful tagged CI release. See FITNESS-ROADMAP.md for pending delivery and field gates.
+
+## Release and workout correction follow-up
+
+GitHub run 39900308885 successfully tested, assembled, signed, verified and published gravelex-v0.1.3 at commit 79ad3057, Android code2525. The SDK-name correction is proven in hosted CI. Obtainium/installed-upgrade field verification remains separate. The signing key never reached the hub.
+
+F09 audited workout corrections now have source and regression coverage: edit/split/merge/undo, immutable audit, effective-record concurrency fingerprints, unique manual identities, and exact replay versus changed-import completeness invalidation. All156 backend/reference tests pass. See WORKOUT-CORRECTIONS.md for storage/API and remaining source-identity limits. Deployment and UI acceptance are tracked in the roadmap.
+
+F09 final acceptance: independent review approved. An isolated browser test saved a correction, displayed readable before/after and successfully undid it while preserving duration and effort. Production database/source backups and rollback images were retained before deployment; no test workout was inserted into production. Shell cache v18.
