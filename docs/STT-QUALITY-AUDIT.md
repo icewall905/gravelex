@@ -2,6 +2,10 @@
 
 Investigated 2026-10-24. Read-only inspection; no STT configuration changed.
 
+## Test interpretation update
+
+The user subsequently clarified that the supplied test phrase was not read verbatim and the returned transcription was almost correct. The intended reference is therefore not valid ground truth: differences against it cannot establish recognition errors or a microphone/codec fault. Replays of the same audio differed between recognition settings, and simple amplification did not establish an improvement. STT configuration remains unchanged. A controlled comparison would require an exact spoken reference.
+
 ## Current conclusion
 
 The watch-specific server path has materially different recognition settings from the inspected HA Wyoming path. This is a concrete software suspect, not proof of the cause of a particular bad transcript. Watch capture is also a credible suspect, supported by historical on-device testing, but not yet measured on this user's current firmware. The installed phone's active STT URL/engine is unconfirmed: no ADB device was connected.

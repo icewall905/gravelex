@@ -2,6 +2,10 @@
 
 Audit date: 2026-10-22. Scope: GravelEx Android fork, Pebble Time 2/watch apps, portable `health-hub`, HA, and contextual LLM output. This is a living engineering backlog, not a claim that the present system matches Garmin. Checkboxes mean implementation and review complete in source; the delivery ledger separately records deployment and field validation.
 
+## Related device investigation
+
+- [ ] **Index 01 voice capture:** implement the opt-in ring-to-Notebook path only after auditing the vendor BLE transfer library and pairing/deletion semantics. See [feasibility and staged tasks](../docs/INDEX-01-FEASIBILITY.md). Current builds cannot pair or collect ring recordings.
+
 ## Deferred dashboard features
 
 - [ ] **Breathing rate — restore only when useful.** Removed the empty breathing widget from Today, Sleep, Recovery and the daily overview. Retain collection and analysis code for future work. Follow [PebbleOS #2558](https://github.com/coredevices/PebbleOS/issues/2558) for consecutive PPI timing, quality and gap metadata. Before restoring the widget, demonstrate a usable timed signal, validate a respiration estimator against independently counted breaths or a respiratory reference, and label estimates with confidence, date and missing-data limits. More batched recordings alone do not meet this requirement.
