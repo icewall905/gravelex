@@ -11,7 +11,7 @@ No Google services, MQTT broker or legacy Pebble integration is required for the
 
 1. In PH, sign in to the person whose data you want. Under **More → API access**, create a token with **summary:read**. Copy it once. Use a separate token for each household member; do not use a phone upload token or PH password.
 2. In Home Assistant, open **HACS → ⋮ → Custom repositories**. Add `https://github.com/icewall905/gravelex`, category **Integration**.
-3. Find **GravelEx Health** and download it. Select **master** if HACS offers an older Android release tag: tags predating this integration do not contain `custom_components/gravelex`. The repository's default branch contains both the extended Android app and PH.
+3. Find **GravelEx Health** and download it. The first compatible integration release is **health-v0.1.0**. If HACS still reports that `gravelex-v0.1.3` has a non-compliant structure, refresh HACS and retry adding the repository; that older Android tag predates the integration. The repository's default branch contains both the extended Android app and PH.
 4. Restart Home Assistant, then open **Settings → Devices & services → Add integration → GravelEx Health**.
 5. Enter the PH base URL (for example, `https://health.example.org`, without `/api/v1/summary`), the read-only token, a display name, and polling interval. Default polling is every five minutes; minimum one minute.
 6. Repeat for another person with that person's token. Each entry is bound to the account ID returned by PH. Renewing a token cannot silently switch an entry to another household member.
@@ -74,3 +74,7 @@ PYTHONPATH=. /tmp/gravelex-ha-tests/bin/python -m pytest -c tests/homeassistant/
 ```
 
 These tests use real Home Assistant classes and synthetic account data; they never access your live HA instance or real health records. Source-only syntax checks do not establish Supervisor installation compatibility.
+
+## Release compatibility
+
+HACS validates the most recently published regular release before offering installation. `health-v*` releases package the integration from `master`; they do not contain an Android APK and are not marked as GitHub's latest release. Android updates remain on `gravelex-v*` releases. In Obtainium, use the release-tag filter `^gravelex-v` to select Android releases explicitly. Future Android releases must also include `custom_components/gravelex` and root `hacs.json`; do not publish them from a branch that predates the integration.
