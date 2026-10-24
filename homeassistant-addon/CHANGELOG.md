@@ -1,3 +1,7 @@
+# 0.1.7
+
+- Show dated delivered-PPI variability prominently as a very rough, unvalidated HRV proxy estimate. Explain firmware timing limitations and keep it excluded from readiness and stress.
+
 # 0.1.6
 
 - Hide empty breathing widgets from dashboard pages and daily overview; retain the feature on the roadmap pending usable timing and validation.
