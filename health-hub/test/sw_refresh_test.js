@@ -19,5 +19,12 @@ async function check(fetcher,cached,options={}) {
   const sw=fs.readFileSync(__dirname+'/../web/sw.js','utf8');
   assert.ok(!sw.includes('DATA_CACHE'));
   assert.ok(sw.includes("rel.startsWith('api/') || rel.startsWith('auth/')"));
+  assert.ok(sw.includes("rel === 'login'"));
+  const redirect=await check(async()=>new Response(null,{status:302,headers:{Location:'/login'}}),'old');
+  assert.equal(redirect.status,302);
+  assert.deepEqual(redirect.writes,[]);
+  const followed=await check(async()=>{const r=new Response('sign in');Object.defineProperty(r,'redirected',{value:true});return r;},'old');
+  assert.equal(followed.body,'sign in');
+  assert.deepEqual(followed.writes,[]);
   console.log('service-worker refresh and offline-fallback tests passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

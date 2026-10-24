@@ -111,3 +111,14 @@ def test_login_stream_size_is_bounded(client):
         headers={'X-PH-Request':'1'}, environ_overrides={
             'wsgi.input':io.BytesIO(b' ' * 5000), 'CONTENT_LENGTH':'', 'wsgi.input_terminated':True})
     assert response.status_code==413
+
+
+def test_privacy_origin_requires_browser_same_origin_and_marker(client):
+    body={'username':'admin','password':'test-password-123'}
+    base={'X-PH-Request':'1','Origin':'null'}
+    for site in ('cross-site','same-site','none',''):
+        assert client.post('/auth/login',json=body,headers={**base,'Sec-Fetch-Site':site}).status_code==400
+    assert client.post('/auth/login',json=body,headers={'Origin':'null','Sec-Fetch-Site':'same-origin'}).status_code==400
+    assert client.post('/auth/login',json=body,headers={**base,'Sec-Fetch-Site':'same-origin'}).status_code==200
+    assert client.post('/auth/logout',headers={**base,'Sec-Fetch-Site':'same-origin'}).status_code==200
+    assert client.post('/auth/login',json=body,headers={'X-PH-Request':'1','Origin':'https://evil.example','Sec-Fetch-Site':'same-origin'}).status_code==400

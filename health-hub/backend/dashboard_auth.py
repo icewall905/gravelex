@@ -27,9 +27,13 @@ def install(app, web_dir):
     def csrf_ok():
         origin = request.headers.get('Origin')
         expected = os.environ.get('PUBLIC_URL','').rstrip('/') or request.host_url.rstrip('/')
+        # Privacy settings can redact Origin. Only trust that case when the
+        # browser's forbidden Sec-Fetch-Site header confirms this exact origin;
+        # the custom header remains mandatory and no CORS permission is granted.
         return (request.headers.get('X-PH-Request') == '1'
                 and request.headers.get('Sec-Fetch-Site') != 'cross-site'
-                and (not origin or origin == expected))
+                and (not origin or origin == expected
+                     or (origin == 'null' and request.headers.get('Sec-Fetch-Site') == 'same-origin')))
 
     @app.before_request
     def protect():
@@ -62,13 +66,15 @@ def install(app, web_dir):
         request.max_content_length = 4096
         if not csrf_ok() or not request.is_json or (request.content_length is not None and request.content_length > 4096):
             app.logger.warning(
-                'Login request rejected: csrf_ok=%s json=%s length_present=%s oversized=%s origin_present=%s origin_matches=%s cross_site=%s marker_present=%s',
+                'Login request rejected: csrf_ok=%s json=%s length_present=%s oversized=%s origin_present=%s origin_matches=%s cross_site=%s marker_present=%s opaque_origin=%s same_origin=%s',
                 csrf_ok(), request.is_json, request.content_length is not None,
                 request.content_length is not None and request.content_length > 4096,
                 'Origin' in request.headers,
                 request.headers.get('Origin') == (os.environ.get('PUBLIC_URL','').rstrip('/') or request.host_url.rstrip('/')),
                 request.headers.get('Sec-Fetch-Site') == 'cross-site',
-                request.headers.get('X-PH-Request') == '1')
+                request.headers.get('X-PH-Request') == '1',
+                request.headers.get('Origin') == 'null',
+                request.headers.get('Sec-Fetch-Site') == 'same-origin')
             return jsonify(error='invalid_request'), 400
         if len(request.get_data()) >= 4096:
             return jsonify(error='request_too_large'), 413

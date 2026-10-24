@@ -3,10 +3,10 @@
    API and auth requests are network-only and are never stored in Cache Storage.
    Writes (POST/PUT/…) and every other request go straight to the network. */
 'use strict';
-const VERSION = 'v26';
+const VERSION = 'v27';
 const SHELL_CACHE = 'pebble-health-shell-' + VERSION;
 const SHELL = [
-  './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
+  'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png',
   'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'
 ];
@@ -29,6 +29,8 @@ async function shell(request) {
   const cache=await caches.open(SHELL_CACHE);
   try {
     const response=await fetch(request);
+    // Login redirects must reach the browser, never an old offline dashboard.
+    if(response.redirected || (response.status >= 300 && response.status < 400)) return response;
     if(response.ok) {
       try {await cache.put(request,response.clone());} catch(cacheError) { /* Fresh network response still wins when storage is full. */ }
       return response;
@@ -58,7 +60,7 @@ self.addEventListener('fetch', event => {
   if (url.origin !== self.location.origin) return;
   const scope = new URL(self.registration.scope);
   const rel = url.pathname.slice(scope.pathname.length);
-  if (rel.startsWith('api/') || rel.startsWith('auth/')) { event.respondWith(fetch(request)); return; }
+  if (rel === 'login' || rel === 'login/' || rel.startsWith('api/') || rel.startsWith('auth/')) { event.respondWith(fetch(request)); return; }
   if (rel.startsWith('download/') || rel.startsWith('pair')) return;
   if (request.mode === 'navigate' || SHELL.includes(rel) || rel === '') event.respondWith(shell(request));
 });
