@@ -47,3 +47,7 @@ API tokens are named, scoped to `summary:read` by default, optionally granted `h
 Pairing is account and device scoped. `/pair` uses the first active device by default; clients may select `/pair?kind=history&device=<device-id>` or use `/api/pair`. Disabling a device invalidates its pairing credentials and re-enabling requires repair. Labels identify enrollment records and are not verified hardware bindings. Multiple devices aggregate into one person's history database; simultaneous-device duplicate claims are not deduplicated.
 
 For private deployments, keep the default localhost bind or use an authenticated VPN/reverse proxy. Use HTTPS for any reachable host. This API exposes health history and raw recordings; treat tokens and backups as private credentials.
+
+## Home Assistant summary coverage
+
+`/api/v1/summary` also returns `account: {id, username, display_name}` for the authenticated token owner, so clients can pin account identity across token renewal. Passwords, hashes, roles and tokens are never included. `metrics` is additive; clients should discover its keys instead of assuming a fixed count. Daily canonical-minute totals are labelled `observed_partial_day` and include `observed_minutes` and `elapsed_minutes`. Missing days are not filled. Body composition retains its measured calendar date and remains account-scoped. See the [sensor integration](integrations/homeassistant/README.md) for the complete metric categories and historical-data limits.

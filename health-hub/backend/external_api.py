@@ -11,6 +11,7 @@ import binascii
 import json
 import math
 import time
+import accounts
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -159,8 +160,10 @@ def _public_item(item: Any) -> dict[str, Any]:
 
 def _summary_metric(value: Any, unit: str | None = None, *, status: str | None = None,
                     estimated: bool = False, observed_at: Any = None) -> dict[str, Any] | None:
-    if value is None:
+    if value is None or isinstance(value,bool) or not isinstance(value,(int,float,str)):
         return None
+    if isinstance(value,(int,float)) and not math.isfinite(value): return None
+    if isinstance(value,str) and len(value)>255: return None
     result = {"value": value, "unit": unit, "status": status or "observed",
               "estimated": bool(estimated)}
     if observed_at is not None:
@@ -182,7 +185,7 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
     latest_training = training.get("latest") or {}
     hrv = summary.get("hrv") or {}
     diagnostic = hrv.get("diagnostic") or {}
-    return {
+    metrics = {
         "readiness": _summary_metric(readiness.get("score"), "score", status=readiness.get("status"), estimated=True,
                                       observed_at=readiness.get("observed_at", readiness.get("measured_at"))),
         "sleep_score": _summary_metric(sleep.get("score"), "score", status=sleep.get("status"), estimated=True, observed_at=sleep.get("night")),
@@ -194,11 +197,85 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
         "steps": _summary_metric((summary.get("latest") or {}).get("status", {}).get("steps"), "steps", observed_at=(summary.get("latest") or {}).get("ts")),
         "watch_battery": _summary_metric((summary.get("latest") or {}).get("status", {}).get("battery_percent"), "%", observed_at=(summary.get("latest") or {}).get("ts")),
         "training_load": _summary_metric(latest_training.get("load7"), "load", status=latest_training.get("status")),
-        "acute_load": _summary_metric(latest_training.get("acute"), "load", status=latest_training.get("status")),
-        "chronic_load": _summary_metric(latest_training.get("chronic"), "load", status=latest_training.get("status")),
+        "acute_load": _summary_metric(latest_training.get("acute"), "load", status=latest_training.get("status"), estimated=True),
+        "chronic_load": _summary_metric(latest_training.get("chronic"), "load", status=latest_training.get("status"), estimated=True),
         "hrv_rmssd": None,  # Stock PPI is not validated beat-to-beat HRV.
         "breathing_rate": None,  # No validated respiratory estimate yet.
     }
+
+    latest=summary.get('latest') or {}
+    snapshot=latest.get('status') or {}
+    snap_ts=latest.get('ts')
+    for key,field,unit,estimated in (
+        ('snapshot_active_seconds','active_seconds','s',False),
+        ('snapshot_distance','distance_meters','m',True),
+        ('snapshot_active_energy','active_kcal','kcal',True),
+        ('snapshot_resting_energy','resting_kcal','kcal',True),
+        ('snapshot_sleep_seconds','sleep_seconds','s',False),
+        ('snapshot_restful_sleep_seconds','sleep_restful_seconds','s',False)):
+        metrics[key]=_summary_metric(snapshot.get(field),unit,estimated=estimated,observed_at=snap_ts)
+    observed=[r for r in summary.get('observations',[]) if isinstance(r.get('hr'),(int,float)) and 0<r['hr']<=300 and r.get('ts',0)<=summary.get('now',time.time())]
+    latest_hr=max(observed,key=lambda r:r['ts']) if observed else {}
+    metrics['heart_rate']=_summary_metric(latest_hr.get('hr'),'bpm',observed_at=latest_hr.get('ts'))
+    metrics['sleep_restful_hours']=_summary_metric(sleep.get('restful_s')/3600 if sleep.get('restful_s') is not None else None,'h',observed_at=sleep.get('night'))
+    metrics['sleep_target_hours']=_summary_metric(sleep.get('need_s')/3600 if sleep.get('need_s') is not None else None,'h',status='configured')
+    metrics['sleep_regularity_sd']=_summary_metric(sleep.get('regularity_sd_min'),'min',estimated=True,observed_at=sleep.get('night'))
+    metrics['training_balance']=_summary_metric(latest_training.get('form'),'load',status=latest_training.get('status'),estimated=True)
+    metrics['training_baseline_days']=_summary_metric(latest_training.get('baseline_days'),'d',status=latest_training.get('status'))
+    metrics['training_known_days_7']=_summary_metric(latest_training.get('known_days7'),'d',status=latest_training.get('status'))
+    fit=summary.get('fitness') or {}; energy=fit.get('energy') or {}; intensity=fit.get('intensity') or {}; vo2=fit.get('vo2max') or {}
+    for key,value,unit in (
+        ('bmr_estimate',energy.get('bmr_kcal'),'kcal'),('vo2max_estimate',vo2.get('value'),'mL/kg/min'),
+        ('intensity_minutes_week',intensity.get('this_week'),'min'),('intensity_minutes_7d',intensity.get('last_7_days'),'min')):
+        metrics[key]=_summary_metric(value,unit,status='estimated',estimated=True)
+    composition=summary.get('composition') or {}
+    people=composition.get('people') or []
+    body=(people[0].get('metrics') or {}) if len(people)==1 else {}
+    for key,unit in (('body_fat_pct','%'),('muscle_mass_kg','kg'),('bone_mass_kg','kg'),('body_water_pct','%'),('fat_mass_kg','kg'),('fat_free_mass_kg','kg'),('bmi',None)):
+        item=body.get(key) or {}
+        metrics[key]=_summary_metric(item.get('value'),unit,estimated=key in ('fat_mass_kg','fat_free_mass_kg'),observed_at=item.get('date'))
+    metrics['weight_change_7d']=_summary_metric((summary.get('weight') or {}).get('change_7d_kg'),'kg',estimated=True,observed_at=weight.get('date'))
+    metrics['weight_change_28d']=_summary_metric((summary.get('weight') or {}).get('change_28d_kg'),'kg',estimated=True,observed_at=weight.get('date'))
+    metrics['oxygen_device_quality']=_summary_metric(latest_o2.get('quality'),None,status='raw_device_quality',observed_at=latest_o2.get('ts'))
+    metrics['oxygen_samples_in_range']=_summary_metric(oxygen.get('sample_count'),'samples',status='stored_observations')
+    collector=(summary.get('collection_health') or {}).get('collector') or {}
+    metrics['night_slots_missed']=_summary_metric(collector.get('missed_slots'),'slots',status='schedule_evidence')
+    for key,field in (('upload_age_seconds','sync_age_seconds'),('stored_reports','reports'),('stored_minutes_in_range','minute_records')):
+        metrics[key]=_summary_metric(summary.get(field),'s' if key=='upload_age_seconds' else 'records',status='diagnostic')
+    sessions=[w for w in summary.get('workouts',[]) if not w.get('ignored') and w.get('start',0)<=summary.get('now',time.time())]
+    last=max(sessions,key=lambda w:w['start']) if sessions else {}
+    metrics['last_workout_duration']=_summary_metric(last.get('seconds'),'s',observed_at=last.get('start'))
+    metrics['last_workout_type']=_summary_metric(last.get('kind'),None,observed_at=last.get('start'))
+    for metric in metrics.values():
+        if metric is not None: metric.setdefault('source','pebble_health')
+    return metrics
+
+
+def _daily_metrics(now):
+    """Observed canonical minute totals. Missing minutes are not filled with zero."""
+    start=int(datetime.fromtimestamp(now,fitness.TZ).replace(hour=0,minute=0,second=0,microsecond=0).timestamp())
+    with fitness.connect() as db:
+        rows=[dict(r) for r in db.execute('SELECT ts,hr,steps,active,payload FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts',(start,now))]
+    result={}
+    for key,field,unit,estimated in (
+        ('steps_today','steps','steps',False),('active_minutes_today','active','min',False),
+        ('active_energy_today','active_kcal','kcal',True),('resting_energy_today','resting_kcal','kcal',True),
+        ('distance_today','distance_m','m',True)):
+        measured=[]
+        for row in rows:
+            payload=json.loads(row['payload']) if row['payload'] else {}
+            value=row[field] if field in row else payload.get(field)
+            if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and 0<=value<=({'steps':10000,'active':1,'distance_m':100000}.get(field,10000)):
+                measured.append((row['ts'],value))
+        metric=_summary_metric(sum(value for _,value in measured) if measured else None,unit,status='observed_partial_day',estimated=estimated,observed_at=measured[-1][0] if measured else None)
+        if metric is not None:
+            metric.update(source='canonical_minutes',observed_minutes=len(measured),elapsed_minutes=max(0,(now-start)//60))
+        result[key]=metric
+    last=rows[-1] if rows else {}
+    payload=json.loads(last['payload']) if last.get('payload') else {}
+    for key,field in (('movement_intensity','intensity'),('ambient_light_intensity','light_intensity'),('watch_hr_zone','hr_zone')):
+        result[key]=_summary_metric(payload.get(field),None,status='raw_watch_units',observed_at=last.get('ts'))
+    return result
 
 
 def factory(summary_provider):
@@ -212,8 +289,13 @@ def factory(summary_provider):
             return denied
         summary = summary_provider() if callable(summary_provider) else summary_provider.summary()
         now = summary.get("now", int(time.time())) if isinstance(summary, dict) else int(time.time())
+        metrics=_metrics(summary)
+        user=accounts.current()
+        if fitness is not None and user is not None: metrics.update(_daily_metrics(now))
+        # No token, password hash or administrator privileges leave the boundary.
+        identity={key:user[key] for key in ('id','username','display_name')} if user else None
         return jsonify({"api_version": "1", "generated_at": now,
-                        "timezone": str(fitness.TZ), "metrics": _metrics(summary)})
+                        "account":identity,"timezone": str(fitness.TZ), "metrics": metrics})
 
     @bp.get("/<resource>")
     def history_route(resource):

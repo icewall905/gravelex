@@ -239,3 +239,26 @@ def test_legacy_service_key_stays_owner_bound_and_revoked(household,monkeypatch)
     assert client.get('/fitness',headers=bearer('legacy-service-key')).status_code==401
     assert second.patch('/api/admin/users/'+owner_user['id'],json={'active':True}).status_code==200
     assert client.get('/fitness',headers=bearer('legacy-service-key')).status_code==401
+
+def test_ha_summary_identity_all_metrics_and_daily_missingness(household):
+    owner=login('owner');person=member(owner);other=login('member')
+    now=int(time.time());ts=now-60
+    token=pair(other)
+    payload={'records':[{'ts':ts,'hr':81,'steps':0,'active':0,'active_kcal':1.5,'resting_kcal':0.8,'distance_m':0,'light_intensity':12,'intensity':5,'hr_zone':2}]}
+    assert dashboard.app.test_client().post('/fitness/records',headers=bearer(token),json=payload).status_code==201
+    api=other.post('/api/settings/api-tokens',json={'name':'HA'}).get_json()['token']
+    result=dashboard.app.test_client().get('/api/v1/summary',headers=bearer(api)).get_json()
+    assert result['account']['id']==person['id']
+    assert set(result['account'])=={'id','username','display_name'}
+    metrics=result['metrics'];assert len(metrics)>=50
+    assert metrics['steps_today']['value']==0
+    assert metrics['active_energy_today']['value']==1.5
+    assert metrics['active_energy_today']['estimated'] is True
+    assert metrics['active_energy_today']['status']=='observed_partial_day'
+    assert metrics['ambient_light_intensity']['value']==12
+    assert metrics['heart_rate']['value']==81
+    assert metrics['hrv_rmssd'] is None and metrics['breathing_rate'] is None
+    assert metrics['body_fat_pct'] is None
+    own_api=owner.post('/api/settings/api-tokens',json={'name':'HA owner'}).get_json()['token']
+    own=dashboard.app.test_client().get('/api/v1/summary',headers=bearer(own_api)).get_json()
+    assert own['metrics']['steps_today'] is None

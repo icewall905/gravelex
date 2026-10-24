@@ -2,7 +2,15 @@
 
 GravelEx is the de-Googled, Android-only Pebble companion app for GrapheneOS, LineageOS, and similar phones. Its Android application id is `tdgs.gravel`. Install releases from the project GitHub repository and track them with [Obtainium](https://github.com/ImranR98/Obtainium).
 
-This repository also contains the self-hosted health hub under [`health-hub/`](health-hub/). The phone exports watch data to the hub, which stores it in a private SQLite volume and serves a local PWA and read-only API. The hub works without Google services or Home Assistant.
+This is the combined project repository: the extended GravelEx phone app and the Pebble Health dashboard/backend, maintained together on `master`. The self-hosted health hub lives under [`health-hub/`](health-hub/). The phone exports watch data to the hub, which stores it in a private SQLite volume and serves a local PWA and read-only API. The hub works without Google services or Home Assistant.
+
+## Next development priorities
+
+See the actionable [fitness roadmap](health-hub/FITNESS-ROADMAP.md) for moving backend-independent health views and calculations into the phone app, phone-assisted GPS workouts, and an audit of additional watch metrics. These are planned features; the current hub remains necessary for its existing server analytics and household dashboard.
+
+## Home Assistant
+
+Install the [GravelEx Health HACS integration](health-hub/integrations/homeassistant/README.md) to create account-scoped sensors from an existing PH server. The optional [Supervisor app/add-on](homeassistant-addon/README.md) hosts PH inside Home Assistant OS; it is installed through the app/add-on store, not HACS. Both packages use this repository: `https://github.com/icewall905/gravelex`.
 
 ## Health hub quick start
 

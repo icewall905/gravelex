@@ -1,0 +1,43 @@
+name: GravelEx Health Hub
+version: "0.1.0"
+slug: gravelex_health
+description: Local-first GravelEx health hub with household accounts and a read-only API.
+url: https://github.com/icewall905/gravelex
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+stage: experimental
+init: false
+backup: cold
+ports:
+  8790/tcp: 8790
+  9998/tcp: null
+ports_description:
+  8790/tcp: Health hub web UI and API
+  9998/tcp: Optional legacy receiver
+webui: http://[HOST]:[PORT:8790]
+ingress: false
+options:
+  admin_username: admin
+  initial_password: ""
+  timezone: UTC
+  public_url: ""
+  allowed_hosts: "homeassistant.local,localhost,127.0.0.1"
+  wearer_name: ""
+  enable_briefing: false
+  llm_base_url: ""
+  llm_model: ""
+  llm_api_key: ""
+schema:
+  admin_username: str
+  initial_password: password
+  timezone: str
+  public_url: str
+  allowed_hosts: str
+  wearer_name: str
+  enable_briefing: bool
+  llm_base_url: str
+  llm_model: str
+  llm_api_key: password?

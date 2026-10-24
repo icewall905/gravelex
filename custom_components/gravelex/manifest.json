@@ -1,0 +1,13 @@
+{
+  "domain": "gravelex",
+  "name": "GravelEx Health",
+  "codeowners": [
+    "@icewall905"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/icewall905/gravelex/blob/master/health-hub/integrations/homeassistant/README.md",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.1.0",
+  "issue_tracker": "https://github.com/icewall905/gravelex/issues"
+}

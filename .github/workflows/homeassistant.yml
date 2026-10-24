@@ -1,0 +1,29 @@
+name: Home Assistant packages
+on:
+  push:
+    branches: [master, gravelex]
+    paths: ['custom_components/**', 'tests/homeassistant/**', 'homeassistant-addon/**', 'health-hub/backend/**', '.github/workflows/homeassistant.yml']
+  pull_request:
+    paths: ['custom_components/**', 'tests/homeassistant/**', 'homeassistant-addon/**', 'health-hub/backend/**', '.github/workflows/homeassistant.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: pip install -r tests/homeassistant/requirements.txt
+      - run: PYTHONPATH=. python -m pytest -c tests/homeassistant/pytest.ini tests/homeassistant -q
+  backend-and-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r health-hub/requirements.txt pytest
+      - run: python -m pytest health-hub/backend health-hub/reference health-hub/firmware-diagnostics tests/addon -q

@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect GravelEx Health",
+        "description": "Enter your PH base URL and a read-only API token with summary:read scope. Add one entry per household account.",
+        "data": {
+          "url": "GravelEx URL",
+          "token": "Read-only PH API token",
+          "title": "Name",
+          "poll_interval": "Poll interval (seconds)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Renew PH API token",
+        "data": {
+          "token": "API token"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure GravelEx Health",
+        "description": "Use a token belonging to the same PH account.",
+        "data": {
+          "url": "GravelEx URL",
+          "token": "Read-only PH API token",
+          "title": "Name",
+          "poll_interval": "Poll interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Authentication failed.",
+      "account_changed": "The token belongs to a different account.",
+      "cannot_connect": "Could not connect to GravelEx."
+    },
+    "abort": {
+      "already_configured": "This PH account is already configured.",
+      "reauth_successful": "API token updated.",
+      "reconfigure_successful": "Configuration updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polling interval",
+        "data": {
+          "poll_interval": "Poll interval (seconds)"
+        }
+      }
+    }
+  }
+}

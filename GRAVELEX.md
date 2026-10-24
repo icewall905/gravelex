@@ -4,7 +4,7 @@ Personal health-export fork of Gravel. Android release identity: `tdgs.gravel`; 
 
 ## Install and update
 
-Use the signed `GravelEx.apk` from this repository's `gravelex-v*` GitHub releases. Add `https://github.com/icewall905/pebble-app-degoogled` to Obtainium; its GitHub release source needs no secret for this public repository. Filter release titles/tags to GravelEx if older upstream releases appear, and select `GravelEx.apk`.
+Use the signed `GravelEx.apk` from this repository's `gravelex-v*` GitHub releases. Add `https://github.com/icewall905/gravelex` to Obtainium; its GitHub release source needs no secret for this public repository. Filter release titles/tags to GravelEx if older upstream releases appear, and select `GravelEx.apk`.
 
 The new package is a full watch-management app, not a companion. It can coexist with Gravel, but only one should actively connect to the watch. Stop the old app before pairing with GravelEx. Legacy third-party PebbleKit clients that hardcode the original basalt provider or signature permissions need adaptation to this new identity. Built-in watchapp JavaScript uses the app’s own bridge. Its database and settings are separate; preserve the original installation until the new pairing and history sync work.
 

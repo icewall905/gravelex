@@ -4,7 +4,7 @@ set +x
 set -euo pipefail
 umask 077
 signing_dir="${GRAVELEX_SIGNING_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gravelex/signing}"
-repo="${GRAVELEX_REPOSITORY:-icewall905/pebble-app-degoogled}"
+repo="${GRAVELEX_REPOSITORY:-icewall905/gravelex}"
 case "${1:-}" in
   generate)
     mkdir -p "$signing_dir"
