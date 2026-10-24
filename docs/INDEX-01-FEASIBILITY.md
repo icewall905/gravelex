@@ -2,6 +2,12 @@
 
 Investigation: 2026-10-24. Source inspection only; no ring paired or APK changed.
 
+## Status: deferred pending test hardware
+
+User decision, 2026-10-24: keep this on the back burner. No Index 01 is currently available for testing. The desired feature is only configurable local/self-hosted STT plus a configurable webhook for an n8n assistant, comparable to the workflow available in the Google-service-enabled app. Notebook, a built-in agent, reminders and cloud Index AI are not required for this request. The proposed Notebook adapter below is an implementation option, not a product requirement.
+
+Resume when a ring is available: audit the vendor transport, then validate pairing and reliable audio collection before adding the local STT and n8n delivery settings. Preserve raw-audio versus transcript payload choices, authentication and retry/dedup behavior. Do not ship untested ring support or change the current APK for this deferred feature.
+
 ## Result
 
 Feasible as a focused ring-to-Notebook/local-STT integration, but not a hidden switch. Current GravelEx cannot scan, pair or collect recordings from an Index 01. Re-enabling the whole official experimental module would also reintroduce dependencies intentionally removed by Gravel.

@@ -4,7 +4,7 @@ Audit date: 2026-10-22. Scope: GravelEx Android fork, Pebble Time 2/watch apps, 
 
 ## Related device investigation
 
-- [ ] **Index 01 voice capture:** implement the opt-in ring-to-Notebook path only after auditing the vendor BLE transfer library and pairing/deletion semantics. See [feasibility and staged tasks](../docs/INDEX-01-FEASIBILITY.md). Current builds cannot pair or collect ring recordings.
+- [ ] **Index 01 local STT + n8n webhook — deferred until test hardware is available.** Scope: configurable local STT and assistant webhook; Notebook/Index AI are not requirements. Audit the vendor BLE transfer library and pairing/deletion semantics before implementation. See [feasibility and staged tasks](../docs/INDEX-01-FEASIBILITY.md). Current builds cannot pair or collect ring recordings.
 
 ## Deferred dashboard features
 
