@@ -1,3 +1,9 @@
+# 0.1.3
+
+- Compact daily overview with dated metric tiles and no embedded graphs.
+- Preserve the current dashboard theme, navigation and licensed self-hosted fonts.
+- Clarify when HRV is awaiting beat-timing evidence.
+
 # 0.1.2
 
 - Preserve direct battery observations from immutable raw batches when history pages share the same upload second.
