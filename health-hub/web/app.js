@@ -1686,7 +1686,7 @@ function route() {
 }
 
 function renderNav(active) {
-  const mk = bottom => TABS.map(t => h('a', { href: `#${t.id}`, 'aria-current': t.id === active ? 'page' : null }, bottom ? icon(t.id) : null, h('span', null, t.label)));
+  const mk = bottom => TABS.map(t => h('a', { href: `#${t.id}`, 'aria-current': t.id === active ? 'page' : null }, icon(t.id), h('span', null, t.label)));
   document.querySelector('.tabs-top').replaceChildren(...mk(false));
   document.querySelector('.tabs-bottom').replaceChildren(...mk(true));
 }
@@ -1735,7 +1735,11 @@ function briefPanel(page, opts = {}) {
 
 const PAGES = {
   today() {
-    return [h('div', { class: 'feed' }, watchHero(), briefPanel('today'), CARDS.sleep(), CARDS.hrv(), CARDS.steps(), CARDS.weight(), CARDS.fitness(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.train(), CARDS.rhr(), CARDS.breath(), oxygenCard(), CARDS.stress(), CARDS.workouts(3), CARDS.device())];
+    const section = (title, ...cards) => [h('h2', { class: 'section-title' }, title), h('div', { class: 'feed' }, cards)];
+    return [h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
+      section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), CARDS.breath(), oxygenCard(), CARDS.stress()),
+      section('Activity', CARDS.steps(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.fitness(), CARDS.train(), CARDS.workouts(3)),
+      section('Body & device', CARDS.weight(), CARDS.device())];
   },
   sleep() {
     return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep'), DETAIL.sleep.render(), CARDS.breath())];
