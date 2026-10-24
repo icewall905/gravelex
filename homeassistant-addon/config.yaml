@@ -1,5 +1,5 @@
 name: GravelEx Health Hub
-version: "0.1.8"
+version: "0.1.9"
 slug: gravelex_health
 description: Local-first GravelEx health hub with household accounts and a read-only API.
 url: https://github.com/icewall905/gravelex

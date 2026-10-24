@@ -1,3 +1,7 @@
+# 0.1.9
+
+- Populate HRV history with yellow unvalidated PPI proxy daily means, keeping qualified green HRV and recording contexts separate.
+
 # 0.1.8
 
 - Add seven-night sleep debt to the daily overview with recorded-night coverage and sleep target. Missing nights are excluded rather than treated as zero sleep.
