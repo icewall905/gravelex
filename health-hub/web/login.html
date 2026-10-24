@@ -3,10 +3,12 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f3f1ec"><title>Sign in · Pebble Health</title>
+  <link rel="icon" type="image/svg+xml" href="icons/brand.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main class="login-page" tabindex="-1"><div class="login-card"><div class="brand"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="4.5"/><path d="M7.5 12h2.6l1.2-3 1.8 6 1.2-3h2.2"/></svg><p class="brand-name">Pebble Health</p></div><h1>Sign in</h1>
+<main class="login-page" tabindex="-1"><div class="login-card"><div class="brand"><img class="brand-mark" src="icons/brand.svg" width="40" height="40" alt="" aria-hidden="true"><p class="brand-name">Pebble Health</p></div><h1>Sign in</h1>
 <p class="lede">Sign in to view your health data.</p>
 <form id="login-form"><label class="field" for="username">Username<input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[a-z0-9][a-z0-9._-]{2,39}" minlength="3" maxlength="40" required autofocus></label><label class="field" for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required></label><p id="error" class="sheet-error" role="alert" hidden></p><button class="btn primary" type="submit">Sign in</button></form>
 </div></main>

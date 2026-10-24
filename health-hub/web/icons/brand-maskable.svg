@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="0" fill="#101827"/><g transform="translate(17.92 17.92) scale(0.72)"><ns0:defs xmlns:ns0="http://www.w3.org/2000/svg">
+    <ns0:linearGradient id="pebble" x1="18" y1="12" x2="108" y2="116" gradientUnits="userSpaceOnUse">
+      <ns0:stop offset="0" stop-color="#55e6d2" />
+      <ns0:stop offset=".56" stop-color="#26c6a7" />
+      <ns0:stop offset="1" stop-color="#8b7cf6" />
+    </ns0:linearGradient>
+    <ns0:linearGradient id="pulse" x1="25" y1="64" x2="104" y2="64" gradientUnits="userSpaceOnUse">
+      <ns0:stop offset="0" stop-color="#ecfffb" />
+      <ns0:stop offset="1" stop-color="#c9c2ff" />
+    </ns0:linearGradient>
+  </ns0:defs>
+
+  
+  <ns0:path xmlns:ns0="http://www.w3.org/2000/svg" fill="url(#pebble)" d="M67 10c21 1 39 14 47 33 8 20 5 45-9 60-13 14-35 18-56 12-20-6-37-22-42-42-5-19 2-40 18-52C37 14 52 9 67 10Z" />
+
+  
+  <ns0:path xmlns:ns0="http://www.w3.org/2000/svg" fill="none" stroke="#101827" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" d="M24 65h22l8-18 12 37 10-24 7 12h21" />
+  <ns0:path xmlns:ns0="http://www.w3.org/2000/svg" fill="none" stroke="url(#pulse)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" d="M24 65h22l8-18 12 37 10-24 7 12h21" />
+  <ns0:circle xmlns:ns0="http://www.w3.org/2000/svg" cx="24" cy="65" r="4.5" fill="#8b7cf6" />
+</g></svg>

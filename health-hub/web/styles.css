@@ -125,13 +125,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .topbar.scrolled { border-bottom-color: var(--line); }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; flex: 1; }
-.brand-mark {
-  width: 38px; height: 38px; flex: none; padding: 5px; border-radius: 12px;
-  background: linear-gradient(140deg, var(--m-sleep), var(--m-hrv) 55%, var(--m-ready));
-  box-shadow: 0 6px 16px -8px var(--m-sleep);
-}
-.brand-mark rect { fill: #0d111c; stroke: rgba(255, 255, 255, .25); stroke-width: 1; }
-.brand-mark path { fill: none; stroke: #fb7185; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.brand-mark { width: 40px; height: 40px; flex: none; display: block; object-fit: contain; }
 .brand-name { font-family: var(--font-display); font-weight: 700; font-size: 18px; line-height: 1.15; letter-spacing: -.02em; }
 .brand-sub { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand-sub::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--m-ready); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--m-ready) 22%, transparent); }

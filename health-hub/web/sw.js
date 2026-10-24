@@ -3,11 +3,11 @@
    API and auth requests are network-only and are never stored in Cache Storage.
    Writes (POST/PUT/…) and every other request go straight to the network. */
 'use strict';
-const VERSION = 'v29';
+const VERSION = 'v30';
 const SHELL_CACHE = 'pebble-health-shell-' + VERSION;
 const SHELL = [
   'styles.css', 'app.js', 'manifest.webmanifest',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png',
+  'icons/brand.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png',
   'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png',
   'fonts/inter.woff2', 'fonts/space-grotesk-medium.woff2', 'fonts/space-grotesk-bold.woff2'
 ];
