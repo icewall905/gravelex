@@ -1,3 +1,7 @@
+# 0.1.6
+
+- Hide empty breathing widgets from dashboard pages and daily overview; retain the feature on the roadmap pending usable timing and validation.
+
 # 0.1.5
 
 - Clearly explain why current batched watch data cannot establish HRV or breathing estimates.
