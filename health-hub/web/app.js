@@ -819,6 +819,9 @@ function watchHero() {
   const weight = d.weight || {}, weightLatest = weight.latest || {};
   const training = d.training || {}, trainingLatest = training.latest || {};
   const intensity = (d.fitness || {}).intensity || {};
+  const sleepByNight = byNight(rec().nights, 'night');
+  const debtNights = dateSpan(7).map(day=>sleepByNight.get(day)).filter(n=>n && isNum(n.sleep_s) && n.sleep_s>=0);
+  const debtSeconds = isNum(sl.need_s) && sl.need_s>0 && debtNights.length ? debtNights.reduce((sum,n)=>sum+Math.max(0,sl.need_s-n.sleep_s),0) : null;
   const latestHr = todayObs().filter(o => isNum(o.hr)).at(-1);
   const hr = new Date().getHours();
   const greet = hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
@@ -837,6 +840,7 @@ function watchHero() {
     h('div', { class: 'watch-metrics' },
       watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready'),
       watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep'),
+      watchMetric('sleep', 'Sleep debt', isNum(debtSeconds) ? fmtDur(debtSeconds,true) : null, isNum(debtSeconds) ? `7-night shortfall · ${debtNights.length}/7 recorded · target ${fmtDur(sl.need_s,true)}/night${debtNights.length<7 ? ' · missing nights excluded' : ''}` : 'Needs recorded sleep and a target', 'sleep'),
       watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps'),
       watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart'),
       watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr'),
