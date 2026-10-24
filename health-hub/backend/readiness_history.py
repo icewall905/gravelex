@@ -31,7 +31,7 @@ def ensure_schema(db):
 
 def _facts(result):
     keys = ("score", "status", "components_count", "available_count", "total_components",
-            "effective_weight_coverage", "provisional", "formula_version", "comparability_key")
+            "effective_weight_coverage", "provisional", "estimated", "confidence", "formula_version", "comparability_key")
     facts = {key: result[key] for key in keys if key in result}
     identity = result.get("method_identity") or {}
     series = identity.get("comparable_series") or {}
@@ -39,7 +39,7 @@ def _facts(result):
         "formula_version": identity.get("formula_version"),
         "input_keys": sorted(k for k in identity.get("input_keys", [])
                              if k in ("hrv", "resting_hr", "sleep", "training_load")),
-        "comparable_series": {k: series[k] for k in ("metric", "source", "algorithm_version") if k in series},
+        "comparable_series": {k: series[k] for k in ("metric", "source", "algorithm_version", "firmware", "collector_version", "field") if k in series},
     }
     facts["components"] = {key: {k: component[k] for k in ("score", "provisional") if k in component}
                            for key, component in result.get("components", {}).items()

@@ -455,10 +455,35 @@ function legend(items) {
   return h('div', { class: 'legend' }, items.map(([cls, text]) => h('span', null, h('i', { class: cls }), text)));
 }
 
+function stockVariabilityDetail() {
+  const model=stockVariability(), all=(model.points||[]).filter(p=>isNum(p.ts)&&isNum(p.value_ms));
+  const latest=all.at(-1), context=latest?.context, source=latest?.source;
+  const points=all.filter(p=>(context == null || p.context===context)&&(source == null || p.source===source));
+  if (!points.length) return null;
+  const items=points.map(p=>({key:new Date(p.ts*1000).toISOString().slice(0,10),label:new Date(p.ts*1000).toISOString().slice(0,10),v:p.value_ms}));
+  return h('details',{class:'info'},h('summary',null,'Pulse variability detail'),
+    lineChart({items,W:chartW(),H:160,unit:'ms',label:'Delivered pulse variability',fmtV:v=>fmt(v,1)}),
+    h('p',{class:'foot'},'Experimental pulse variability; delivery-dependent, not validated HRV. It never feeds readiness.'),
+    h('p',{class:'foot'},`Method: ${model.method || 'delivered_ppi_variation_unverified'}; showing ${context || 'the latest'}${source ? ` · ${source}` : ''} series.`));
+}
+
 /* ================================================================== *
  * Data accessors
  * ================================================================== */
 const rec = () => D().recovery || {};
+const stock = () => D().stock_estimates || {};
+const stockPulse = () => stock().pulse || {};
+const stockStrain = () => stock().strain || {};
+function stockStrainFresh(model, now=Date.now()/1000) {
+  return isNum(model.score) && isNum(model.measured_at) && now >= model.measured_at && now-model.measured_at <= 36*3600;
+}
+function readinessNow() {
+  const r=rec().readiness || {};
+  if (r.formula_version==='readiness-stock-v1' && rec().today!==isoOf(new Date()))
+    return {...r,score:null,sleep_based_score:null,status:'stale',reason:'This is a cached earlier day. Refresh for today’s readiness.'};
+  return r;
+}
+const stockVariability = () => stock().variability || {};
 const ppiSourceUnverified = () => D().hrv?.quality?.stream === 'batched_ppi_unverified';
 const PPI_SOURCE_EXPLANATION = 'The watch delivered batched optical PPI readings. Consecutive-beat continuity is not verified, so these recordings cannot yet supply HRV, breathing or stress scores. More baseline days alone will not resolve this.';
 function monitorExplanation(kind) {
@@ -603,12 +628,14 @@ const CARDS = {
   },
 
   rhr() {
-    const rows=D().monitor_observations?.nightly_pulse || [], latest=rows.at(-1);
+    const model=stockPulse(), rows=model.points || D().monitor_observations?.nightly_pulse || [], latest=model.latest || rows.at(-1);
     const map=byNight(rows,'night'),items=dateSpan(7).map(day=>({key:day,label:day,v:map.get(day)?.pulse ?? null}));
-    return card('rhr','Overnight pulse',{link:'rhr',chip:expChip()},
-      latest ? [big(fmt(latest.pulse,1),'bpm · last recorded'),h('p',{class:'lede'},`Measured ${fmtDateTime(latest.observed_at)} · ${latest.observations} spot recording(s).${latest.night!==todayISO() ? ' No newer night reading received.' : ''}`),
-        lineChart({items,H:100,unit:'bpm',label:'Recorded overnight spot pulse'})] : pending('No overnight pulse saved',monitorExplanation('pulse')),
-      h('p',{class:'foot'},'Direct pulse observations, separate from HRV qualification. These spot recordings are not yet validated resting heart rate and do not enter readiness.'));
+    const estimated=stock().mode==='stock_firmware_estimates';
+    return card('rhr','Overnight pulse',{link:'rhr',chip:estimated?chip('Estimated','', 'Stock-firmware overnight pulse estimate'):expChip()},
+      latest ? [big(fmt(latest.pulse,1),'bpm · latest'),h('p',{class:'lede'},`${estimated?'Estimated overnight pulse':'Recorded overnight spot pulse'}${latest.observed_at ? ` · ${fmtDateTime(latest.observed_at)}` : ''}.`),
+        estimated && isNum(model.baseline_days) && model.baseline_days < (model.required_days || 3) ? pending('Personal baseline building','Needs three earlier nights plus the current night.',{n:model.baseline_days,of:model.required_days||3,unit:'earlier nights'}) : null,
+        lineChart({items,H:100,unit:'bpm',label:'Overnight pulse trend'})] : pending('No overnight pulse estimate',estimated?'Wear the watch overnight; a personal baseline needs three nights.':monitorExplanation('pulse')),
+      h('p',{class:'foot'},estimated?'A custom heuristic from stock-firmware overnight pulse summaries. It is not validated resting heart rate; the stock readiness model uses this estimate as labeled.':'Direct pulse observations, separate from HRV qualification. These spot recordings are not validated resting heart rate and do not enter readiness.'));
   },
 
   breath() {
@@ -620,7 +647,14 @@ const CARDS = {
   },
 
   stress() {
-    const st=D().stress || {},manual=((D().hrv || {}).analysis || {}).baseline_progress?.manual || {};
+    const st=D().stress || {}, model=stockStrain(), manual=((D().hrv || {}).analysis || {}).baseline_progress?.manual || {};
+    if (stock().mode==='stock_firmware_estimates') {
+      const score=model.score, fresh=stockStrainFresh(model);
+      return card('stress','Overnight strain',{link:'stress',chip:chip('Estimated','', 'Estimated overnight strain from stock-firmware pulse'),
+        cls:'wide'}, fresh ? [big(fmt(score),'of 100'),h('p',{class:'lede'},`Measured ${fmtDateTime(model.measured_at)} · ${model.reason || 'Estimated overnight strain.'}`)] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh overnight estimate is needed.'),
+        h('p',{class:'foot'},`Personal baseline: ${model.baseline_days ?? 0} of ${model.required_days ?? 3} nights. This is an estimated overnight strain signal, not mental stress.`),
+        h('p',{class:'pending above'},'Stock-firmware estimate · low confidence; a longer baseline does not validate the sensor.'));
+    }
     const score=st.context==='manual' ? st.experimental_score : null;
     const diag=D().monitor_observations?.diagnostics?.stress || {};
     return card('stress','Daytime stress check',{link:'stress',chip:expChip()},
@@ -765,24 +799,24 @@ function calendarGrid(days, hist, compact) {
  * Today hero — the watch
  * ================================================================== */
 function watchHero() {
-  const r = rec().readiness || {}, sl = rec().sleep || {}, hs = rec().hrv_status || {}, n = lastNight();
+  const r = readinessNow(), sl = rec().sleep || {}, hs = rec().hrv_status || {}, n = lastNight();
   const hr = new Date().getHours();
   const greet = hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
   const name = wearer();
-  const score = r.score;
+  const score = r.score, stockPulseCurrent=stock().mode==='stock_firmware_estimates' && stockPulse().latest?.night===todayISO();
   return h('article', { class: 'watch', 'data-m': 'ready' },
     h('div', { class: 'watch-top' },
       h('h1', { class: 'watch-hello' }, name ? `${greet}, ${name}` : greet),
       h('p', { class: 'watch-date' }, new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' }))),
     h('div', { class: 'watch-main' },
-      h('div', { class: 'watch-ring' }, ring(score, { size: 132, stroke: 12, label: isNum(score) ? `Readiness ${Math.round(score)} of 100` : 'Readiness: not enough data' })),
+      h('div', { class: 'watch-ring' }, isNum(score) ? ring(score, { size: 132, stroke: 12, label: `Readiness ${Math.round(score)} of 100` }) : isNum(r.sleep_based_score) ? ring(r.sleep_based_score, { size: 132, stroke: 12, label: `Sleep-only guidance ${Math.round(r.sleep_based_score)} of 100` }) : ring(null, { size: 132, stroke: 12, label: 'Readiness: not enough data' })),
       h('div', null,
-        h('p', { class: 'watch-score-label' }, h('a', { class: 'card-link', href: '#d/ready' }, 'Readiness')),
-        h('p', { class: 'watch-score-word' }, readinessWord(score)),
-        h('p', { class: 'watch-reason' }, isNum(score) ? 'Experimental summary of the available recovery inputs; check coverage and missing inputs below.' : (r.reason || 'Not enough inputs yet.')))),
+        h('p', { class: 'watch-score-label' }, h('a', { class: 'card-link', href: '#d/ready' }, isNum(score) ? 'Readiness' : isNum(r.sleep_based_score) ? 'Sleep-only guidance' : 'Readiness')),
+        h('p', { class: 'watch-score-word' }, isNum(score) ? readinessWord(score) : isNum(r.sleep_based_score) ? sleepWord(r.sleep_based_score) : readinessWord(score)),
+        h('p', { class: 'watch-reason' }, isNum(score) ? (r.formula_version==='readiness-stock-v1' ? 'Estimated stock-firmware readiness; check coverage and missing inputs below.' : 'Experimental summary of the available recovery inputs; check coverage and missing inputs below.') : isNum(r.sleep_based_score) ? 'Sleep-only guidance; this is not an overall readiness score.' : (r.reason || 'Not enough inputs yet.')))),
     h('dl', { class: 'watch-vitals' },
       vital('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null),
-      vital('heart', 'Resting HR', isLastNight(n) && isNum(n.resting_hr) ? `${fmt(n.resting_hr)} bpm` : null),
+      vital('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse estimate' : 'Resting HR', stockPulseCurrent && isNum(stockPulse().latest?.pulse) ? `${fmt(stockPulse().latest.pulse)} bpm` : (isLastNight(n) && isNum(n.resting_hr) ? `${fmt(n.resting_hr)} bpm` : null)),
       vital('hrv', 'HRV status', hs.status && hs.status !== 'baseline_building' && hs.status !== 'insufficient' ? hrvLabel(hs.status)[0] + (hs.provisional ? ' (provisional)' : '') : null, hs.status === 'baseline_building' ? `Learning, ${hs.baseline_nights || 0}/${hs.required_baseline_nights || 14}` : null)));
 }
 function vital(m, label, value, fallback) {
@@ -882,21 +916,21 @@ const DETAIL = {
   ready: {
     title: 'Readiness', m: 'ready', noRange: true,
     render() {
-      const r = rec().readiness || {}, comps = r.components || {}, weights = r.weights || {};
+      const r = readinessNow(), comps = r.components || {}, weights = r.weights || {};
       const names = Object.keys(weights).length ? Object.keys(weights) : ['hrv', 'resting_hr', 'sleep', 'training_load'];
       return [
-        card('ready', 'Today', { chip: expChip(), cls: 'wide' },
+        card('ready', 'Today', { chip: r.formula_version==='readiness-stock-v1' ? chip('Estimated') : expChip(), cls: 'wide' },
           h('div', { style: { display: 'flex', gap: '18px', alignItems: 'center', flexWrap: 'wrap' } },
-            h('div', { style: { width: '128px' } }, ring(r.score, { size: 128, stroke: 12 })),
+            h('div', { style: { width: '128px' } }, ring(isNum(r.score) ? r.score : r.sleep_based_score, { size: 128, stroke: 12, label: isNum(r.score) ? 'Readiness score' : 'Sleep-only guidance' })),
             h('div', { style: { flex: '1', minWidth: '180px' } },
-              h('p', { class: 'status-word', style: { fontSize: '22px' } }, readinessWord(r.score)),
-              h('p', { class: 'lede' }, isNum(r.score) ? 'An experimental weighted mix of the inputs below.' : (r.reason || 'Not enough inputs yet.')))),
-          h('div', { class: 'comps' }, names.map(k => compRow(COMPONENT_NAMES[k] || k, comps[k], weights[k]))),
+              h('p', { class: 'status-word', style: { fontSize: '22px' } }, isNum(r.score) ? readinessWord(r.score) : isNum(r.sleep_based_score) ? 'Sleep-only guidance' : readinessWord(r.score)),
+          h('p', { class: 'lede' }, isNum(r.score) ? (r.formula_version==='readiness-stock-v1' ? 'Estimated stock-firmware readiness from sleep, overnight pulse and training load.' : 'An experimental weighted mix of the inputs below.') : (r.reason || 'Not enough inputs yet.')))),
+          h('div', { class: 'comps' }, names.map(k => compRow(r.formula_version==='readiness-stock-v1' && k==='resting_hr' ? 'Overnight pulse estimate' : COMPONENT_NAMES[k] || k, comps[k], weights[k]))),
           h('p',{class:'foot'},`${r.components_count ?? Object.keys(comps).length} of ${r.total_components ?? 4} inputs · ${isNum(r.effective_weight_coverage) ? fmt(r.effective_weight_coverage*100) : '—'}% configured weight covered${r.provisional ? ' · provisional' : ''}`),
           missingList(r.missing),
           info('How readiness works',
-            'HRV, resting HR and load are compared with personal baselines. Sleep uses duration against your target and timing regularity. The score combines available inputs and remains experimental.',
-            'Missing inputs are left out rather than guessed. With fewer than two inputs, or without overnight HRV or sleep, no score is shown.',
+            r.formula_version==='readiness-stock-v1' ? 'Stock-firmware readiness uses sleep, overnight pulse and training load with the displayed weights. It is a custom heuristic, not a Garmin measurement.' : 'HRV, resting HR and load are compared with personal baselines. Sleep uses duration against your target and timing regularity. The score combines available inputs and remains experimental.',
+            r.formula_version==='readiness-stock-v1' ? 'Needs sleep and at least one other available input. With sleep alone, only sleep-only guidance is shown. Missing components are not guessed.' : 'Missing inputs are left out rather than guessed. With fewer than two inputs, or without overnight HRV or sleep, no score is shown.',
             r.method ? `Method: ${r.method}.` : null)),
         readinessHistoryCard(),
       ];
@@ -962,6 +996,7 @@ const DETAIL = {
             legend([['line', 'Nightly RMSSD'], ['soft', 'Usual range'], ['gap', 'No usable recording']])]
             : pending(ppiSourceUnverified() ? 'Beat continuity is unverified' : 'No usable overnight recordings in this range', ppiSourceUnverified() ? PPI_SOURCE_EXPLANATION : 'Enable night recordings in the HRV watch app.')),
         spotChecks(pts),
+        stockVariabilityDetail(),
       ];
     },
   },
@@ -969,14 +1004,15 @@ const DETAIL = {
   rhr: {
     title: 'Overnight spot pulse', m: 'rhr',
     render() {
-      const span=dateSpan(S.range),m=byNight(D().monitor_observations?.nightly_pulse || [],'night');
+      const model=stockPulse(), span=dateSpan(S.range),m=byNight(model.points || D().monitor_observations?.nightly_pulse || [],'night');
       const items=bucket(span,d=>({v:m.get(d)?.pulse ?? null}),'avg');
       const vals=span.map(d=>m.get(d)?.pulse);
-      return [card('rhr', 'Recorded overnight spot pulse', { cls: 'wide' },
+      const estimated=stock().mode==='stock_firmware_estimates';
+      return [card('rhr', estimated?'Overnight pulse estimate':'Recorded overnight spot pulse', { cls: 'wide', chip: estimated?chip('Estimated'):expChip() },
         items.some(i => isNum(i.v)) ? [lineChart({ items, W: chartW(), H: 180, unit: 'bpm', label: 'Recorded overnight spot pulse' }),
           stats([['Average', fmt(avg(vals)), 'bpm'], ['Lowest', fmt(Math.min(...vals.filter(isNum))), 'bpm'], ['Nights', `${vals.filter(isNum).length} of ${span.length}`]])]
           : pending('No overnight pulse in this range',monitorExplanation('pulse')),
-        info('About overnight pulse','Median direct pulse summaries from comparable scheduled captures. Actual night dates and gaps are retained. This is not validated resting heart rate and does not qualify readiness.'))];
+        info('About overnight pulse',estimated?'A custom stock-firmware heuristic with three earlier baseline nights plus the current night. It is not validated resting heart rate and does not make clinical claims.':'Median direct pulse summaries from comparable scheduled captures. Actual night dates and gaps are retained. This is not validated resting heart rate and does not qualify readiness.'))];
     },
   },
 
@@ -997,7 +1033,11 @@ const DETAIL = {
   stress: {
     title: 'Stress', m: 'stress', noRange: true,
     render() {
-      const st = D().stress || {};
+      const st = D().stress || {}, model=stockStrain();
+      if (stock().mode==='stock_firmware_estimates') return [card('stress','Estimated overnight strain',{chip:chip('Estimated'),cls:'wide'},
+        stockStrainFresh(model) ? [big(fmt(model.score),'of 100'),h('p',{class:'lede'},model.measured_at?`Measured ${fmtDateTime(model.measured_at)}.`:'')] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh estimate is needed.'),
+        h('p',{class:'foot'},`${model.baseline_days ?? 0} of ${model.required_days ?? 3} baseline nights · Estimated overnight strain, not mental stress.`),
+        info('About this estimate','This custom heuristic uses stock-firmware overnight pulse data and remains separate from the older HRV stress detail.'))];
       const pts = ((D().hrv || {}).analysis || {}).points || [];
       const bp = ((D().hrv || {}).analysis || {}).baseline_progress || {};
       return [

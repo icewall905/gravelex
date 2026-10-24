@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 import fitness
 
 log = logging.getLogger("pebble-health.briefing")
-FACTS_VERSION = 4
+FACTS_VERSION = 5
 PAGES = ("today", "sleep", "recovery", "training", "more")
 _running = threading.Lock()
 
@@ -143,6 +143,10 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "readiness_score": ready.get("score"), "readiness_status": ready.get("status"),
             "readiness_inputs": {k: v.get("score") for k, v in (ready.get("components") or {}).items()},
             "readiness_missing": ready.get("missing"),
+            "readiness_method": ready.get("formula_version"),
+            "readiness_estimated": ready.get("estimated", ready.get("provisional", True)),
+            "readiness_confidence": ready.get("confidence"),
+            "sleep_only_guidance_score": ready.get("sleep_based_score"),
             "steps_so_far_today": status.get("steps"), "steps_daily_avg_previous_7_days": _r(_avg(steps_by_day.get(d) for d in last7), 0),
             "watch_battery_percent": status.get("battery_percent"),
             "weight_latest_weigh_in_kg": (weight.get("latest") or {}).get("kg"),
@@ -178,6 +182,11 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "breathing_per_min": (last_hrv or {}).get("breaths_per_min"),
             "qualified_night_recordings_last_night": night_sessions_today, "night_recordings_planned": None,
             "stress_status": (s.get("stress") or {}).get("status"),
+            "stock_firmware_estimates": {
+                "mode": (s.get("stock_estimates") or {}).get("mode"),
+                "overnight_pulse": (s.get("stock_estimates") or {}).get("pulse"),
+                "overnight_strain": (s.get("stock_estimates") or {}).get("strain"),
+                "limitation": "Custom low-confidence estimates from direct pulse summaries, sleep and available confirmed training; not validated Garmin scores or psychological stress. Pulse variability and breathing are not inputs."},
             "monitor_diagnostics":(s.get("monitor_observations") or {}).get("diagnostics",{}),
             "overnight_spot_pulse":(s.get("monitor_observations") or {}).get("nightly_pulse",[])[-7:],
             "hrv_comparable_series": identity,
@@ -230,6 +239,7 @@ Rules:
 - Use ONLY the facts given. Every number you write must appear in the facts (you may round it). Never calculate new numbers.
 - Missing (null) values mean "not measured yet": say so briefly when it matters, never guess.
 - Scores here are experimental personal estimates, not medical measurements. Never diagnose or give medical advice.
+- Stock-firmware readiness and overnight strain are custom low-confidence estimates. Call them estimated; overnight pulse is a sparse filtered spot summary, not proven resting HR. Overnight strain is not current daytime or psychological stress, and must retain its observation date. Sleep-only guidance is not overall readiness. Training load may be missing. Do not diagnose causes of a pulse change.
 - Batched PPI delivery diagnostics are transport observations only. Never call them HRV/RMSSD, readiness, stress, breathing, or a cadence failure; report the source-blocked reason when present.
 - SpO2 is experimental optical spot sampling. State its actual measurement date and sparse coverage when discussed. Do not infer sleep apnea, hypoxia duration, diagnosis, recovery benefit or normality from it. No samples means unknown, not zero.
 - Prefer comparisons with the person's own averages over absolute judgements.

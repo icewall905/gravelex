@@ -18,6 +18,7 @@ import provenance
 import training_ledger
 import readiness_history
 import monitor_observations
+import stock_estimates
 import motion_quality
 import workout_edits
 import uuid
@@ -384,10 +385,19 @@ def summary(days=42):
     recovery=hrv_analytics.analyze_history(hrv_rows, now=now)
     nightly=recovery_model.build([(r['ts'],hrv_analytics.analyze_session(r['payload'])) for r in hrv_rows if r['ts']>=now-70*86400],
                                  sleep_rows,snapshot_sleep,full_history,now,seed=seed)
+    monitors=monitor_observations.build(hrv_rows,now,TZ)
+    stock = stock_estimates.build(hrv_rows, [], nightly['sleep'],
+        recovery_model.training_state(full_history, today=datetime.fromtimestamp(now,TZ).date()), now, TZ)
+    # Stock pulse estimates form a new model/series. Strict HRV physiology and
+    # its source gates remain unchanged and are retained separately.
+    nightly['hrv_readiness'] = nightly['readiness']
+    if os.environ.get('RECOVERY_MODE', 'stock_firmware') == 'stock_firmware':
+        nightly['readiness'] = stock['readiness']
+    else:
+        stock['mode'] = 'diagnostics_only'
     with connect() as snapshot_db:
         readiness_history.persist_daily(snapshot_db, nightly['today'], nightly['readiness'], now)
         nightly['readiness_history']=readiness_history.read_history(snapshot_db, since, now)
-    monitors=monitor_observations.build(hrv_rows,now,TZ)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
     return {"wearer": os.environ.get("WEARER_NAME", ""), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
@@ -397,7 +407,7 @@ def summary(days=42):
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},
-      "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
+      "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
       "fitness": physiology.fitness(json.loads(body_row['value']) if body_row else None,
                                     (weight or {}).get('latest',{}).get('trend_kg'), config.get('hr_max'),
                                     fit_minutes, active_today, TZ, datetime.fromtimestamp(now,TZ).date()),
@@ -416,7 +426,8 @@ def today():
     # ts is when the newest watch data arrived, so the watch's "updated ..."
     # reflects the data's age rather than the time of this request.
     data_ts = max([x for x in (s.get("last_received"), (s["hrv"] or {}).get("ts")) if x] or [None])
-    return {"ts": data_ts, "readiness": ready.get("score"), "readiness_status": ready.get("status"),
+    return {"ts": data_ts, "readiness": ready.get("score"), "readiness_status": ready.get("status"), "readiness_method": ready.get("formula_version"),
+            "readiness_estimated": ready.get("estimated", ready.get("provisional", True)),
             "sleep_score": sleep.get("score"),
             "sleep_min": round(sleep["sleep_s"] / 60) if sleep.get("sleep_s") is not None else None,
             "restful_min": round(sleep["restful_s"] / 60) if sleep.get("restful_s") is not None else None,

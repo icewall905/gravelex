@@ -5,13 +5,10 @@ arrival timestamps are not treated as beat timestamps: duplicate offsets can
 be a normal batched transport artifact, and rejected samples are never
 interpolated across.
 
-Pebble firmware 4.41 (Goodix HRV library) does not emit one value per beat.
-It emits the current RR interval on a fixed ~1 Hz clock, whatever the heart
-rate: an instantaneous-RR tachogram.  Such sessions are detected and analysed
-as a uniformly sampled tachogram: beats are reconstructed by stepping through
-the interpolated RR curve within each artifact-free run, and RMSSD is taken
-over those reconstructed beats.  Values are never interpolated across
-rejected samples.
+Stock Pebble PPI callbacks may be batched and do not establish beat timing.
+Tagged Pebble streams use delivery-only diagnostics; they are never assigned a
+uniform clock or used as physiological HRV, respiration, or readiness inputs.
+The legacy tachogram helpers remain for explicitly different historical series.
 """
 from __future__ import annotations
 
