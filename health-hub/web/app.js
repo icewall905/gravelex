@@ -666,26 +666,26 @@ const CARDS = {
       h('p',{class:'foot'},`${diag.received ?? 0} daytime recordings across ${diag.received_manual_days ?? 0} days received. ${manual.adequate_baseline_days ?? 0} / 14 prior comparable qualified days. This is a spot arousal estimate, not continuous stress monitoring.`));
   },
   steps() {
-    const lt = D().latest || {}, st = lt.status || {};
-    const fresh = isNum(lt.ts) && isoOf(new Date(lt.ts * 1000)) === isoOf(new Date());
+    const st = D().current_activity || {}, lt = {ts:st.ts};
+    const fresh = isNum(lt.ts);
     const hourly = hourlySteps(todayObs());
     return card('steps', 'Steps and activity', { link: 'steps' },
       fresh && isNum(st.steps) ? [
         big(fmt(st.steps), 'steps'),
         stats([['Distance', isNum(st.distance_meters) ? fmt(st.distance_meters / 1000, 2) : '—', 'km'], ['Active', isNum(st.active_seconds) ? fmtDur(st.active_seconds, true) : '—'],
           ['Calories', isNum(st.active_kcal) ? fmt(st.active_kcal) : '—', 'active kcal']]),
-        h('p', { class: 'lede', style: { fontSize: '13px' } }, `Watch total as of ${fmtClock(lt.ts)}`),
+        h('p', { class: 'lede', style: { fontSize: '13px' } }, `Synced partial-day total as of ${fmtClock(lt.ts)} · ${st.observed_minutes?.steps ?? 0} observed minutes`),
         hourly.some(p => p.v > 0) ? [dayChart({ points: hourly, bars: true, H: 100, unit: 'steps', label: 'Steps per hour today' }), h('p', { class: 'lede', style: { fontSize: '13px' } }, 'Hourly bars count synced minute records only.')] : null,
       ] : pending('No activity reported today yet', isNum(lt.ts) ? `The last report from the watch was ${fmtDateTime(lt.ts)}.` : 'The watch has not reported yet.'));
   },
 
   heart() {
     const pts = todayObs().filter(o => isNum(o.hr)).map(o => ({ t: hourOfTs(o.ts), v: o.hr, snapshot: !!o.snapshot }));
-    const lt = D().latest || {}, st = lt.status || {};
+    const measured = todayObs().filter(o => isNum(o.hr)).at(-1);
     const vals = pts.map(p => p.v);
     return card('heart', 'Heart rate today', { link: 'heart' },
       pts.length ? [
-        h('div', { class: 'big' }, h('span', { class: 'v' }, fmt(isNum(st.heart_rate_bpm) ? st.heart_rate_bpm : vals[vals.length - 1])), h('span', { class: 'u' }, `bpm at ${fmtClock(lt.ts || null)}`)),
+        h('div', { class: 'big' }, h('span', { class: 'v' }, fmt(measured?.hr)), h('span', { class: 'u' }, `bpm at ${fmtClock(measured?.ts)}`)),
         stats([['Lowest', fmt(Math.min(...vals)), 'bpm'], ['Highest', fmt(Math.max(...vals)), 'bpm']]),
         dayChart({ points: pts, H: 110, unit: 'bpm', label: 'Heart rate today' }),
       ] : pending('No heart rate recorded today yet', 'Minute heart rate arrives with the history export; hourly snapshots fill in between.'));
@@ -722,12 +722,13 @@ const CARDS = {
 
   device() {
     const d = D(), lt = d.latest || {}, st = lt.status || {}, col = d.collector || {};
-    const c=d.collection_health || {}, age=c.transport?.age_seconds;
+    const c=d.collection_health || {}, age=c.transport?.age_seconds, battery=d.watch_battery || {};
     const hr=c.measurements?.heart_rate;
     return card('device', 'Collection and sync', { link: 'device' },
       stats([['Server receipt',isNum(age) ? ago(age) : 'Unknown'],
         ['HR measured',isNum(hr?.age_seconds) ? ago(hr.age_seconds) : 'Not recorded'],
-        ['Battery snapshot',isNum(st.battery_percent) ? `${st.battery_percent}%` : '—']]),
+        ['Watch battery',isNum(battery.percent) ? `${battery.percent}%` : battery.status==='stale' ? 'Stale' : '—']]),
+      h('p',{class:'foot'},battery.observed_at ? `Battery measured ${fmtDateTime(battery.observed_at)}${battery.status==='stale' ? ` · Last reading ${battery.last_percent}%; waiting for a fresh observation.` : ''}` : 'No watch battery observation received.'),
       h('p',{class:'foot'},'Upload activity and sensor freshness are separate. Open for stream timestamps, coverage and night collection evidence.'));
 
   },

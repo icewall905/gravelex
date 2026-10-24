@@ -39,6 +39,13 @@ data class OxygenExportStatus(
 
 data class OxygenExportSaveResult(val saved: Boolean, val message: String)
 
+/** A battery value read from the selected watch over its active GATT connection. */
+data class WatchBatterySnapshot(
+    val batteryPercent: Int,
+    val observedAt: Long,
+    val deviceId: String? = null,
+)
+
 private data class ExportConfig(val url: String, val token: String, val version: Long)
 
 class PebbleFitOxygenExportService(
@@ -47,6 +54,7 @@ class PebbleFitOxygenExportService(
     httpClient: HttpClient,
     private val readHealth: suspend (Long, Int) -> List<HealthDataEntity>,
     private val readSessions: suspend (Long, Int, List<Int>, Int) -> List<OverlayDataEntity>,
+    private val readWatchBattery: suspend () -> WatchBatterySnapshot? = { null },
 ) {
     private val tokenSetting = EncryptedStringSetting(settings, cipher, TOKEN_KEY)
     private val requestClient = httpClient.config {
@@ -195,6 +203,20 @@ class PebbleFitOxygenExportService(
         var sessionTypeCursor = settings.getInt(SESSION_TYPE_CURSOR_KEY, settings.getInt(SESSION_WATERMARK_TYPE_KEY, -1))
         var uploaded = 0
         var skipped = 0
+        val watchBattery = try {
+            readWatchBattery()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }?.takeIf {
+            it.batteryPercent in 0..100 && it.observedAt in MIN_TIMESTAMP..(Clock.System.now().epochSeconds + 300L)
+        }
+        val lastBatteryObservedAt = settings.getLong(LAST_BATTERY_OBSERVED_AT_KEY, 0L)
+        val lastBatteryDeviceId = settings.getString(LAST_BATTERY_DEVICE_ID_KEY, "")
+        var watchStatusPending = watchBattery?.takeIf {
+            it.deviceId != lastBatteryDeviceId || it.observedAt > lastBatteryObservedAt
+        }
         return try {
             while (pages < MAX_PAGES_PER_RUN && started.elapsedNow() < 60.seconds) {
                 pages++
@@ -207,6 +229,41 @@ class PebbleFitOxygenExportService(
                     .filter { it.startTime > sessionCursor || (it.startTime == sessionCursor && it.type > sessionTypeCursor) }
                     .sortedWith(compareBy({ it.startTime }, { it.type })).take(MAX_SESSIONS)
                 if (healthPage.isEmpty() && sessionPage.isEmpty()) {
+                    var batteryUploaded = false
+                    if (watchStatusPending != null) {
+                        if (configurationVersion != config.version) return OxygenExportStatus("Settings changed; upload can be retried.", uploaded)
+                        val battery = watchStatusPending
+                        val body = buildJsonObject {
+                            put("source", "gravelex")
+                            put("ts", Clock.System.now().epochSeconds)
+                            put("records", buildJsonArray {})
+                            put("oxygen", buildJsonArray {})
+                            put("sessions", buildJsonArray {})
+                            put("watch_status", buildJsonObject {
+                                put("battery_percent", battery.batteryPercent)
+                                put("observed_at", battery.observedAt)
+                                put("source", "gravelex_ble")
+                                battery.deviceId?.let { put("device_id", it) }
+                            })
+                        }.toString()
+                        val response = requestClient.post("${config.url}/fitness/records") {
+                            headers { append(HttpHeaders.Authorization, "Bearer " + config.token) }
+                            contentType(ContentType.Application.Json)
+                            setBody(body)
+                        }
+                        if (configurationVersion != config.version) return OxygenExportStatus("Settings changed; upload can be retried.", uploaded)
+                        if (response.status.value !in 200..299) return OxygenExportStatus("Upload failed (HTTP ${response.status.value}); will retry.", uploaded, retryableFailure = true)
+                        settings.putLong(LAST_UPLOAD_AT_KEY, Clock.System.now().epochSeconds)
+                        settings.putInt(LAST_UPLOAD_COUNT_KEY, 0)
+                        settings.putLong(LAST_BATTERY_OBSERVED_AT_KEY, battery.observedAt)
+                        if (battery.deviceId != null) {
+                            settings.putString(LAST_BATTERY_DEVICE_ID_KEY, battery.deviceId)
+                        } else {
+                            settings.remove(LAST_BATTERY_DEVICE_ID_KEY)
+                        }
+                        watchStatusPending = null
+                        batteryUploaded = true
+                    }
                     if (settings.getBoolean(RECONCILING_KEY, false)) {
                         settings.putLong(RECONCILED_KEY, Clock.System.now().epochSeconds)
                         settings.putBoolean(RECONCILING_KEY, false)
@@ -218,7 +275,11 @@ class PebbleFitOxygenExportService(
                     settings.remove(HEALTH_CURSOR_KEY)
                     settings.remove(SESSION_CURSOR_KEY)
                     settings.remove(SESSION_TYPE_CURSOR_KEY)
-                    val message = if (uploaded == 0) "No new health data." else "Uploaded $uploaded health records and sessions."
+                    val message = when {
+                        batteryUploaded && uploaded == 0 -> "Uploaded watch battery status."
+                        uploaded == 0 -> "No new health data."
+                        else -> "Uploaded $uploaded health records and sessions."
+                    }
                     return OxygenExportStatus(message + if (skipped > 0) " Skipped $skipped invalid records." else "", uploaded)
                 }
                 val rows = healthPage.filter { it.timestamp in MIN_TIMESTAMP..(now + 300L) && validHealth(it) }
@@ -227,7 +288,7 @@ class PebbleFitOxygenExportService(
                 }
                 skipped += healthPage.size - rows.size + sessionPage.size - sessions.size
                 if (configurationVersion != config.version) return OxygenExportStatus("Settings changed; upload can be retried.", uploaded)
-                if (rows.isNotEmpty() || sessions.isNotEmpty()) {
+                if (rows.isNotEmpty() || sessions.isNotEmpty() || watchStatusPending != null) {
                     val body = buildJsonObject {
                         put("source", "gravelex")
                         put("ts", Clock.System.now().epochSeconds)
@@ -242,6 +303,14 @@ class PebbleFitOxygenExportService(
                             }
                         })
                         put("sessions", buildJsonArray { sessions.forEach { add(it.toExportJson()) } })
+                        watchStatusPending?.let { battery ->
+                            put("watch_status", buildJsonObject {
+                                put("battery_percent", battery.batteryPercent)
+                                put("observed_at", battery.observedAt)
+                                put("source", "gravelex_ble")
+                                battery.deviceId?.let { put("device_id", it) }
+                            })
+                        }
                     }.toString()
                     val response = requestClient.post("${config.url}/fitness/records") {
                         headers { append(HttpHeaders.Authorization, "Bearer " + config.token) }
@@ -252,6 +321,15 @@ class PebbleFitOxygenExportService(
                     if (response.status.value !in 200..299) return OxygenExportStatus("Upload failed (HTTP ${response.status.value}); will retry.", uploaded, retryableFailure = true)
                     settings.putLong(LAST_UPLOAD_AT_KEY, Clock.System.now().epochSeconds)
                     settings.putInt(LAST_UPLOAD_COUNT_KEY, rows.size + sessions.size)
+                    watchStatusPending?.let {
+                        settings.putLong(LAST_BATTERY_OBSERVED_AT_KEY, it.observedAt)
+                        if (it.deviceId != null) {
+                            settings.putString(LAST_BATTERY_DEVICE_ID_KEY, it.deviceId)
+                        } else {
+                            settings.remove(LAST_BATTERY_DEVICE_ID_KEY)
+                        }
+                        watchStatusPending = null
+                    }
                 }
                 if (healthPage.isNotEmpty()) {
                     healthCursor = healthPage.last().timestamp
@@ -320,6 +398,8 @@ class PebbleFitOxygenExportService(
         const val URL_KEY = "pebblefit_oxygen_url"
         private const val LAST_UPLOAD_AT_KEY = "gravelex_last_upload_at"
         private const val LAST_UPLOAD_COUNT_KEY = "gravelex_last_upload_count"
+        private const val LAST_BATTERY_OBSERVED_AT_KEY = "gravelex_last_battery_observed_at"
+        private const val LAST_BATTERY_DEVICE_ID_KEY = "gravelex_last_battery_device_id"
         const val TOKEN_KEY = "pebblefit_oxygen_token"
         const val HEALTH_WATERMARK_KEY = "pebblefit_health_watermark"
         const val HEALTH_CURSOR_KEY = "pebblefit_health_scan_cursor"

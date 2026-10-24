@@ -197,6 +197,7 @@ class WatchManager(
         allWatches.value.map {
             it.value.createPebbleDevice(
                 batteryLevel = null,
+                batteryObservedAt = null,
                 btState = bluetoothStateProvider.state.value,
                 state = null,
                 firmwareUpdateState = FirmwareUpdateStatus.NotInProgress.Idle(),
@@ -310,6 +311,7 @@ class WatchManager(
 
     private fun Watch.createPebbleDevice(
         batteryLevel: Int?,
+        batteryObservedAt: Long?,
         btState: BluetoothState,
         state: ConnectingPebbleState?,
         firmwareUpdateState: FirmwareUpdateStatus,
@@ -330,6 +332,7 @@ class WatchManager(
             bluetoothState = btState,
             lastFirmwareUpdateState = lastFirmwareUpdateState,
             batteryLevel = batteryLevel,
+            batteryObservedAt = batteryObservedAt,
             connectionFailureInfo = connectionFailureInfo,
             usingBtClassic = usingBtClassic,
             languagePackInstallState = languagePackInstallState,
@@ -400,6 +403,7 @@ class WatchManager(
 
                     val pebbleDevice = device.createPebbleDevice(
                         batteryLevel = states.currentState?.batteryLevel,
+                        batteryObservedAt = states.currentState?.batteryObservedAt,
                         btState = btState,
                         state = states.currentState?.connectingPebbleState,
                         firmwareUpdateState = states.currentState?.firmwareUpdateStatus ?: FirmwareUpdateStatus.NotInProgress.Idle(),
@@ -755,6 +759,7 @@ data class ActivePebbleState(
     val firmwareUpdateAvailable: FirmwareUpdateCheckState,
     val firmwareUpdateStatus: FirmwareUpdateStatus,
     val batteryLevel: Int?,
+    val batteryObservedAt: Long?,
     val languagePackInstallState: LanguagePackInstallState,
 )
 
@@ -767,14 +772,23 @@ private fun StateFlow<Map<PebbleIdentifier, Watch>>.flowOfAllDevices(): Flow<Map
                     watchValue.activeConnection?.firmwareUpdateManager?.availableUpdates ?: flowOf(
                         FirmwareUpdateCheckState(checkingForUpdates = false, result = null))
                 val fwUpdateStatusFlow = watchValue.activeConnection?.firmwareUpdater?.firmwareUpdateState ?: flowOf(FirmwareUpdateStatus.NotInProgress.Idle())
-                val batteryLevelFlow = watchValue.activeConnection?.batteryWatcher?.batteryLevel ?: flowOf(null)
+                val batteryWatcher = watchValue.activeConnection?.batteryWatcher
+                val batteryLevelFlow = batteryWatcher?.batteryLevel ?: flowOf(null)
+                val batteryObservedAtFlow = batteryWatcher?.batteryObservedAt ?: flowOf(null)
                 val languagePackFlow = watchValue.activeConnection?.languagePackInstaller?.state ?: flowOf(LanguagePackInstallState.Idle())
 
                 if (connector == null) {
                     null
                 } else {
-                    combine(connector.state, fwUpdateAvailableFlow, fwUpdateStatusFlow, batteryLevelFlow, languagePackFlow) { connectingState, fwUpdateAvailable, fwUpdateStatus, batteryLevel, languagePackState ->
-                        ActivePebbleState(connectingState, fwUpdateAvailable, fwUpdateStatus, batteryLevel, languagePackState)
+                    combine(connector.state, fwUpdateAvailableFlow, fwUpdateStatusFlow, batteryLevelFlow, batteryObservedAtFlow, languagePackFlow) { values ->
+                        ActivePebbleState(
+                            values[0] as ConnectingPebbleState,
+                            values[1] as FirmwareUpdateCheckState,
+                            values[2] as FirmwareUpdateStatus,
+                            values[3] as Int?,
+                            values[4] as Long?,
+                            values[5] as LanguagePackInstallState,
+                        )
                     }
                 }
             }

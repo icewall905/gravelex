@@ -19,6 +19,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.long
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -438,6 +440,58 @@ class PebbleFitOxygenExportServiceTest {
             service.syncIfDue()
         }
         assertEquals(1, requests)
+    }
+
+    @Test
+    fun freshWatchBatteryUploadsWithoutHealthRowsAndUsesGattObservationTime() = runTest {
+        val settings = MapSettings()
+        var requests = 0
+        var payload = ""
+        val client = HttpClient(MockEngine { request ->
+            requests++
+            payload = (request.body as? TextContent)?.text.orEmpty()
+            respond("", HttpStatusCode.OK)
+        })
+        val service = PebbleFitOxygenExportService(
+            settings, TestCipher(), client,
+            readHealth = { _, _ -> emptyList() },
+            readSessions = { _, _, _, _ -> emptyList() },
+            readWatchBattery = { WatchBatterySnapshot(37, 1_700_000_100L, "watch-1") },
+        )
+        assertTrue(service.saveConfiguration("https://health.example", "token").saved)
+        val result = service.syncNow()
+        assertEquals(0, result.uploaded)
+        assertEquals(1, requests)
+        val status = Json.parseToJsonElement(payload).jsonObject["watch_status"]!!.jsonObject
+        assertEquals(37, status["battery_percent"]!!.jsonPrimitive.int)
+        assertEquals(1_700_000_100L, status["observed_at"]!!.jsonPrimitive.long)
+        assertEquals("gravelex_ble", status["source"]!!.jsonPrimitive.content)
+        assertEquals("watch-1", status["device_id"]!!.jsonPrimitive.content)
+        settings.putLong("gravelex_export_next_poll", 0L)
+        service.syncIfDue()
+        assertEquals(1, requests)
+    }
+
+    @Test
+    fun watchBatteryIsAcknowledgedOnceAcrossMultiPageHealthUpload() = runTest {
+        val settings = MapSettings()
+        val payloads = mutableListOf<String>()
+        val client = HttpClient(MockEngine { request ->
+            payloads += (request.body as? TextContent)?.text.orEmpty()
+            respond("", HttpStatusCode.OK)
+        })
+        val now = 1_700_000_000L
+        val rows = List(3001) { index -> sample(now - 3001L + index, 96, 1) }
+        val service = PebbleFitOxygenExportService(
+            settings, TestCipher(), client,
+            readHealth = { after, _ -> rows.filter { it.timestamp > after } },
+            readSessions = { _, _, _, _ -> emptyList() },
+            readWatchBattery = { WatchBatterySnapshot(42, now, "watch-1") },
+        )
+        assertTrue(service.saveConfiguration("https://health.example", "token").saved)
+        service.syncNow()
+        assertEquals(2, payloads.size)
+        assertEquals(1, payloads.count { it.contains("\"watch_status\"") })
     }
 
     private fun overlay(start: Long, type: Int) = OverlayDataEntity(

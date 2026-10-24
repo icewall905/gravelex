@@ -57,11 +57,28 @@ class AuditPpiDeliveryTest(unittest.TestCase):
             audit_file(self.write_capture({"ppi": [1000, 1000], "offsets_ms": [0]}))
 
     def test_report_output_is_exclusive_private_file(self) -> None:
-        directory = Path(tempfile.mkdtemp())
-        output = directory / "report.json"
-        data_dir = Path(__file__).resolve().parents[1] / "reference-data"
+        root = Path(tempfile.mkdtemp())
+        data_dir = root / "reference-data"
+        data_dir.mkdir()
+        # Keep this test independent of ignored/private reference captures. The
+        # report hashes the collector source, so provide the smallest synthetic
+        # source tree needed for that provenance field.
+        source = root / "watchapps" / "hrv-watch" / "src" / "c" / "main.c"
+        source.parent.mkdir(parents=True)
+        source.write_text("/* synthetic collector source for a privacy test */\n")
+        raw = data_dir / "synthetic-watch.json"
+        raw.write_text(json.dumps({
+            "ts": 1,
+            "payload": {
+                "ppi": [1000, 1010, 990],
+                "offsets_ms": [0, 1000, 2000],
+                "duration_ms": 2000,
+                "stream_semantics": "batched_ppi_unverified",
+                "collector_version": 1,
+            },
+        }))
+        output = root / "report.json"
         script = Path(__file__).resolve().parent / "audit_ppi_delivery.py"
-        raw = data_dir / "motion153-frozen-quiet-20261023-watch.json"
         raw_before = raw.read_bytes()
         subprocess.run(["python3", str(script), str(data_dir), str(output)], check=True)
         before = output.read_bytes()

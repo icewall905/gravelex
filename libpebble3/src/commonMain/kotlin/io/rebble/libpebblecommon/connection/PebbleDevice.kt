@@ -177,6 +177,8 @@ object ConnectedPebble {
 
     interface Battery {
         val batteryLevel: Int?
+        /** Unix seconds of the latest value read from the watch over GATT. */
+        val batteryObservedAt: Long? get() = null
     }
 
     interface AppRunState {

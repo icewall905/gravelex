@@ -42,6 +42,8 @@ import coredevices.util.transcription.KirinkiTranscriptionService
 import coredevices.util.transcription.PlatformSpeechRecognizer
 import coredevices.util.transcription.TranscriptionService
 import coredevices.util.transcription.WisprFlowRESTTranscriptionService
+import io.rebble.libpebblecommon.connection.ConnectedPebbleDevice
+import io.rebble.libpebblecommon.connection.LibPebble
 import dev.gitlive.firebase.Firebase
 import dev.gitlive.firebase.firestore.FirebaseFirestore
 import dev.gitlive.firebase.firestore.FirebaseFirestoreSettings
@@ -152,6 +154,22 @@ val utilModule = module {
             readSessions = { afterTimestamp, afterType, types, limit ->
                 get<io.rebble.libpebblecommon.connection.HealthDataApi>()
                     .getOverlayEntriesPageAfter(afterTimestamp, afterType, types, limit)
+            },
+            readWatchBattery = {
+                get<LibPebble>().watches.value
+                    .filterIsInstance<ConnectedPebbleDevice>()
+                    .singleOrNull()
+                    ?.let { watch ->
+                        val level = watch.batteryLevel
+                        val observedAt = watch.batteryObservedAt
+                        if (level != null && observedAt != null) {
+                            coredevices.pebble.health.WatchBatterySnapshot(
+                                batteryPercent = level,
+                                observedAt = observedAt,
+                                deviceId = watch.identifier.asString,
+                            )
+                        } else null
+                    }
             },
         )
     }

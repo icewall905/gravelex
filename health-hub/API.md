@@ -51,3 +51,25 @@ For private deployments, keep the default localhost bind or use an authenticated
 ## Home Assistant summary coverage
 
 `/api/v1/summary` also returns `account: {id, username, display_name}` for the authenticated token owner, so clients can pin account identity across token renewal. Passwords, hashes, roles and tokens are never included. `metrics` is additive; clients should discover its keys instead of assuming a fixed count. Daily canonical-minute totals are labelled `observed_partial_day` and include `observed_minutes` and `elapsed_minutes`. Missing days are not filled. Body composition retains its measured calendar date and remains account-scoped. See the [sensor integration](integrations/homeassistant/README.md) for the complete metric categories and historical-data limits.
+
+### Watch battery provenance
+
+Battery is independent of health-history uploads. Current battery is selected by its
+measurement timestamp across direct GravelEx BLE observations and legacy watch-app
+snapshots. A backfill's upload time never makes a cached battery measurement newer.
+Values must be whole percentages from 0 through 100; zero is a real reading.
+Measurements older than six hours are withheld from the current `watch_battery`
+metric (unknown in HA). PH keeps the dated last reading for diagnostics.
+
+GravelEx uploads `watch_status` alongside health records, or in a status-only batch
+when there is no new health history. Its fields are `battery_percent`, `observed_at`
+(Unix seconds from the actual watch GATT read/notification), `source: gravelex_ble`,
+and the selected watch's `device_id`. It never exports phone battery as watch battery.
+Dashboard/HA/LLM context share the same resolved observation. Account credentials
+continue to determine storage ownership; `device_id` is provenance, not authority.
+
+Current steps/activity and the latest-heart-rate headline use canonical dated minute
+observations, not the last legacy watch-app status packet. Daily totals are partial:
+unsynced minutes remain unknown. Explicit `snapshot_*` API metrics retain their
+original dates and are historical snapshots, not today's totals. Server receipt age
+includes GravelEx batches, independently of each measurement's observation time.

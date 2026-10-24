@@ -159,13 +159,15 @@ def _public_item(item: Any) -> dict[str, Any]:
 
 
 def _summary_metric(value: Any, unit: str | None = None, *, status: str | None = None,
-                    estimated: bool = False, observed_at: Any = None) -> dict[str, Any] | None:
+                    estimated: bool = False, observed_at: Any = None, source: str | None = None) -> dict[str, Any] | None:
     if value is None or isinstance(value,bool) or not isinstance(value,(int,float,str)):
         return None
     if isinstance(value,(int,float)) and not math.isfinite(value): return None
     if isinstance(value,str) and len(value)>255: return None
     result = {"value": value, "unit": unit, "status": status or "observed",
               "estimated": bool(estimated)}
+    if source is not None:
+        result["source"] = source
     if observed_at is not None:
         result["observed_at"] = observed_at
     return result
@@ -194,8 +196,8 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
         "overnight_strain": _summary_metric(strain.get("score"), "score", status=strain.get("status"), estimated=True, observed_at=strain.get("measured_at")),
         "spo2": _summary_metric(latest_o2.get("percent"), "%", status=oxygen.get("status"), observed_at=latest_o2.get("ts")),
         "weight": _summary_metric(weight.get("kg"), "kg", observed_at=weight.get("date")),
-        "steps": _summary_metric((summary.get("latest") or {}).get("status", {}).get("steps"), "steps", observed_at=(summary.get("latest") or {}).get("ts")),
-        "watch_battery": _summary_metric((summary.get("latest") or {}).get("status", {}).get("battery_percent"), "%", observed_at=(summary.get("latest") or {}).get("ts")),
+        "steps": _summary_metric((summary.get("current_activity") or {}).get("steps"), "steps", status="observed_partial_day", observed_at=((summary.get("current_activity") or {}).get("observed_at") or {}).get("steps"), source="canonical_minutes"),
+        "watch_battery": _summary_metric((summary.get("watch_battery") or {}).get("percent"), "%", status=(summary.get("watch_battery") or {}).get("status"), observed_at=(summary.get("watch_battery") or {}).get("observed_at"), source=(summary.get("watch_battery") or {}).get("source")),
         "training_load": _summary_metric(latest_training.get("load7"), "load", status=latest_training.get("status")),
         "acute_load": _summary_metric(latest_training.get("acute"), "load", status=latest_training.get("status"), estimated=True),
         "chronic_load": _summary_metric(latest_training.get("chronic"), "load", status=latest_training.get("status"), estimated=True),

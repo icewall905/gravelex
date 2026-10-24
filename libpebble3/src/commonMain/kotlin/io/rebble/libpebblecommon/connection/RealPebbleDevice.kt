@@ -29,6 +29,7 @@ class PebbleDeviceFactory {
         bluetoothState: BluetoothState,
         lastFirmwareUpdateState: FirmwareUpdateStatus,
         batteryLevel: Int?,
+        batteryObservedAt: Long?,
         connectionFailureInfo: ConnectionFailureInfo?,
         usingBtClassic: Boolean,
         languagePackInstallState: LanguagePackInstallState,
@@ -88,6 +89,7 @@ class PebbleDeviceFactory {
                             firmwareUpdateState = firmwareUpdateState,
                             firmwareUpdateAvailable = firmwareUpdateAvailable,
                             batteryLevel = batteryLevel,
+                            batteryObservedAt = batteryObservedAt,
                         )
 
                     is ConnectingPebbleState.Connected.ConnectedNotInPrf ->
@@ -99,6 +101,7 @@ class PebbleDeviceFactory {
                             firmwareUpdateState = firmwareUpdateState,
                             firmwareUpdateAvailable = firmwareUpdateAvailable,
                             batteryLevel = batteryLevel,
+                            batteryObservedAt = batteryObservedAt,
                             languagePackInstallState = languagePackInstallState,
                             installedLanguagePack = state.watchInfo.installedLanguagePack(),
                         )
@@ -248,6 +251,7 @@ internal class RealConnectedPebbleDevice(
     override val firmwareUpdateState: FirmwareUpdateStatus,
     override val firmwareUpdateAvailable: FirmwareUpdateCheckState,
     override val batteryLevel: Int?,
+    override val batteryObservedAt: Long?,
     override val languagePackInstallState: LanguagePackInstallState,
     override val installedLanguagePack: InstalledLanguagePack?,
 ) : ConnectedPebbleDevice,
@@ -281,6 +285,7 @@ internal class RealConnectedPebbleDeviceInRecovery(
     override val firmwareUpdateState: FirmwareUpdateStatus,
     override val firmwareUpdateAvailable: FirmwareUpdateCheckState,
     override val batteryLevel: Int?,
+    override val batteryObservedAt: Long?,
 ) : ConnectedPebbleDeviceInRecovery,
     KnownPebbleDevice by knownDevice,
     ActiveDevice by activeDevice,

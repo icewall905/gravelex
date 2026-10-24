@@ -110,10 +110,78 @@ def number(value, low, high, name):
     return value
 
 
+def current_activity(db, now):
+    """Partial local-day totals from canonical minutes, never a stale snapshot."""
+    start = int(datetime.fromtimestamp(now,TZ).replace(hour=0,minute=0,second=0,microsecond=0).timestamp())
+    rows = db.execute('SELECT ts,steps,active,payload FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts',(start,now)).fetchall()
+    result = {'status':'observed_partial_day', 'source':'canonical_minutes', 'ts':None,
+              'observed_minutes':{}, 'observed_at':{}, 'elapsed_minutes':max(0,(now-start)//60)}
+    for field,limit in (('steps',10000),('active',1),('distance_m',100000),('active_kcal',10000),('resting_kcal',10000)):
+        measured=[]
+        for row in rows:
+            payload=json.loads(row['payload']) if row['payload'] else {}
+            value=row[field] if field in ('steps','active') else payload.get(field)
+            if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and 0<=value<=limit:
+                measured.append((row['ts'],value))
+        output = 'active_seconds' if field=='active' else 'distance_meters' if field=='distance_m' else field
+        result[output]=sum(v for _,v in measured)*(60 if field=='active' else 1) if measured else None
+        result['observed_minutes'][output]=len(measured)
+        result['observed_at'][output]=measured[-1][0] if measured else None
+    times=[t for t in result['observed_at'].values() if t is not None]
+    result['ts']=max(times) if times else None
+    return result
+
+
+BATTERY_MAX_AGE_SECONDS = 6 * 3600
+
+
+def watch_battery(db, now):
+    """Resolve battery independently of health backfills and transport receipts."""
+    best = None
+    for row in db.execute("SELECT ts,received,source,payload FROM reports WHERE json_type(payload,'$.watch_status')='object' OR json_type(payload,'$.status.battery_percent') IN ('integer','real') ORDER BY ts DESC"):
+        payload = json.loads(row['payload'])
+        direct = payload.get('watch_status') if row['source'] == 'gravelex' else None
+        if isinstance(direct, dict) and direct.get('source') == 'gravelex_ble':
+            percent, observed = direct.get('battery_percent'), direct.get('observed_at')
+            source, device = 'gravelex_ble', direct.get('device_id')
+        elif row['source'] == 'watchapp':
+            percent, observed = (payload.get('status') or {}).get('battery_percent'), row['ts']
+            source, device = 'watchapp', None
+        else:
+            continue
+        if (isinstance(percent, bool) or not isinstance(percent, (int,float)) or not math.isfinite(percent)
+                or percent != int(percent) or not 0 <= percent <= 100
+                or isinstance(observed, bool) or not isinstance(observed, (int,float))
+                or not math.isfinite(observed) or not 946684800 <= observed <= min(now + 300, row['received'] + 300)):
+            continue
+        # Equal-time direct GATT observations take precedence over watch-app snapshots.
+        rank = (observed, source == 'gravelex_ble')
+        if best is None or rank > best[0]:
+            best = (rank, {'last_percent': int(percent), 'observed_at': int(observed),
+                           'received_at': row['received'], 'source': source, 'device_id': device})
+    if best is None:
+        return {'percent': None, 'status': 'not_collected', 'observed_at': None, 'source': None}
+    result = best[1]
+    result['age_seconds'] = max(0, now - result['observed_at'])
+    result['status'] = 'observed' if result['age_seconds'] <= BATTERY_MAX_AGE_SECONDS else 'stale'
+    result['percent'] = result['last_percent'] if result['status'] == 'observed' else None
+    return result
+
+
 def ingest(data):
     now = int(time.time())
     ts = int(number(data.get("ts", now), 946684800, now + 300, "timestamp"))
     source = str(data.get("source", "phone"))[:80]
+    if 'watch_status' in data:
+        status = data['watch_status']
+        if source != 'gravelex' or not isinstance(status, dict) or status.get('source') != 'gravelex_ble':
+            raise ValueError('Invalid watch battery source')
+        percent = number(status.get('battery_percent'), 0, 100, 'Watch battery')
+        observed = number(status.get('observed_at'), 946684800, now + 300, 'Battery observation timestamp')
+        if percent != int(percent) or observed != int(observed):
+            raise ValueError('Battery percentage and observation timestamp must be integers')
+        if status.get('device_id') is not None and (not isinstance(status['device_id'], str) or not 1 <= len(status['device_id']) <= 128):
+            raise ValueError('Invalid battery device identity')
     rows = data.get("records", [])
     sessions = data.get("sessions", [])
     if not isinstance(rows, list) or len(rows) > 3000 or not isinstance(sessions, list) or len(sessions) > 1000:
@@ -325,6 +393,9 @@ def summary(days=42):
     since = int(datetime.combine(start_day, datetime.min.time(), TZ).timestamp())
     with connect() as db:
         latest = db.execute("SELECT * FROM reports WHERE source NOT IN ('phone-history','watch-history','gravelex') ORDER BY ts DESC LIMIT 1").fetchone()
+        activity = current_activity(db, now)
+        battery = watch_battery(db, now)
+        receipt = db.execute("SELECT MAX(received) FROM reports").fetchone()[0]
         minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? ORDER BY ts", (since,))]
         workouts = workout_edits.effective_rows(db)
         training_minutes = {}
@@ -409,8 +480,9 @@ def summary(days=42):
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
     return {"wearer": (accounts.current() or {}).get("display_name", os.environ.get("WEARER_NAME", "")), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
-      "last_received": latest["received"] if latest else None,
-      "sync_age_seconds": now - latest["received"] if latest else None,
+      "watch_battery": battery, "current_activity": activity,
+      "last_received": receipt,
+      "sync_age_seconds": max(0, now - receipt) if receipt is not None else None,
       "training_ledger": ledger, "collection_health": collection, "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
@@ -442,7 +514,7 @@ def today():
             "hrv_status": hs.get("status"), "hrv_ms": night.get("rmssd_ms"), "weekly_hrv_ms": hs.get("weekly_rmssd_ms"),
             "baseline_nights": hs.get("baseline_nights", 0), "rhr": night.get("resting_hr"),
             "breathing": night.get("breaths_per_min"), "load_acute": t.get("acute"), "load_chronic": t.get("chronic"),
-            "steps": status.get("steps")}
+            "steps": (s.get("current_activity") or {}).get("steps")}
 
 
 def issue_hrv_token(scope="hrv", device_id=None):
