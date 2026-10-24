@@ -2,6 +2,10 @@
 
 Audit date: 2026-10-22. Scope: GravelEx Android fork, Pebble Time 2/watch apps, portable `health-hub`, HA, and contextual LLM output. This is a living engineering backlog, not a claim that the present system matches Garmin. Checkboxes mean implementation and review complete in source; the delivery ledger separately records deployment and field validation.
 
+## Deferred dashboard features
+
+- [ ] **Breathing rate — restore only when useful.** Removed the empty breathing widget from Today, Sleep, Recovery and the daily overview. Retain collection and analysis code for future work. Follow [PebbleOS #2558](https://github.com/coredevices/PebbleOS/issues/2558) for consecutive PPI timing, quality and gap metadata. Before restoring the widget, demonstrate a usable timed signal, validate a respiration estimator against independently counted breaths or a respiratory reference, and label estimates with confidence, date and missing-data limits. More batched recordings alone do not meet this requirement.
+
 ## Target outcome
 
 A dependable, local-first daily training companion on GrapheneOS without Google services: reliable collection; useful workout load and recovery trends; explainable HRV and stress; a fast watch/phone/web overview; optional chest-strap/GPS inputs; portable deployment and recoverable history. Priorities remain training load, HRV and stress. Never turn absence of evidence into rest, inactivity or a reassuring score.
