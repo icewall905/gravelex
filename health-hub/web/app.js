@@ -489,14 +489,15 @@ function readinessNow() {
 }
 const stockVariability = () => stock().variability || {};
 const ppiSourceUnverified = () => D().hrv?.quality?.stream === 'batched_ppi_unverified';
-const PPI_SOURCE_EXPLANATION = 'HRV cannot currently be estimated reliably from this watch stream: optical pulse intervals arrive in batches without verified consecutive-beat timing or gap metadata. The variability diagnostic below is not an HRV estimate. We are waiting for beat-timing support and validation; more baseline nights alone will not fix this.';
+const PPI_SOURCE_EXPLANATION = 'Very rough, unvalidated HRV proxy from differences between delivered optical pulse intervals. Batching, unknown beat order and missing intervals may distort the value; it is not verified beat-to-beat RMSSD. Firmware support for consecutive beat timing and gaps should enable a better estimate, which will still need validation. Excluded from readiness and stress.';
+const latestPpiProxy = () => (stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms)).sort((a,b)=>a.ts-b.ts).at(-1);
 const BREATH_SOURCE_EXPLANATION = 'No defensible breaths/min approximation is available from the current batched pulse intervals. Their timing and continuity are unknown, so a breathing rhythm cannot be established. We are waiting for beat-timing support, then validation of the breathing estimate. More recordings alone will not resolve this.';
 function ppiVariabilityDiagnostic() {
-  const latest=(stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms)).at(-1);
-  return latest ? h('div',{class:'pending'},
-    h('strong',null,`Delivered PPI variability: ${fmt(latest.value_ms,1)} ms`),
-    h('p',null,'Unvalidated signal diagnostic, not HRV or RMSSD. Delivery order and batching may affect it; excluded from readiness and stress.'),
-    h('p',{class:'foot'},`Recorded ${fmtDateTime(latest.ts)} · ${latest.context || 'unspecified context'}`)) : null;
+  const latest=latestPpiProxy();
+  return latest ? [big(fmt(latest.value_ms,1),'ms · HRV proxy estimate'),
+    h('p',{class:'lede'},`Recorded ${fmtDateTime(latest.ts)} · ${latest.context || 'unspecified context'}`),
+    h('p',{class:'pending'},PPI_SOURCE_EXPLANATION)]
+    : pending('No HRV proxy recording yet',PPI_SOURCE_EXPLANATION);
 }
 function monitorExplanation(kind) {
   const diag=D().monitor_observations?.diagnostics?.[kind] || {};
@@ -629,9 +630,9 @@ const CARDS = {
     const [word, kind] = hrvLabel(st.status);
     const building = st.status === 'baseline_building';
     return card('hrv', 'HRV status', { link: 'hrv', chip: st.provisional ? chip('Provisional', '', st.reason) : expChip() },
-      h('p', { class: 'status-word', style: { fontSize: '20px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'HRV estimate unavailable' : word),
+      h('p', { class: 'status-word', style: { fontSize: '20px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'Unvalidated estimate' : word),
       ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
-        ? [pending('Current watch data cannot establish HRV', PPI_SOURCE_EXPLANATION), ppiVariabilityDiagnostic()]
+        ? ppiVariabilityDiagnostic()
         : building
         ? pending('Learning your usual range', 'HRV is measured by short recordings at night. A usual range needs enough earlier nights.',
           { n: st.baseline_nights || 0, of: st.required_baseline_nights || 14, unit: 'nights', label: 'Baseline nights' })
@@ -839,7 +840,7 @@ function watchHero() {
       watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps'),
       watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart'),
       watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr'),
-      watchMetric('hrv', 'HRV', null, ppiSourceUnverified() ? 'Estimate unavailable · see diagnostic' : 'Not available yet', 'hrv'),
+      watchMetric('hrv', ppiSourceUnverified() ? 'HRV proxy estimate' : 'HRV', ppiSourceUnverified() && latestPpiProxy() ? `${fmt(latestPpiProxy().value_ms,1)} ms` : null, ppiSourceUnverified() && latestPpiProxy() ? `unvalidated · ${fmtDateTime(latestPpiProxy().ts)}` : 'Not available yet', 'hrv'),
       watchMetric('oxygen', 'Blood oxygen', isNum(oxygenLatest.percent) ? `${fmt(oxygenLatest.percent, 1)}%` : null, oxygenLatest.ts ? fmtDateTime(oxygenLatest.ts) : 'No samples yet', 'oxygen'),
       watchMetric('weight', 'Weight', isNum(weightLatest.kg) ? `${fmt(weightLatest.kg, 1)} kg` : null, weightLatest.date ? `measured ${fmtDay(weightLatest.date)}` : 'No dated reading', 'weight'),
       watchMetric('train', 'Training load', isNum(trainingLatest.load7) ? fmt(trainingLatest.load7, 1) : null, isNum(trainingLatest.load7) ? '7-day load' : 'Needs history', 'train'),
@@ -1013,9 +1014,9 @@ const DETAIL = {
       const pts = ((D().hrv || {}).analysis || {}).points || [];
       return [
         card('hrv', 'This week', { chip: st.provisional ? chip('Provisional', '', st.reason) : expChip(), cls: 'wide' },
-          h('p', { class: 'status-word', style: { fontSize: '22px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'HRV estimate unavailable' : word),
+          h('p', { class: 'status-word', style: { fontSize: '22px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'Unvalidated estimate' : word),
           ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
-            ? [pending('Current watch data cannot establish HRV', PPI_SOURCE_EXPLANATION), ppiVariabilityDiagnostic()]
+            ? ppiVariabilityDiagnostic()
             : st.status === 'baseline_building'
             ? pending('Learning your usual range', st.reason, { n: st.baseline_nights || 0, of: st.required_baseline_nights || 14, unit: 'nights' })
             : [hrvGauge(st, 280), stats([[st.provisional ? 'Last 3 nights' : '7-night average', fmt(st.weekly_rmssd_ms), 'ms'], ['Usual range', isNum(st.baseline_low_ms) ? `${fmt(st.baseline_low_ms)}–${fmt(st.baseline_high_ms)}` : '—', 'ms'], ['Last night', fmt(st.last_night_rmssd_ms), 'ms'], ['Nights this week', isNum(st.nights_this_week) ? `${st.nights_this_week} of 7` : '—']]), h('p', { class: 'lede' }, st.reason || '')],
