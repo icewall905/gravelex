@@ -1,3 +1,7 @@
+# 0.1.11
+
+- Consolidate per-version proxy charts into one overnight chart and one collapsed manual-test chart; preserve source changes as line breaks and avoid averaging overlapping methods.
+
 # 0.1.10
 
 - Include scheduled overnight HRV proxy recordings as yellow daily means, with separate manual and source series.
