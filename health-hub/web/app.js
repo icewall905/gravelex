@@ -465,9 +465,9 @@ function stockVariabilityDetail() {
   const points=all.filter(p=>(context == null || p.context===context)&&(source == null || p.source===source));
   if (!points.length) return null;
   const items=points.map(p=>({key:new Date(p.ts*1000).toISOString().slice(0,10),label:new Date(p.ts*1000).toISOString().slice(0,10),v:p.value_ms}));
-  return h('details',{class:'info'},h('summary',null,'Pulse variability detail'),
+  return h('details',{class:'info'},h('summary',null,'Delivered PPI variability diagnostic (not HRV)'),
     lineChart({items,W:chartW(),H:160,unit:'ms',label:'Delivered pulse variability',fmtV:v=>fmt(v,1)}),
-    h('p',{class:'foot'},'Experimental pulse variability; delivery-dependent, not validated HRV. It never feeds readiness.'),
+    h('p',{class:'foot'},'Unvalidated diagnostic of differences between delivered pulse intervals. This is not an HRV approximation: beat order, continuity and missing intervals are unknown. It never feeds readiness or stress.'),
     h('p',{class:'foot'},`Method: ${model.method || 'delivered_ppi_variation_unverified'}; showing ${context || 'the latest'}${source ? ` · ${source}` : ''} series.`));
 }
 
@@ -489,7 +489,15 @@ function readinessNow() {
 }
 const stockVariability = () => stock().variability || {};
 const ppiSourceUnverified = () => D().hrv?.quality?.stream === 'batched_ppi_unverified';
-const PPI_SOURCE_EXPLANATION = 'The watch delivered batched optical PPI readings. Consecutive-beat continuity is not verified, so these recordings cannot yet supply HRV, breathing or stress scores. More baseline days alone will not resolve this.';
+const PPI_SOURCE_EXPLANATION = 'HRV cannot currently be estimated reliably from this watch stream: optical pulse intervals arrive in batches without verified consecutive-beat timing or gap metadata. The variability diagnostic below is not an HRV estimate. We are waiting for beat-timing support and validation; more baseline nights alone will not fix this.';
+const BREATH_SOURCE_EXPLANATION = 'No defensible breaths/min approximation is available from the current batched pulse intervals. Their timing and continuity are unknown, so a breathing rhythm cannot be established. We are waiting for beat-timing support, then validation of the breathing estimate. More recordings alone will not resolve this.';
+function ppiVariabilityDiagnostic() {
+  const latest=(stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms)).at(-1);
+  return latest ? h('div',{class:'pending'},
+    h('strong',null,`Delivered PPI variability: ${fmt(latest.value_ms,1)} ms`),
+    h('p',null,'Unvalidated signal diagnostic, not HRV or RMSSD. Delivery order and batching may affect it; excluded from readiness and stress.'),
+    h('p',{class:'foot'},`Recorded ${fmtDateTime(latest.ts)} · ${latest.context || 'unspecified context'}`)) : null;
+}
 function monitorExplanation(kind) {
   const diag=D().monitor_observations?.diagnostics?.[kind] || {};
   const labels={beat_continuity_unverified:'Consecutive-beat continuity is unverified',motion_uncalibrated:'Motion calibration has not been validated',motion_unknown:'Motion evidence is missing',quality_insufficient:'Interval quality is insufficient',strict_qualification_missing:'No clear qualified breathing rhythm',reported_hr_missing:'No direct pulse summary',reported_hr_invalid:'Invalid pulse summary'};
@@ -621,9 +629,9 @@ const CARDS = {
     const [word, kind] = hrvLabel(st.status);
     const building = st.status === 'baseline_building';
     return card('hrv', 'HRV status', { link: 'hrv', chip: st.provisional ? chip('Provisional', '', st.reason) : expChip() },
-      h('p', { class: 'status-word', style: { fontSize: '20px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'Awaiting beat timing' : word),
+      h('p', { class: 'status-word', style: { fontSize: '20px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'HRV estimate unavailable' : word),
       ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
-        ? pending('Beat continuity is unverified', PPI_SOURCE_EXPLANATION)
+        ? [pending('Current watch data cannot establish HRV', PPI_SOURCE_EXPLANATION), ppiVariabilityDiagnostic()]
         : building
         ? pending('Learning your usual range', 'HRV is measured by short recordings at night. A usual range needs enough earlier nights.',
           { n: st.baseline_nights || 0, of: st.required_baseline_nights || 14, unit: 'nights', label: 'Baseline nights' })
@@ -646,7 +654,7 @@ const CARDS = {
     const items=nightItems(7,'breaths_per_min'),has=items.some(i=>isNum(i.v)),n=lastNight();
     return card('breath','Breathing rate',{link:'breath',chip:expChip()},has ? [
       big(isLastNight(n) && isNum(n.breaths_per_min) ? fmt(n.breaths_per_min,1) : '—','breaths/min overnight',!(isLastNight(n)&&isNum(n.breaths_per_min))),
-      lineChart({items,H:100,unit:'br/min',label:'Qualified overnight breathing estimates'})] : pending('Recording qualification blocked',monitorExplanation('breathing')),
+      lineChart({items,H:100,unit:'br/min',label:'Qualified overnight breathing estimates'})] : pending(ppiSourceUnverified() ? 'Breathing estimate unavailable' : 'Recording qualification blocked',ppiSourceUnverified() ? BREATH_SOURCE_EXPLANATION : monitorExplanation('breathing')),
       h('p',{class:'foot'},'Requires a usable interval signal, calibrated motion and a clear breathing rhythm. More elapsed nights alone cannot qualify a rejected recording.'));
   },
 
@@ -831,8 +839,8 @@ function watchHero() {
       watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps'),
       watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart'),
       watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr'),
-      watchMetric('breath', 'Breathing', null, 'Not available yet', 'breath'),
-      watchMetric('hrv', 'HRV', null, ppiSourceUnverified() ? 'Beat timing unverified' : 'Not available yet', 'hrv'),
+      watchMetric('breath', 'Breathing', null, ppiSourceUnverified() ? 'Cannot estimate from current data' : 'Not available yet', 'breath'),
+      watchMetric('hrv', 'HRV', null, ppiSourceUnverified() ? 'Estimate unavailable · see diagnostic' : 'Not available yet', 'hrv'),
       watchMetric('oxygen', 'Blood oxygen', isNum(oxygenLatest.percent) ? `${fmt(oxygenLatest.percent, 1)}%` : null, oxygenLatest.ts ? fmtDateTime(oxygenLatest.ts) : 'No samples yet', 'oxygen'),
       watchMetric('weight', 'Weight', isNum(weightLatest.kg) ? `${fmt(weightLatest.kg, 1)} kg` : null, weightLatest.date ? `measured ${fmtDay(weightLatest.date)}` : 'No dated reading', 'weight'),
       watchMetric('train', 'Training load', isNum(trainingLatest.load7) ? fmt(trainingLatest.load7, 1) : null, isNum(trainingLatest.load7) ? '7-day load' : 'Needs history', 'train'),
@@ -1006,8 +1014,10 @@ const DETAIL = {
       const pts = ((D().hrv || {}).analysis || {}).points || [];
       return [
         card('hrv', 'This week', { chip: st.provisional ? chip('Provisional', '', st.reason) : expChip(), cls: 'wide' },
-          h('p', { class: 'status-word', style: { fontSize: '22px' } }, word),
-          st.status === 'baseline_building'
+          h('p', { class: 'status-word', style: { fontSize: '22px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'HRV estimate unavailable' : word),
+          ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
+            ? [pending('Current watch data cannot establish HRV', PPI_SOURCE_EXPLANATION), ppiVariabilityDiagnostic()]
+            : st.status === 'baseline_building'
             ? pending('Learning your usual range', st.reason, { n: st.baseline_nights || 0, of: st.required_baseline_nights || 14, unit: 'nights' })
             : [hrvGauge(st, 280), stats([[st.provisional ? 'Last 3 nights' : '7-night average', fmt(st.weekly_rmssd_ms), 'ms'], ['Usual range', isNum(st.baseline_low_ms) ? `${fmt(st.baseline_low_ms)}–${fmt(st.baseline_high_ms)}` : '—', 'ms'], ['Last night', fmt(st.last_night_rmssd_ms), 'ms'], ['Nights this week', isNum(st.nights_this_week) ? `${st.nights_this_week} of 7` : '—']]), h('p', { class: 'lede' }, st.reason || '')],
           info('How HRV status works',
@@ -1048,8 +1058,8 @@ const DETAIL = {
       return [card('breath', 'Overnight breathing rate', { chip: expChip(), cls: 'wide' },
         items.some(i => isNum(i.v)) ? [lineChart({ items, W: chartW(), H: 180, unit: 'br/min', fmtV: v => fmt(v, 1), label: 'Breathing rate per night' }),
           stats([['Average', fmt(avg(vals), 1), 'br/min'], ['Nights', `${vals.filter(isNum).length} of ${span.length}`]])]
-          : pending('Recording qualification blocked',monitorExplanation('breathing')),
-        info('About breathing rate', 'Estimated from how heart rate rises and falls with each breath during night recordings. Nights with an unclear signal are left blank.'))];
+          : pending(ppiSourceUnverified() ? 'Breathing estimate unavailable' : 'Recording qualification blocked',ppiSourceUnverified() ? BREATH_SOURCE_EXPLANATION : monitorExplanation('breathing')),
+        info('About breathing rate', ppiSourceUnverified() ? BREATH_SOURCE_EXPLANATION : 'An experimental estimate from heart-rate changes associated with breathing during night recordings. Nights with an unclear signal are left blank; this is not a direct respiratory measurement.'))];
     },
   },
 
