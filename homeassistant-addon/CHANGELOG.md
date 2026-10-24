@@ -1,3 +1,9 @@
+# 0.1.1
+
+- Pin the hub to the dated battery resolver and canonical activity summary fix.
+- Withhold stale battery readings and expose the actual measurement time.
+- Include mobile origin/login and service-worker redirect fixes.
+
 # Changelog
 
 ## 0.1.0
