@@ -23,6 +23,7 @@ import watch_api
 import workout_edits
 import dashboard_auth
 import api_tokens
+import accounts
 
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent / "web"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -37,6 +38,7 @@ app = Flask(__name__, static_folder=None)
 # Watch uploads and the Today read endpoint, so one hostname serves everything.
 app.register_blueprint(watch_api.blueprint())
 app.register_blueprint(api_tokens.blueprint())
+app.register_blueprint(accounts.blueprint())
 
 
 def _json_body():
@@ -74,6 +76,8 @@ _scale_cache = None
 _scale_at = 0
 _scale_lock = threading.Lock()
 def _scale_data():
+    if not accounts.legacy_context():
+        return None
     global _scale_cache, _scale_at
     with _scale_lock:
         if _scale_cache is not None and time.monotonic() - _scale_at < 120:
@@ -216,7 +220,10 @@ def api_pair():
     kind = request.args.get("kind", "hrv")
     if kind not in PAIR_PURPOSE:
         return {"error": "Unknown pairing type"}, 400
-    response = jsonify(fitness.issue_hrv_token(kind))
+    try:
+        response = jsonify(fitness.issue_hrv_token(kind, request.args.get("device")))
+    except ValueError as error:
+        return {"error":str(error)},400
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -231,7 +238,7 @@ def pair_page():
 <title>Pair Pebble Health</title><style>body{{font:18px/1.5 system-ui;max-width:32em;margin:40px auto;padding:20px}}button{{font:inherit;padding:12px 18px}}</style>
 <h1>Connect {title}</h1><p>{purpose} Access expires after 30 days without use.</p>
 <button id="pair">Allow</button><p id="status" role="status"></p>
-<script>document.getElementById('pair').onclick=async function(){{this.disabled=true;try{{const r=await fetch('api/pair?kind={kind}',{{method:'POST'}});if(!r.ok)throw Error('Pairing failed');const data=await r.json();location.href='pebblejs://close#'+encodeURIComponent(JSON.stringify(data));}}catch(e){{document.getElementById('status').textContent=e.message;this.disabled=false;}}}};</script></html>"""
+<script>document.getElementById('pair').onclick=async function(){{this.disabled=true;try{{const r=await fetch('api/pair?kind={kind}'+(new URLSearchParams(location.search).has('device')?'&device='+encodeURIComponent(new URLSearchParams(location.search).get('device')):''),{{method:'POST',headers:{{'X-PH-Request':'1'}}}});if(!r.ok)throw Error('Pairing failed');const data=await r.json();location.href='pebblejs://close#'+encodeURIComponent(JSON.stringify(data));}}catch(e){{document.getElementById('status').textContent=e.message;this.disabled=false;}}}};</script></html>"""
     return html, 200, {"Cache-Control": "no-store", "Content-Type": "text/html; charset=utf-8"}
 
 

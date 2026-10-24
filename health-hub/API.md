@@ -2,7 +2,7 @@
 
 This is the read-only versioned API for local clients and Home Assistant. It is separate from the phone upload receiver and from the browser dashboard. Requests use `Authorization: Bearer <token>`. The API must be reachable through `/api/v1/` even when an interactive proxy login protects the dashboard; the bearer token remains mandatory. Never bypass bearer checks for `/api/settings/`, dashboard pages, or upload routes.
 
-The dashboard uses a shared password session. `PH_PASSWORD_HASH` and `PH_SESSION_SECRET` are required; the dashboard fails closed if either is unset. Login routes are `GET /login`, `POST /auth/login` with a JSON password body, and `POST /auth/logout`. Settings requests require the current `ph_session` cookie and `X-PH-Request: 1` CSRF protection.
+Initialization migrates the shared password into the bootstrap administrator named by `PH_ADMIN_USERNAME` (default `admin`), using `WEARER_NAME` for its display name. `PH_PASSWORD_HASH` is bootstrap-only; `PH_SESSION_SECRET` remains required. Login uses a JSON `{username,password}` body at `POST /auth/login`, with `GET /login` and `POST /auth/logout`. Settings requests require the current `ph_session` cookie and `X-PH-Request: 1` CSRF protection. Password or status changes bump the account's session version.
 
 ## Endpoints and scopes
 
@@ -34,14 +34,16 @@ Every history response is bounded by `limit` (default 100, maximum 1000) and an 
 
 ## Password and token separation
 
-API bearer tokens cannot manage dashboard settings. Set or rotate the dashboard password from your own terminal with:
+API bearer tokens cannot manage dashboard settings. Before the registry exists, set the bootstrap password with:
 
 ```sh
-python3 scripts/set-password.py
+python3 scripts/set-password.py --bootstrap
 ```
 
-Initialization writes a one-time password to the ignored `data/bootstrap-password.txt` with mode 600, unless you choose the password yourself with the script. The script stores only `PH_PASSWORD_HASH` and rotates `PH_SESSION_SECRET`. Never paste passwords, session secrets, bootstrap files, or bearer tokens into Git, issues, chats, or screenshots.
+After initialization, reset an existing username inside the web container: `docker compose exec web python scripts/set-password.py --username USERNAME`. The script updates the registry row and bumps `session_version`; it refuses unknown users and does not rewrite `PH_PASSWORD_HASH` or rotate the global session secret. Initialization writes a one-time password to the ignored `data/bootstrap-password.txt` with mode 600. Never paste passwords, session secrets, bootstrap files, or bearer tokens into Git, issues, chats, or screenshots.
 
-API tokens are named, scoped to `summary:read` by default, optionally granted `history:read` and `raw:read`, expiring, and revocable. Store only a hash and show the secret once at creation. Existing watch upload tokens remain separate and are not API read tokens.
+API tokens are named, scoped to `summary:read` by default, optionally granted `history:read` and `raw:read`, expiring, revocable and bound to their account. Members' tokens access only their own history; account administration does not grant default health-history access to others. Existing watch upload tokens remain separate and are not API read tokens.
+
+Pairing is account and device scoped. `/pair` uses the first active device by default; clients may select `/pair?kind=history&device=<device-id>` or use `/api/pair`. Disabling a device invalidates its pairing credentials and re-enabling requires repair. Labels identify enrollment records and are not verified hardware bindings. Multiple devices aggregate into one person's history database; simultaneous-device duplicate claims are not deduplicated.
 
 For private deployments, keep the default localhost bind or use an authenticated VPN/reverse proxy. Use HTTPS for any reachable host. This API exposes health history and raw recordings; treat tokens and backups as private credentials.

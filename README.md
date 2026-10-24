@@ -17,9 +17,11 @@ The hub binds to localhost by default. Use an authenticated VPN or HTTPS reverse
 
 ## Dashboard and API authentication
 
-The dashboard uses a shared password session. Set `PH_PASSWORD_HASH` and `PH_SESSION_SECRET`; dashboards fail closed when either is unset. The initial password is written once to the ignored `health-hub/data/bootstrap-password.txt` with mode 600. To choose or rotate it, run `python3 scripts/set-password.py` from `health-hub`; the script stores `PH_PASSWORD_HASH` and rotates `PH_SESSION_SECRET`. Never put passwords, session secrets, bearer tokens, or bootstrap files in Git or chat.
+The first start uses `PH_PASSWORD_HASH`, `PH_ADMIN_USERNAME` (default `admin`) and `PH_SESSION_SECRET` to create the bootstrap administrator in `health-hub/data/household.sqlite3`; `WEARER_NAME` supplies its display name. The original `fitness.sqlite3`, its history and existing tokens remain owned by that administrator. New household accounts receive their own `data/people/<server-id>.sqlite3` history database. Sign in with a username and password, then use More → Household to manage accounts and devices.
 
-The versioned `/api/v1/` endpoints use scoped bearer tokens and remain separate from dashboard login. Dashboard settings require the current `PH` session plus `X-PH-Request: 1` CSRF protection. API bearer tokens cannot manage settings. See [API.md](health-hub/API.md) for scopes, bounded history, and token handling.
+The initial password is written once to the ignored `health-hub/data/bootstrap-password.txt` with mode 600. Before the registry exists, choose a bootstrap password with `python3 scripts/set-password.py --bootstrap`. After initialization, reset an existing account inside the web container: `docker compose exec web python scripts/set-password.py --username admin`. The command bumps that account's session version and does not rewrite bootstrap environment variables. Never put passwords, session secrets, bearer tokens, or bootstrap files in Git or chat.
+
+The versioned `/api/v1/` endpoints use scoped bearer tokens and remain separate from dashboard login. Dashboard settings require the current `ph_session` cookie plus `X-PH-Request: 1` CSRF protection. API bearer tokens cannot manage settings. See [API.md](health-hub/API.md) for scopes, bounded history, and token handling.
 
 ## Data limits and firmware
 

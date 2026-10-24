@@ -18,14 +18,14 @@ def client(tmp_path,monkeypatch):
     return dashboard.app.test_client()
 
 def login(client):
-    return client.post('/auth/login',json={'password':'test-password-123'},headers={'X-PH-Request':'1'})
+    return client.post('/auth/login',json={'username':'admin','password':'test-password-123'},headers={'X-PH-Request':'1'})
 
 def test_login_and_logout(client):
     assert client.get('/').status_code==302
     assert client.get('/api/summary').status_code==401
     assert client.get('/api/settings/api-tokens').status_code==401
     assert client.get('/healthz').status_code==200
-    assert client.post('/auth/login',json={'password':'test-password-123'}).status_code==400
+    assert client.post('/auth/login',json={'username':'admin','password':'test-password-123'}).status_code==400
     response=login(client)
     assert response.status_code==200
     assert 'HttpOnly' in response.headers['Set-Cookie']
@@ -39,7 +39,7 @@ def test_fail_closed_and_rate_limit(client,monkeypatch):
     assert client.get('/').status_code==503
     monkeypatch.setenv('PH_PASSWORD_HASH',generate_password_hash('test-password-123'))
     for _ in range(5):
-        assert client.post('/auth/login',json={'password':'wrong'},headers={'X-PH-Request':'1'}).status_code==401
+        assert client.post('/auth/login',json={'username':'admin','password':'wrong'},headers={'X-PH-Request':'1'}).status_code==401
     assert login(client).status_code==429
 
 def test_token_security(client):

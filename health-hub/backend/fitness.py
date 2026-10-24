@@ -22,6 +22,7 @@ import stock_estimates
 import motion_quality
 import workout_edits
 import uuid
+import accounts
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -40,8 +41,14 @@ def _schema_ready(db):
 
 
 def connect():
-    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=15)
+    path = accounts.health_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        fd=os.open(path, os.O_RDWR|os.O_CREAT|os.O_EXCL, 0o600)
+        os.close(fd)
+    except FileExistsError:
+        pass
+    db = sqlite3.connect(path, timeout=15)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA recursive_triggers=ON')
     try:
@@ -337,7 +344,8 @@ def summary(days=42):
         # (see research/seed_baseline.py); never raw history.
         seed_row=db.execute("SELECT value FROM settings WHERE key='baseline_seed'").fetchone()
         seed=json.loads(seed_row['value']) if seed_row else None
-        weight_model.sync(db, now)
+        if accounts.legacy_context():
+            weight_model.sync(db, now)
         weight=weight_model.history(db, datetime.fromtimestamp(now,TZ).date())
         blood_oxygen=oxygen.summary(db,since,now,TZ)
         import briefing as briefing_model  # deferred: briefing imports this module
@@ -400,7 +408,7 @@ def summary(days=42):
         nightly['readiness_history']=readiness_history.read_history(snapshot_db, since, now)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
-    return {"wearer": os.environ.get("WEARER_NAME", ""), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
+    return {"wearer": (accounts.current() or {}).get("display_name", os.environ.get("WEARER_NAME", "")), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
       "last_received": latest["received"] if latest else None,
       "sync_age_seconds": now - latest["received"] if latest else None,
       "training_ledger": ledger, "collection_health": collection, "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
@@ -437,20 +445,24 @@ def today():
             "steps": status.get("steps")}
 
 
-def issue_hrv_token(scope="hrv"):
+def issue_hrv_token(scope="hrv", device_id=None):
     # 'today' is the only read scope: it can fetch the compact daily summary
     # for the watch, never history or raw data.
     if scope not in ("hrv","history","today"):raise ValueError("Unknown pairing scope")
+    device_id = accounts.enrollment_device(device_id)
     token = secrets.token_urlsafe(32)
     expires = int(time.time()) + 30 * 86400
     with connect() as db:
         db.execute("DELETE FROM pairing_tokens WHERE expires < ?", (int(time.time()),))
         db.execute("INSERT INTO pairing_tokens(hash,expires,scope) VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), expires,scope))
-    return {"token": token, "expires": expires}
+    accounts.register_credential(token,"watch",device_id)
+    return {"token": token, "expires": expires, "device_id": device_id}
 
 
 def authorize_hrv(token, scope="hrv"):
     if not token or len(token) > 200:
+        return False
+    if not accounts.route_credential(token,"watch"):
         return False
     with connect() as db:
         return db.execute("SELECT 1 FROM pairing_tokens WHERE hash=? AND expires>? AND scope=?",

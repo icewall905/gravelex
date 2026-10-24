@@ -97,6 +97,7 @@ const RANGES = [{ days: 7, label: '7 days' }, { days: 28, label: '4 weeks' }, { 
 const S = {
   data: null, daysLoaded: 0, loading: false, error: null,
   fetchedAt: 0, offlineSince: null, range: Number(store.get('ph-range')) || 7,
+  account: null, adminUsers: null, accountLoading: false,
 };
 const API_TOKENS = { tokens: [], scopes: [], loaded: false, secret: null, error: '' };
 if (!RANGES.some(r => r.days === S.range)) S.range = 7;
@@ -1327,6 +1328,124 @@ function devicesView() {
 const kv = (k, v) => [h('dt', null, k), h('dd', null, v)];
 
 /* ================================================================== *
+ * Household account and device management
+ * ================================================================== */
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,39}$/;
+const PASSWORD_MIN = 12;
+function accountName(user) { return user?.display_name || user?.username || 'Signed-in user'; }
+function accountRole(user) { return user?.role === 'admin' ? 'Administrator' : 'Household member'; }
+function accountFailure(error) { return error?.message === 'Login required.' ? error.message : 'Could not save this household change. Try again.'; }
+function clearPasswordFields(root) { root?.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; }); }
+
+async function loadAccount() {
+  S.accountLoading = true;
+  try {
+    const data = await settingsRequest('api/me');
+    S.account = data.user || null;
+    if (S.account) S.account.devices = Array.isArray(data.devices) ? data.devices : [];
+  } catch (error) {
+    if (error.message === 'Login required.') throw error;
+    S.account = null;
+  } finally { S.accountLoading = false; }
+}
+
+async function loadAdminUsers() {
+  if (!S.account || S.account.role !== 'admin') return [];
+  const data = await settingsRequest('api/admin/users');
+  S.adminUsers = Array.isArray(data.users) ? data.users : [];
+  return S.adminUsers;
+}
+
+function ownDevicesCard() {
+  const account = S.account, devices = account?.devices || [];
+  if (!account) return null;
+  const output = h('div', { class: 'above' });
+  const renderDevices = () => {
+    output.replaceChildren(
+      devices.length ? h('ul', { class: 'list' }, devices.map(device => {
+        const name = h('input', { type: 'text', maxlength: 80, value: device.name || '', 'aria-label': `Device label for ${device.name || device.id}` });
+        const save = h('button', { type: 'button', class: 'btn small' }, 'Save label');
+        const toggle = h('button', { type: 'button', class: 'btn small' }, device.active === false ? 'Enable' : 'Disable');
+        save.onclick = async () => {
+          save.disabled = true;
+          try { const data = await settingsRequest(`api/devices/${encodeURIComponent(device.id)}`, 'PATCH', { name: name.value.trim() }); Object.assign(device, data.device || { name: name.value.trim() }); toast('Device label saved'); renderDevices(); }
+          catch (error) { toast(accountFailure(error), true); save.disabled = false; }
+        };
+        toggle.onclick = async () => {
+          toggle.disabled = true;
+          try { const data = await settingsRequest(`api/devices/${encodeURIComponent(device.id)}`, 'PATCH', { active: device.active === false }); Object.assign(device, data.device || { active: device.active === false }); toast(device.active === false ? 'Device disabled' : 'Device enabled'); renderDevices(); }
+          catch (error) { toast(accountFailure(error), true); toggle.disabled = false; }
+        };
+        const pairLinks = device.active === false ? null : h('div', { class: 'acts' }, ['history', 'hrv', 'today'].map(kind => h('a', { class: 'btn small', href: `pair?kind=${kind}&device=${encodeURIComponent(device.id)}` }, `Pair ${kind.toUpperCase()}`)));
+        return h('li', null, h('span', { class: 't' }, device.name || 'Unnamed device'), h('span', { class: 's' }, device.active === false ? 'Disabled' : 'Active'), h('div', { class: 'btn-row' }, name, save, toggle), pairLinks);
+      })) : h('p', { class: 'foot' }, 'No devices are registered yet.'),
+      h('form', { class: 'above', onsubmit: async event => {
+        event.preventDefault(); const input = event.currentTarget.querySelector('input'); const button = event.currentTarget.querySelector('button');
+        const name = input.value.trim(); if (!name) return; button.disabled = true;
+        try { const data = await settingsRequest('api/devices', 'POST', { name }); if (data.device) devices.push(data.device); input.value = ''; toast('Device added'); renderDevices(); }
+        catch (error) { toast(accountFailure(error), true); button.disabled = false; }
+      } }, h('label', { class: 'field' }, 'Add a device', h('input', { type: 'text', maxlength: 80, placeholder: 'Watch or phone name', required: true })), h('button', { type: 'submit', class: 'btn' }, 'Add device')),
+    );
+  };
+  renderDevices();
+  return card('device', 'Your devices', { cls: 'wide' }, h('p', { class: 'lede' }, `${accountName(account)} · ${accountRole(account)}`), h('p',{class:'foot'},'Pair each watch using its device links below. Disabling a device keeps its history and requires new pairing tokens when enabled again.'), output);
+}
+
+function householdCard() {
+  if (!S.account || S.account.role !== 'admin') return null;
+  const output = h('div', { class: 'above' }, h('p', { class: 'foot' }, 'Loading household members…'));
+  const refresh = async () => { try { await loadAdminUsers(); renderUsers(); } catch (error) { output.replaceChildren(h('p', { class: 'sheet-error' }, 'Household members could not be loaded.')); } };
+  const renderUsers = () => {
+    const users = S.adminUsers || [];
+    const rows = users.map(user => {
+      const display = h('input', { type: 'text', maxlength: 80, value: user.display_name || '', 'aria-label': `Display name for ${user.username}` });
+      const role = h('select', { disabled: user.id === S.account.id, 'aria-label': `Role for ${user.username}` }, ['user', 'admin'].map(value => h('option', { value, selected: user.role === value }, value === 'admin' ? 'Administrator' : 'Member')));
+      const active = h('input', { type: 'checkbox', disabled: user.id === S.account.id, checked: user.active !== false, 'aria-label': `Enabled: ${user.username}` });
+      const password = h('input', { type: 'password', minlength: PASSWORD_MIN, maxlength: 1024, autocomplete: 'new-password', placeholder: 'New password (optional)', 'aria-label': `Reset password for ${user.username}` });
+      const save = h('button', { type: 'button', class: 'btn small' }, 'Save');
+      save.onclick = async () => {
+        const body = { display_name: display.value.trim(), role: role.value, active: active.checked };
+        if (password.value) { if (password.value.length < PASSWORD_MIN) { toast(`Password must be at least ${PASSWORD_MIN} characters.`, true); return; } body.password = password.value; }
+        save.disabled = true;
+        try { await settingsRequest(`api/admin/users/${encodeURIComponent(user.id)}`, 'PATCH', body); user.display_name = body.display_name; user.role = body.role; user.active = body.active; password.value = ''; toast('Household member saved'); renderUsers(); }
+        catch (error) { toast(accountFailure(error), true); save.disabled = false; }
+        finally { clearPasswordFields(output); }
+      };
+      const deviceBox = h('div', { class: 'above' }, h('strong', null, 'Devices'), h('p', { class: 'foot' }, 'Loading devices…'));
+      settingsRequest(`api/admin/users/${encodeURIComponent(user.id)}/devices`).then(data => {
+        const devices = Array.isArray(data.devices) ? data.devices : [];
+        const addDevice = h('form', { class: 'above', onsubmit: async event => {
+          event.preventDefault(); const input = event.currentTarget.querySelector('input'); const button = event.currentTarget.querySelector('button'); const name = input.value.trim(); if (!name) return; button.disabled = true;
+          try { const result = await settingsRequest(`api/admin/users/${encodeURIComponent(user.id)}/devices`, 'POST', { name }); if (result.device) devices.push(result.device); input.value = ''; toast('Device added'); renderUsers(); }
+          catch (error) { toast(accountFailure(error), true); button.disabled = false; }
+        } }, h('label', { class: 'field' }, 'Add device', h('input', { type: 'text', maxlength: 80, required: true, placeholder: 'Watch or phone name' })), h('button', { type: 'submit', class: 'btn small' }, 'Add device'));
+        deviceBox.replaceChildren(h('strong', null, 'Devices'), devices.length ? h('ul', { class: 'list' }, devices.map(device => {
+          const label = h('input', { type: 'text', maxlength: 80, value: device.name || '', 'aria-label': `Device label for ${device.name || device.id}` });
+          const enabled = h('input', { type: 'checkbox', checked: device.active !== false, 'aria-label': `Enabled device ${device.name || device.id}` });
+          const saveDevice = h('button', { type: 'button', class: 'btn small' }, 'Save device');
+          saveDevice.onclick = async () => { saveDevice.disabled = true; try { await settingsRequest(`api/admin/users/${encodeURIComponent(user.id)}/devices/${encodeURIComponent(device.id)}`, 'PATCH', { name: label.value.trim(), active: enabled.checked }); toast('Device saved'); } catch (error) { toast(accountFailure(error), true); saveDevice.disabled = false; } };
+          return h('li', null, label, enabled, saveDevice);
+        })) : h('p', { class: 'foot' }, 'No devices registered.'), addDevice);
+      }).catch(() => {});
+      return h('li', null, h('span', { class: 't' }, user.username), h('div', { class: 'form-grid two' }, h('label', { class: 'field' }, 'Display name', display), h('label', { class: 'field' }, 'Role', role)), h('label', { class: 'check' }, active, ' Enabled'), h('label', { class: 'field' }, 'Reset password', password), save, deviceBox);
+    });
+    const newUsername = h('input', { type: 'text', required: true, minlength: 3, maxlength: 40, pattern: '[a-z0-9._-]{3,40}', autocomplete: 'username', placeholder: 'username' });
+    const newDisplay = h('input', { type: 'text', maxlength: 80, placeholder: 'Display name' });
+    const newPassword = h('input', { type: 'password', required: true, minlength: PASSWORD_MIN, maxlength: 1024, autocomplete: 'new-password', placeholder: `At least ${PASSWORD_MIN} characters` });
+    const create = h('button', { type: 'submit', class: 'btn primary' }, 'Create member');
+    output.replaceChildren(h('ul', { class: 'list' }, rows), h('form', { class: 'above', onsubmit: async event => {
+      event.preventDefault(); if (!USERNAME_RE.test(newUsername.value) || newPassword.value.length < PASSWORD_MIN) { toast('Use a valid username and a password of at least 12 characters.', true); return; }
+      create.disabled = true;
+      try { await settingsRequest('api/admin/users', 'POST', { username: newUsername.value, display_name: newDisplay.value.trim(), password: newPassword.value, role: 'user' }); toast('Household member created'); clearPasswordFields(output); await refresh(); }
+      catch (error) { toast(accountFailure(error), true); create.disabled = false; }
+      finally { newPassword.value = ''; }
+    } }, h('h3', null, 'Add household member'), h('div', { class: 'form-grid two' }, h('label', { class: 'field' }, 'Username', newUsername), h('label', { class: 'field' }, 'Display name', newDisplay)), h('label', { class: 'field' }, 'Password', newPassword), create));
+  };
+  if (S.adminUsers) renderUsers(); else refresh();
+  return card('device', 'Household management', { cls: 'wide' }, h('p', { class: 'lede' }, 'Create members, reset passwords, and manage access for this household.'), output);
+}
+
+/* ================================================================== *
  * Settings
  * ================================================================== */
 function settingsCard() {
@@ -1355,6 +1474,7 @@ function settingsCard() {
 function clearApiSecret() { API_TOKENS.secret = null; }
 function clearSessionHealth(broadcast = true) {
   clearApiSecret(); API_TOKENS.tokens=[]; API_TOKENS.scopes=[]; API_TOKENS.loaded=false;
+  S.account=null; S.adminUsers=null; S.accountLoading=false;
   S.data=null; S.daysLoaded=0; S.error=null; S.offlineSince=null;
   document.body.replaceChildren();
   if (broadcast) { try { localStorage.setItem('ph-auth-logout', String(Date.now())); } catch (e) { /* private mode */ } }
@@ -1632,7 +1752,7 @@ const PAGES = {
         h('p',null,h('a',{class:'btn',href:'download/gravelex'},'Download GravelEx APK')),
         h('p',{class:'foot'},'Keep your existing Gravel installed. Only one app should manage the watch at a time.'),
         h('p',null,h('a',{href:'#d/oxygen'},'Health export setup and token'),' · ',sourceLink('Source and instructions'))),
-      briefPanel('more', { regenerate: true }), devicesView(), settingsCard(), apiTokensCard(), themeCard(),
+      briefPanel('more', { regenerate: true }), ownDevicesCard(), householdCard(), devicesView(), settingsCard(), apiTokensCard(), themeCard(),
       card('device', 'About', { cls: 'wide' }, h('p', { class: 'lede', style: { marginTop: 0 } }, 'Pebble Health runs on your own server. Your data stays there. Scores marked experimental come from an unvalidated watch sensor and are for personal interest, not medical use.')))];
   },
 };
@@ -1688,13 +1808,14 @@ function renderStatus() {
  * ================================================================== */
 async function boot() {
   try { HUB_CONFIG = await api('api/config'); } catch (e) { HUB_CONFIG = {}; }
+  try { await loadAccount(); } catch (e) { return; }
   document.getElementById('refresh-btn').replaceChildren(icon('refresh'));
   document.getElementById('refresh-btn').addEventListener('click', () => load(true));
   document.getElementById('theme-btn').addEventListener('click', () => { setTheme(effectiveDark() ? 'light' : 'dark'); if (route().tab === 'more') render(); });
   paintThemeButton();
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeButton); } catch (e) { /* old Safari */ }
   dlg().addEventListener('click', e => { if (e.target === dlg()) closeSheet(); });
-  window.addEventListener('hashchange', () => { clearApiSecret(); render(); window.scrollTo(0, 0); document.getElementById('main').focus({ preventScroll: true }); });
+  window.addEventListener('hashchange', () => { clearApiSecret(); clearPasswordFields(document); render(); window.scrollTo(0, 0); document.getElementById('main').focus({ preventScroll: true }); });
   window.addEventListener('beforeunload', clearApiSecret);
   window.addEventListener('storage', e => { if (e.key === 'ph-auth-logout') { clearSessionHealth(false); window.location.assign('/login'); } });
   window.addEventListener('pageshow', e => { if (!e.persisted) return; fetch('api/summary?days=1', { headers: { Accept: 'application/json', 'X-PH-Request': '1' }, cache: 'no-store' }).then(res => { if (res.status === 401) { clearSessionHealth(); window.location.assign('/login'); } }).catch(() => {}); });

@@ -2,6 +2,7 @@
 import json
 import hmac
 import fitness
+import accounts
 import oxygen
 import watch_api
 import logging
@@ -85,6 +86,7 @@ ACTIVITY_SENSORS = {
 LEGACY_MQTT_SENSORS = os.environ.get("LEGACY_MQTT_SENSORS", "false").lower() == "true"
 
 app = Flask(__name__)
+accounts.install_context(app)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pebble-health-bridge")
 _last_payload = {}
@@ -193,6 +195,8 @@ def healthz():
 def ingest():
     token = request.headers.get("Authorization", "").removeprefix("Bearer ")
     master = bool(AUTH_TOKEN) and hmac.compare_digest(token, AUTH_TOKEN)
+    if master and not accounts.legacy_service_authorized(token):
+        abort(401)
     if not master and not fitness.authorize_hrv(token, "history"):
         logger.warning("Rejected unauthorized health upload")
         abort(401)
@@ -208,6 +212,9 @@ def ingest():
             fitness.refresh_hrv_token(token)
     except (ValueError, TypeError, KeyError) as error:
         return {"error": str(error)}, 400
+
+    if not accounts.legacy_context():
+        return {"ok":True,"ha_delivered":False},200
 
     ts = data.get("ts") or int(time.time())
     data["last_sync_iso"] = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(ts))
@@ -266,8 +273,11 @@ def publish_mqtt_state(data):
 
 def fitness_authorized():
     # Fitness reads expose health history: fail closed when no token is configured.
-    return bool(AUTH_TOKEN) and hmac.compare_digest(
+    authorized=bool(AUTH_TOKEN) and hmac.compare_digest(
         request.headers.get("Authorization", ""), f"Bearer {AUTH_TOKEN}")
+    if authorized:
+        return accounts.legacy_service_authorized(AUTH_TOKEN)
+    return False
 
 
 @app.route("/fitness", methods=["GET"])
@@ -334,9 +344,14 @@ def _oxygen_ha_loop():
     previous = None
     while True:
         try:
-            with fitness.connect() as db:
-                status = oxygen.ha_status(db,int(time.time()),fitness.TZ)
-                status.update(fitness.ha_history_status(db, int(time.time())))
+            owner=accounts.bootstrap_user()
+            if owner and not owner['active']:
+                time.sleep(60)
+                continue
+            with accounts.as_user(owner):
+                with fitness.connect() as db:
+                    status = oxygen.ha_status(db,int(time.time()),fitness.TZ)
+                    status.update(fitness.ha_history_status(db, int(time.time())))
             # Refresh stored values periodically so an HA restart restores them.
             # Measurement timestamp remains the actual watch sample timestamp.
             current = (status, int(time.time()) // 600)

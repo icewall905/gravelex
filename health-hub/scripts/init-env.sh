@@ -18,5 +18,5 @@ secret_fd=os.open('data/bootstrap-password.txt',os.O_WRONLY|os.O_CREAT|os.O_EXCL
 with os.fdopen(secret_fd,'w') as f:f.write(password+'\n')
 fd=os.open('.env',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(fd,'w') as f:f.write(text)
-print('Created private .env with a fresh receiver token. Initial dashboard password is in data/bootstrap-password.txt. Edit deployment settings before starting.')
+print('Created private .env with a fresh receiver token. Initial bootstrap administrator is PH_ADMIN_USERNAME (default admin); password is in data/bootstrap-password.txt. Edit deployment settings before starting.')
 PY

@@ -33,6 +33,8 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 import fitness
+import accounts
+from contextvars import copy_context
 
 log = logging.getLogger("pebble-health.briefing")
 FACTS_VERSION = 5
@@ -473,7 +475,8 @@ def run_in_background() -> str:
         return "disabled"
     if _running.locked():
         return "busy"
-    threading.Thread(target=run, daemon=True).start()
+    context=copy_context()
+    threading.Thread(target=lambda: context.run(run), daemon=True).start()
     return "started"
 
 
@@ -511,15 +514,26 @@ def daemon() -> None:
         nxt, first = _next_run(datetime.now(fitness.TZ))
         log.info("next briefing at %s%s", nxt.isoformat(), "" if first else " (only if new data)")
         time.sleep(max(1, (nxt - datetime.now(fitness.TZ)).total_seconds()))
-        if not first and not new_data_since_last_briefing():
-            log.info("no new data since the last briefing; skipping")
-            continue
-        for attempt in range(3):
-            status = run()
-            log.info("briefing run: %s", status)
-            if status != "error":
-                break
-            time.sleep(900)  # model server busy or down: retry in 15 minutes
+        run_household(first)
+
+
+def run_household(first=False):
+    """Schedule independent briefings without sharing a wearer's data/context."""
+    people=accounts.users() or [None]
+    for person in people:
+        if person and not person['active']: continue
+        with accounts.as_user(person):
+            if not new_data_since_last_briefing() and not first:
+                continue
+            with fitness.connect() as db:
+                has_data=db.execute('SELECT EXISTS(SELECT 1 FROM reports) OR EXISTS(SELECT 1 FROM hrv_sessions)').fetchone()[0]
+            if not has_data: continue
+            for attempt in range(3):
+                status=run()
+                log.info("briefing run: %s",status)
+                if status!='error': break
+                time.sleep(900)
+
 
 
 if __name__ == "__main__":

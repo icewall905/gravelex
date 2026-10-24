@@ -6,6 +6,7 @@ import time
 import uuid
 from flask import Blueprint, jsonify, request
 import fitness
+import accounts
 SCOPES=[{'id':'summary:read','label':'Current summary'}, {'id':'history:read','label':'Health history'}, {'id':'raw:read','label':'Raw HRV diagnostics'}]
 
 def connect():
@@ -30,12 +31,14 @@ def create(name, scopes, expires_in_days=90):
     with connect() as db:
         db.execute('INSERT INTO api_tokens(id,hash,name,prefix,scopes,created_at,expires_at) VALUES(?,?,?,?,?,?,?)',(ident,hashlib.sha256(token.encode()).hexdigest(),name.strip(),token[:9],json.dumps(sorted(set(scopes))),now,now+expires_in_days*86400 if expires_in_days else None))
         row=db.execute('SELECT * FROM api_tokens WHERE id=?',(ident,)).fetchone()
+    accounts.register_credential(token,'api')
     return {'token':token,'token_info':metadata(row)}
 
 def authorize(scope):
     parts=request.headers.get('Authorization','').split()
     token=parts[1] if len(parts)==2 and parts[0].lower()=='bearer' else ''
     if not 20<len(token)<200: return jsonify(error='invalid_token'),401,{'WWW-Authenticate':'Bearer'}
+    if not accounts.route_credential(token,'api'): return jsonify(error='invalid_token'),401,{'WWW-Authenticate':'Bearer'}
     now=int(time.time())
     with connect() as db:
         row=db.execute('SELECT * FROM api_tokens WHERE hash=?',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()

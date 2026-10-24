@@ -125,7 +125,9 @@ def test_protected_dashboard_projection_is_bounded_and_rejects_bad_timestamp(sto
     monkeypatch.setenv('PH_SESSION_SECRET','configured')
     client=dashboard.app.test_client()
     client.environ_base['HTTP_X_PH_REQUEST']='1'
-    with client.session_transaction() as session: session['authenticated']=True
+    user=__import__('accounts').bootstrap_user()
+    with client.session_transaction() as session:
+        session['user_id']=user['id'];session['version']=user['session_version']
     result=client.get('/api/provenance/minute',query_string={'ts':ts})
     assert result.status_code==200
     data=result.get_json()

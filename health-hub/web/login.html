@@ -8,12 +8,12 @@
 </head>
 <body>
 <main tabindex="-1"><p class="brand">Pebble Health</p><h1>Sign in</h1>
-<p>Sign in to manage trusted API tokens and server settings.</p>
-<form id="login-form"><label class="field" for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required autofocus></label><p id="error" class="sheet-error" role="alert" hidden></p><button class="btn primary" type="submit">Sign in</button></form>
+<p>Sign in to view your health data.</p>
+<form id="login-form"><label class="field" for="username">Username<input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[a-z0-9][a-z0-9._-]{2,39}" minlength="3" maxlength="40" required autofocus></label><label class="field" for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required></label><p id="error" class="sheet-error" role="alert" hidden></p><button class="btn primary" type="submit">Sign in</button></form>
 </main>
 <script>
 'use strict';
-const form=document.getElementById('login-form'),password=document.getElementById('password'),error=document.getElementById('error');
-form.addEventListener('submit',async event=>{event.preventDefault();error.hidden=true;const button=form.querySelector('button');button.disabled=true;try{const response=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json','X-PH-Request':'1'},body:JSON.stringify({password:password.value})});let data=null;try{data=await response.json();}catch(e){}if(response.ok){window.location.replace('/');return;}error.textContent=response.status===429?'Too many attempts. Try again later.':'Invalid password.';error.hidden=false;password.select();}catch(e){error.textContent='Could not reach the server. Try again.';error.hidden=false;}finally{button.disabled=false;}});
+const form=document.getElementById('login-form'),username=document.getElementById('username'),password=document.getElementById('password'),error=document.getElementById('error');
+form.addEventListener('submit',async event=>{event.preventDefault();error.hidden=true;const button=form.querySelector('button');button.disabled=true;try{const response=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json','X-PH-Request':'1'},body:JSON.stringify({username:username.value.trim().toLowerCase(),password:password.value})});let data=null;try{data=await response.json();}catch(e){}if(response.ok){password.value='';try{localStorage.setItem('ph-auth-logout',String(Date.now()));}catch(e){}window.location.replace('/');return;}error.textContent=response.status===429?'Too many attempts. Try again later.':'Invalid username or password.';error.hidden=false;password.select();}catch(e){error.textContent='Could not reach the server. Try again.';error.hidden=false;}finally{button.disabled=false;}});
 </script>
 </body></html>

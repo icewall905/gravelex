@@ -16,7 +16,9 @@ def web(tmp_path, monkeypatch):
     monkeypatch.setenv('PH_SESSION_SECRET','testing-secret')
     client=dashboard.app.test_client()
     client.environ_base['HTTP_X_PH_REQUEST']='1'
-    with client.session_transaction() as session: session['authenticated']=True
+    user=__import__('accounts').bootstrap_user()
+    with client.session_transaction() as session:
+        session['user_id']=user['id'];session['version']=user['session_version']
     return client
 
 def test_empty_instance_assets_config_and_no_private_environment_leaks(web, monkeypatch):
