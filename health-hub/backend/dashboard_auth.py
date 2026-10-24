@@ -57,8 +57,22 @@ def install(app, web_dir):
 
     @app.post('/auth/login')
     def login():
-        if not csrf_ok() or not request.is_json or request.content_length is None or request.content_length > 4096:
+        # HTTP/2 proxies may stream a valid JSON body without Content-Length.
+        # Bound the actual read as well as any declared size.
+        request.max_content_length = 4096
+        if not csrf_ok() or not request.is_json or (request.content_length is not None and request.content_length > 4096):
+            app.logger.warning(
+                'Login request rejected: csrf_ok=%s json=%s length_present=%s oversized=%s origin_present=%s origin_matches=%s cross_site=%s marker_present=%s',
+                csrf_ok(), request.is_json, request.content_length is not None,
+                request.content_length is not None and request.content_length > 4096,
+                'Origin' in request.headers,
+                request.headers.get('Origin') == (os.environ.get('PUBLIC_URL','').rstrip('/') or request.host_url.rstrip('/')),
+                request.headers.get('Sec-Fetch-Site') == 'cross-site',
+                request.headers.get('X-PH-Request') == '1')
             return jsonify(error='invalid_request'), 400
+        if len(request.get_data()) >= 4096:
+            return jsonify(error='request_too_large'), 413
+        body=request.get_json(silent=True)
         key=request.remote_addr or 'unknown'
         now=time.monotonic()
         with _lock:
@@ -69,7 +83,6 @@ def install(app, web_dir):
             _attempts[key]=attempts
             _attempts.move_to_end(key)
             while len(_attempts)>1024: _attempts.popitem(last=False)
-        body=request.get_json(silent=True)
         password=body.get('password') if isinstance(body,dict) else None
         username=body.get('username') if isinstance(body,dict) else None
         user=accounts.find_username(username) if isinstance(username,str) and len(username)<=40 else None

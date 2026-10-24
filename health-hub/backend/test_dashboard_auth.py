@@ -94,3 +94,20 @@ def test_authenticated_browser_mutations_require_header(client,monkeypatch):
     assert client.post('/api/days',json={},headers=headers).status_code==403
     # Reaches normal validation, rather than rejecting a same-origin request.
     assert client.post('/api/days',json={},headers={**headers,'X-PH-Request':'1'}).status_code==400
+
+
+def test_login_stream_without_content_length(client):
+    import io
+    import json
+    body=json.dumps({'username':'admin','password':'test-password-123'}).encode()
+    response=client.post('/auth/login', content_type='application/json',
+        headers={'X-PH-Request':'1'}, environ_overrides={
+            'wsgi.input':io.BytesIO(body), 'CONTENT_LENGTH':'', 'wsgi.input_terminated':True})
+    assert response.status_code==200
+
+def test_login_stream_size_is_bounded(client):
+    import io
+    response=client.post('/auth/login', content_type='application/json',
+        headers={'X-PH-Request':'1'}, environ_overrides={
+            'wsgi.input':io.BytesIO(b' ' * 5000), 'CONTENT_LENGTH':'', 'wsgi.input_terminated':True})
+    assert response.status_code==413
