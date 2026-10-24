@@ -1,3 +1,7 @@
+# 0.1.10
+
+- Include scheduled overnight HRV proxy recordings as yellow daily means, with separate manual and source series.
+
 # 0.1.9
 
 - Populate HRV history with yellow unvalidated PPI proxy daily means, keeping qualified green HRV and recording contexts separate.
