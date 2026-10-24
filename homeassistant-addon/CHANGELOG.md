@@ -1,3 +1,7 @@
+# 0.1.2
+
+- Preserve direct battery observations from immutable raw batches when history pages share the same upload second.
+
 # 0.1.1
 
 - Pin the hub to the dated battery resolver and canonical activity summary fix.
