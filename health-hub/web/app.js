@@ -466,7 +466,7 @@ function stockVariabilityDetail() {
   if (!points.length) return null;
   const items=points.map(p=>({key:new Date(p.ts*1000).toISOString().slice(0,10),label:new Date(p.ts*1000).toISOString().slice(0,10),v:p.value_ms}));
   return h('details',{class:'info'},h('summary',null,'Delivered PPI variability diagnostic (not HRV)'),
-    lineChart({items,W:chartW(),H:160,unit:'ms',label:'Delivered pulse variability',fmtV:v=>fmt(v,1)}),
+    h('div',{class:'hrv-proxy-series'},lineChart({items,W:chartW(),H:160,unit:'ms',label:'Delivered pulse variability (unvalidated)',fmtV:v=>fmt(v,1)})),
     h('p',{class:'foot'},'Unvalidated diagnostic of differences between delivered pulse intervals. This is not an HRV approximation: beat order, continuity and missing intervals are unknown. It never feeds readiness or stress.'),
     h('p',{class:'foot'},`Method: ${model.method || 'delivered_ppi_variation_unverified'}; showing ${context || 'the latest'}${source ? ` · ${source}` : ''} series.`));
 }
@@ -498,6 +498,20 @@ function ppiVariabilityDiagnostic() {
     h('p',{class:'lede'},`Recorded ${fmtDateTime(latest.ts)} · ${latest.context || 'unspecified context'}`),
     h('p',{class:'pending'},PPI_SOURCE_EXPLANATION)]
     : pending('No HRV proxy recording yet',PPI_SOURCE_EXPLANATION);
+}
+function hrvProxyGraph(span) {
+  const latest=latestPpiProxy();
+  if (!latest) return null;
+  // Keep manual/overnight and collector methods separate rather than splicing series.
+  const points=(stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms) && p.context===latest.context && p.source===latest.source);
+  const days=new Map();
+  points.forEach(p=>{const day=isoOf(new Date(p.ts*1000)); if (!days.has(day)) days.set(day,[]); days.get(day).push(p.value_ms);});
+  const items=bucket(span,day=>({v:avg(days.get(day)||[])}),'avg');
+  if (!items.some(p=>isNum(p.v))) return null;
+  return h('div',{class:'hrv-proxy-series'},
+    lineChart({items,W:chartW(),H:180,unit:'ms',fmtV:v=>fmt(v,1),label:'Unvalidated HRV proxy estimates, daily means'}),
+    legend([['line','Unvalidated HRV proxy estimate'],['gap','No recording']]),
+    h('p',{class:'foot'},`Yellow: unreliable delivered-PPI variability, not verified RMSSD. Daily means${span.length>60 ? ', grouped by week' : ''} · ${latest.context || 'unspecified context'}${latest.source ? ' · '+latest.source : ''}. Other contexts and sources stay separate. Excluded from readiness and stress.`));
 }
 function monitorExplanation(kind) {
   const diag=D().monitor_observations?.diagnostics?.[kind] || {};
@@ -1016,6 +1030,7 @@ const DETAIL = {
       const items = bucket(span, d => ({ v: (m.get(d) || {}).rmssd_ms ?? null }), 'avg');
       const has = items.some(i => isNum(i.v));
       const pts = ((D().hrv || {}).analysis || {}).points || [];
+      const proxyGraph=hrvProxyGraph(span);
       return [
         card('hrv', 'This week', { chip: st.provisional ? chip('Provisional', '', st.reason) : expChip(), cls: 'wide' },
           h('p', { class: 'status-word', style: { fontSize: '22px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'Unvalidated estimate' : word),
@@ -1028,10 +1043,12 @@ const DETAIL = {
             'Heart rate variability (RMSSD) is measured in short recordings during the night. The 7-night average is compared with the range that is usual for you.',
             'Balanced means the average sits inside that range. Values outside it are worth noting, not alarming. These recordings are experimental and unvalidated.',
             'Until 14 Pebble nights exist, a provisional status compares your last 3 nights with your earlier Pebble nights, using how much your HRV varied night to night in your earlier Garmin history.')),
-        card('hrv', 'Nightly HRV', { cls: 'wide' },
-          has ? [lineChart({ items, W: chartW(), H: 180, unit: 'ms', band: isNum(st.baseline_low_ms) ? { lo: st.baseline_low_ms, hi: st.baseline_high_ms } : null, label: 'Nightly HRV' }),
-            legend([['line', 'Nightly RMSSD'], ['soft', 'Usual range'], ['gap', 'No usable recording']])]
-            : pending(ppiSourceUnverified() ? 'Beat continuity is unverified' : 'No usable overnight recordings in this range', ppiSourceUnverified() ? PPI_SOURCE_EXPLANATION : 'Enable night recordings in the HRV watch app.')),
+        card('hrv', 'HRV history', { cls: 'wide' },
+          has ? [h('div',{class:'hrv-qualified-series'},lineChart({ items, W: chartW(), H: 180, unit: 'ms', band: isNum(st.baseline_low_ms) ? { lo: st.baseline_low_ms, hi: st.baseline_high_ms } : null, label: 'Qualified nightly HRV' }),
+            legend([['line', 'Qualified nightly RMSSD'], ['soft', 'Usual range'], ['gap', 'No usable recording']]))]
+            : null,
+          proxyGraph,
+          !has && !proxyGraph ? pending('No recordings in this range', 'Record a watch HRV session to populate the unvalidated proxy trend.') : null),
         spotChecks(pts),
         stockVariabilityDetail(),
       ];
