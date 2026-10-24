@@ -326,7 +326,7 @@ function lineChart({ items, W = 340, H = 150, fmtV = v => fmt(v), unit = '', ban
   const path = key => {
     let d = '', open = false;
     items.forEach((it, i) => {
-      if (isNum(it[key])) { d += `${open ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(it[key]).toFixed(1)}`; open = true; } else open = false;
+      if (isNum(it[key])) { d += `${open && !it.breakBefore ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(it[key]).toFixed(1)}`; open = true; } else open = false;
     });
     return d;
   };
@@ -500,23 +500,28 @@ function ppiVariabilityDiagnostic() {
     : pending('No HRV proxy recording yet',PPI_SOURCE_EXPLANATION);
 }
 function hrvProxyGraph(span) {
-  const groups=new Map();
-  (stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms)).forEach(p=>{
-    const key=JSON.stringify([p.context,p.source]);
-    if (!groups.has(key)) groups.set(key,[]);
-    groups.get(key).push(p);
-  });
-  const charts=[...groups.values()].sort((a,b)=>(a[0].context==='scheduled'?0:1)-(b[0].context==='scheduled'?0:1)).map(points=>{
-    const {context,source}=points[0], days=new Map();
-    points.forEach(p=>{const day=isoOf(new Date(p.ts*1000)); if (!days.has(day)) days.set(day,[]); days.get(day).push(p.value_ms);});
-    const items=bucket(span,day=>({v:avg(days.get(day)||[]),note:`${(days.get(day)||[]).length} recordings` }),'avg');
+  const all=(stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms)).sort((a,b)=>a.ts-b.ts);
+  const charts=['scheduled','manual'].map(context=>{
+    const points=all.filter(p=>p.context===context), items=[];
+    const width=span.length>60 ? 7 : 1;
+    for (let i=0;i<span.length;i+=width) {
+      const dates=span.slice(i,i+width), rows=points.filter(p=>dates.includes(isoOf(new Date(p.ts*1000))));
+      const latest=rows.at(-1), comparable=latest ? rows.filter(p=>p.source===latest.source) : [];
+      const prior=items.at(-1);
+      items.push({key:dates[0],label:dates[0],end:dates.at(-1),week:width>1,
+        v:avg(comparable.map(p=>p.value_ms)),source:latest?.source,
+        breakBefore:!!prior && prior.source!==latest?.source,
+        note:latest ? `${comparable.length} recordings · ${latest.source || 'unknown source'}${rows.length>comparable.length ? ' · latest source only; other versions excluded' : ''}` : undefined});
+    }
     if (!items.some(p=>isNum(p.v))) return null;
     const label=context==='scheduled' ? 'Scheduled overnight estimates' : 'Manual estimates';
-    return h('div',{class:'hrv-proxy-series'},
-      h('p',{class:'lede'},label),
+    const content=[
       lineChart({items,W:chartW(),H:180,unit:'ms',fmtV:v=>fmt(v,1),label:`Unvalidated HRV proxy: ${label.toLowerCase()}, daily means`}),
       legend([['line','Unvalidated HRV proxy estimate'],['gap','No recording']]),
-      h('p',{class:'foot'},`Yellow: unreliable delivered-PPI variability, not verified RMSSD. ${context==='scheduled' ? 'Received 02:00, 03:00 and 04:00 recordings contribute to their date’s mean; missing uploads are excluded.' : 'Manual recordings only.'} ${span.length>60 ? 'Daily means grouped by week. ' : ''}${source ? 'Source: '+source+'. ' : ''}Recording types and sources stay separate. Excluded from readiness and stress.`));
+      h('p',{class:'foot'},`Yellow: unreliable delivered-PPI variability, not verified RMSSD. ${context==='scheduled' ? 'Received 02:00, 03:00 and 04:00 recordings contribute to their date’s mean; missing uploads are excluded.' : 'Manual recordings only.'} ${width>1 ? 'Grouped by week. ' : ''}Line breaks mark source changes. Where versions overlap, only the latest source in that period is averaged. Excluded from readiness and stress.`)];
+    return context==='manual'
+      ? h('details',{class:'info hrv-proxy-series'},h('summary',null,'Manual test estimates'),content)
+      : h('div',{class:'hrv-proxy-series'},h('p',{class:'lede'},label),content);
   }).filter(Boolean);
   return charts.length ? charts : null;
 }
@@ -1057,7 +1062,6 @@ const DETAIL = {
           proxyGraph,
           !has && !proxyGraph ? pending('No recordings in this range', 'Record a watch HRV session to populate the unvalidated proxy trend.') : null),
         spotChecks(pts),
-        stockVariabilityDetail(),
       ];
     },
   },
