@@ -79,3 +79,14 @@ def test_daily_activity_uses_only_today_and_preserves_missing_fields(db):
     assert a['steps']==5 and a['active_seconds']==60 and a['distance_meters']==4
     assert a['active_kcal'] is None and a['observed_minutes']['steps']==2
     assert external_api._metrics({'current_activity':a})['steps']['value']==5
+
+
+def test_battery_survives_same_second_report_replacement(db):
+    import provenance
+    provenance.ensure_schema(db)
+    payload=direct(42,NOW-1)
+    provenance.record_observation(db,'health_batch','gravelex',NOW,NOW,payload)
+    # A later history page can replace the summary report at the same second.
+    add(db,'gravelex',NOW,{'records':[]})
+    b=fitness.watch_battery(db,NOW)
+    assert b['percent']==42 and b['observed_at']==NOW-1

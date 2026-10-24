@@ -138,7 +138,12 @@ BATTERY_MAX_AGE_SECONDS = 6 * 3600
 def watch_battery(db, now):
     """Resolve battery independently of health backfills and transport receipts."""
     best = None
-    for row in db.execute("SELECT ts,received,source,payload FROM reports WHERE json_type(payload,'$.watch_status')='object' OR json_type(payload,'$.status.battery_percent') IN ('integer','real') ORDER BY ts DESC"):
+    query = "SELECT ts,received,source,payload FROM reports WHERE json_type(payload,'$.watch_status')='object' OR json_type(payload,'$.status.battery_percent') IN ('integer','real')"
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ingest_observations'").fetchone():
+        # reports has a (second, source) key: a later page can replace the first
+        # page in the same second. Immutable raw batches preserve its battery.
+        query += " UNION ALL SELECT measured_ts AS ts,received,source,payload FROM ingest_observations WHERE kind='health_batch' AND json_type(payload,'$.watch_status')='object'"
+    for row in db.execute(query + ' ORDER BY ts DESC'):
         payload = json.loads(row['payload'])
         direct = payload.get('watch_status') if row['source'] == 'gravelex' else None
         if isinstance(direct, dict) and direct.get('source') == 'gravelex_ble':
