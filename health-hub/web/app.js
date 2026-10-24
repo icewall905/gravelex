@@ -819,7 +819,7 @@ function watchHero() {
   const weight = d.weight || {}, weightLatest = weight.latest || {};
   const training = d.training || {}, trainingLatest = training.latest || {};
   const intensity = (d.fitness || {}).intensity || {};
-  const sleepByNight = byNight(rec().nights, 'night');
+  const sleepByNight = byNight(rec().sleep_nights, 'night');
   const debtNights = dateSpan(7).map(day=>sleepByNight.get(day)).filter(n=>n && isNum(n.sleep_s) && n.sleep_s>=0);
   const debtSeconds = isNum(sl.need_s) && sl.need_s>0 && debtNights.length ? debtNights.reduce((sum,n)=>sum+Math.max(0,sl.need_s-n.sleep_s),0) : null;
   const latestHr = todayObs().filter(o => isNum(o.hr)).at(-1);
