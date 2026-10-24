@@ -196,6 +196,10 @@ main {
 .page-head h1 { font-family: var(--font-display); font-size: 32px; line-height: 1.1; font-weight: 700; letter-spacing: -.03em; }
 .page-head p { color: var(--ink-2); font-size: 15px; margin-top: 4px; }
 .feed { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: stretch; }
+/* Two related cards (blood oxygen + overnight strain) share one row
+   instead of one always falling underneath the other. */
+.pair { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (min-width: 720px) { .pair { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; } }
 .section-title {
   display: flex; align-items: center; gap: 12px;
   font-size: 12px; font-weight: 700; margin: 30px 4px 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
@@ -205,7 +209,8 @@ main {
 /* Today: hero next to the briefing */
 .hero-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 4px; }
 .hero-row > .watch, .hero-row > .card { grid-column: auto; }
-.hero-row > .watch { align-content: start; align-self: start; }
+/* The watch fills the briefing's height instead of leaving empty space under it. */
+.hero-row > .watch { align-self: stretch; }
 
 @media (min-width: 720px) {
   .feed { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -356,8 +361,8 @@ details.info p + p { margin-top: 8px; }
   color: var(--watch-ink);
   border-radius: 28px; padding: 22px; border: 1px solid rgba(255, 255, 255, .08);
   box-shadow: 0 30px 60px -30px rgba(13, 17, 28, .7), inset 0 1px 0 rgba(255, 255, 255, .08);
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px;
-  align-self: start; align-content: start;
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 16px;
+  align-self: start;
   --t-ready: #6ee7b7; --t-sleep: #a5b4fc; --t-hrv: #67e8f9; --t-heart: #fda4af; --t-stress: #fcd34d;
   --m-ready: #34d399; --m-sleep: #818cf8; --m-hrv: #22d3ee; --m-heart: #fb7185;
 }
@@ -365,8 +370,8 @@ details.info p + p { margin-top: 8px; }
 .watch-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
 .watch-hello { font-family: var(--font-display); font-size: 26px; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; }
 .watch-date { color: var(--watch-ink-2); font-size: 14px; font-weight: 500; padding: 4px 10px; border-radius: 999px; background: rgba(255, 255, 255, .07); }
-.watch-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border-top: 1px solid rgba(255, 255, 255, .1); padding-top: 14px; }
-.watch-metric { min-width: 0; min-height: 70px; padding: 10px 11px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 14px; background: rgba(255, 255, 255, .06); color: var(--watch-ink); text-decoration: none; display: grid; align-content: start; gap: 3px; position: relative; }
+.watch-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 8px; border-top: 1px solid rgba(255, 255, 255, .1); padding-top: 14px; }
+.watch-metric { min-width: 0; min-height: 70px; padding: 10px 11px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 14px; background: rgba(255, 255, 255, .06); color: var(--watch-ink); text-decoration: none; display: grid; align-content: space-between; gap: 3px; position: relative; }
 .watch-metric:hover { background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .22); }
 .watch-metric-label { color: var(--watch-ink-2); font-size: 11.5px; line-height: 1.2; display: flex; align-items: center; gap: 6px; font-weight: 550; }
 .watch-metric-label i { width: 7px; height: 7px; border-radius: 50%; background: var(--mc, var(--watch-ink-2)); display: inline-block; flex: none; box-shadow: 0 0 8px var(--mc, transparent); }

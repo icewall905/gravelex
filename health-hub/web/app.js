@@ -168,6 +168,10 @@ function card(m, title, opts, ...body) {
 function chip(text, kind, title) { return h('span', { class: `chip ${kind || ''}`, title }, text); }
 const expChip = () => chip('Experimental', 'exp', 'Not a validated medical measure');
 
+/* Two cards that belong together (e.g. blood oxygen and overnight strain):
+ * one row whenever the feed has columns, stacked like normal cards otherwise. */
+function pair(...cards) { return h('div', { class: 'pair' }, cards.filter(Boolean)); }
+
 function big(value, unit, none) {
   return h('div', { class: 'big' }, h('span', { class: `v${none ? ' none' : ''}` }, value), unit ? h('span', { class: 'u' }, unit) : null);
 }
@@ -689,8 +693,8 @@ const CARDS = {
     const st=D().stress || {}, model=stockStrain(), manual=((D().hrv || {}).analysis || {}).baseline_progress?.manual || {};
     if (stock().mode==='stock_firmware_estimates') {
       const score=model.score, fresh=stockStrainFresh(model);
-      return card('stress','Overnight strain',{link:'stress',chip:chip('Estimated','', 'Estimated overnight strain from stock-firmware pulse'),
-        cls:'wide'}, fresh ? [big(fmt(score),'of 100'),h('p',{class:'lede'},`Measured ${fmtDateTime(model.measured_at)} · ${model.reason || 'Estimated overnight strain.'}`)] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh overnight estimate is needed.'),
+      return card('stress','Overnight strain',{link:'stress',chip:chip('Estimated','', 'Estimated overnight strain from stock-firmware pulse')},
+        fresh ? [big(fmt(score),'of 100'),h('p',{class:'lede'},`Measured ${fmtDateTime(model.measured_at)} · ${model.reason || 'Estimated overnight strain.'}`)] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh overnight estimate is needed.'),
         h('p',{class:'foot'},`Personal baseline: ${model.baseline_days ?? 0} of ${model.required_days ?? 3} nights. This is an estimated overnight strain signal, not mental stress.`),
         h('p',{class:'pending above'},'Stock-firmware estimate · low confidence; a longer baseline does not validate the sensor.'));
     }
@@ -1797,7 +1801,7 @@ const PAGES = {
   today() {
     const section = (title, ...cards) => [h('h2', { class: 'section-title' }, title), h('div', { class: 'feed' }, cards)];
     return [h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
-      section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress()),
+      section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), pair(oxygenCard(), CARDS.stress())),
       section('Activity', CARDS.steps(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.fitness(), CARDS.train(), CARDS.workouts(3)),
       section('Body & device', CARDS.weight(), CARDS.device())];
   },
@@ -1805,7 +1809,7 @@ const PAGES = {
     return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep'), DETAIL.sleep.render())];
   },
   recovery() {
-    return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress())];
+    return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), pair(oxygenCard(), CARDS.stress()))];
   },
   training() {
     return [pageHead('Training', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('training'), trainingReviewCard(), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
