@@ -500,18 +500,25 @@ function ppiVariabilityDiagnostic() {
     : pending('No HRV proxy recording yet',PPI_SOURCE_EXPLANATION);
 }
 function hrvProxyGraph(span) {
-  const latest=latestPpiProxy();
-  if (!latest) return null;
-  // Keep manual/overnight and collector methods separate rather than splicing series.
-  const points=(stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms) && p.context===latest.context && p.source===latest.source);
-  const days=new Map();
-  points.forEach(p=>{const day=isoOf(new Date(p.ts*1000)); if (!days.has(day)) days.set(day,[]); days.get(day).push(p.value_ms);});
-  const items=bucket(span,day=>({v:avg(days.get(day)||[])}),'avg');
-  if (!items.some(p=>isNum(p.v))) return null;
-  return h('div',{class:'hrv-proxy-series'},
-    lineChart({items,W:chartW(),H:180,unit:'ms',fmtV:v=>fmt(v,1),label:'Unvalidated HRV proxy estimates, daily means'}),
-    legend([['line','Unvalidated HRV proxy estimate'],['gap','No recording']]),
-    h('p',{class:'foot'},`Yellow: unreliable delivered-PPI variability, not verified RMSSD. Daily means${span.length>60 ? ', grouped by week' : ''} · ${latest.context || 'unspecified context'}${latest.source ? ' · '+latest.source : ''}. Other contexts and sources stay separate. Excluded from readiness and stress.`));
+  const groups=new Map();
+  (stockVariability().points || []).filter(p=>isNum(p.ts)&&isNum(p.value_ms)).forEach(p=>{
+    const key=JSON.stringify([p.context,p.source]);
+    if (!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(p);
+  });
+  const charts=[...groups.values()].sort((a,b)=>(a[0].context==='scheduled'?0:1)-(b[0].context==='scheduled'?0:1)).map(points=>{
+    const {context,source}=points[0], days=new Map();
+    points.forEach(p=>{const day=isoOf(new Date(p.ts*1000)); if (!days.has(day)) days.set(day,[]); days.get(day).push(p.value_ms);});
+    const items=bucket(span,day=>({v:avg(days.get(day)||[]),note:`${(days.get(day)||[]).length} recordings` }),'avg');
+    if (!items.some(p=>isNum(p.v))) return null;
+    const label=context==='scheduled' ? 'Scheduled overnight estimates' : 'Manual estimates';
+    return h('div',{class:'hrv-proxy-series'},
+      h('p',{class:'lede'},label),
+      lineChart({items,W:chartW(),H:180,unit:'ms',fmtV:v=>fmt(v,1),label:`Unvalidated HRV proxy: ${label.toLowerCase()}, daily means`}),
+      legend([['line','Unvalidated HRV proxy estimate'],['gap','No recording']]),
+      h('p',{class:'foot'},`Yellow: unreliable delivered-PPI variability, not verified RMSSD. ${context==='scheduled' ? 'Received 02:00, 03:00 and 04:00 recordings contribute to their date’s mean; missing uploads are excluded.' : 'Manual recordings only.'} ${span.length>60 ? 'Daily means grouped by week. ' : ''}${source ? 'Source: '+source+'. ' : ''}Recording types and sources stay separate. Excluded from readiness and stress.`));
+  }).filter(Boolean);
+  return charts.length ? charts : null;
 }
 function monitorExplanation(kind) {
   const diag=D().monitor_observations?.diagnostics?.[kind] || {};
