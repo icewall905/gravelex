@@ -63,3 +63,19 @@ Delivery groups are inferred from equal callback arrival offsets, not claimed as
 The next investigation is prepared in [firmware-diagnostics](firmware-diagnostics/README.md): a version-pinned, default-off PebbleOS patch, a hash-verified vendor-hook transformer, an offline four-stage log parser, and an isolated driver forwarding harness. The patch preserves normal forwarding behavior and traces algorithm result identity through driver, manager and app boundaries. Result identity is not beat identity.
 
 The patch applies cleanly and host checks pass. The CMSIS and other target dependencies were resolved, and the full Obelix PVT slot-0 diagnostic firmware now compiles, links and bundles with the official SDK 0.1.11. Its matching dictionary contains all seven diagnostic log formats. No firmware has been flashed. Before a device experiment, complete the target build, verify hardware revision, preserve the matching hashed-log dictionary and official rollback image, and review installation/recovery. Sensor accuracy and consecutive-beat provenance remain unresolved; diagnostic variability must remain excluded from readiness/stress/breathing calculations.
+
+## Stock firmware 4.42.0 check — 2026-10-24
+
+A collector-153 capture tagged by the watch as firmware 4.42.0 was successfully
+received and compared with the prior 4.41.1 capture. Batched callback delivery
+persists, including multiple distinct PPI values at the same arrival offset.
+There is no demonstrated improvement in beat-continuity evidence or respiratory
+accuracy from this comparison. Exact capture identifiers and delivery statistics
+are saved privately in `reference-data/firmware-442-delivery-audit.json`; the raw
+recording remains in the immutable ingest journal/database.
+
+The public HRV interface still does not expose beat sequence, beat timestamp or
+loss metadata. Broad release comparisons can be truncated, so the check also
+compared the actual HealthService header/implementation and HRM-manager files
+between release tags. Driver/plumbing changes are not physiological validation.
+Upstream follow-up: [PebbleOS #2558](https://github.com/coredevices/PebbleOS/issues/2558).

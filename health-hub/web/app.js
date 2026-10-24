@@ -621,7 +621,7 @@ const CARDS = {
     const [word, kind] = hrvLabel(st.status);
     const building = st.status === 'baseline_building';
     return card('hrv', 'HRV status', { link: 'hrv', chip: st.provisional ? chip('Provisional', '', st.reason) : expChip() },
-      h('p', { class: 'status-word', style: { fontSize: '20px' } }, word),
+      h('p', { class: 'status-word', style: { fontSize: '20px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'Awaiting beat timing' : word),
       ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
         ? pending('Beat continuity is unverified', PPI_SOURCE_EXPLANATION)
         : building
@@ -805,27 +805,45 @@ function calendarGrid(days, hist, compact) {
  * ================================================================== */
 function watchHero() {
   const r = readinessNow(), sl = rec().sleep || {}, hs = rec().hrv_status || {}, n = lastNight();
+  const d = D(), activity = d.current_activity || {}, battery = d.watch_battery || {};
+  const oxygen = d.oxygen || {}, oxygenLatest = oxygen.latest || {};
+  const weight = d.weight || {}, weightLatest = weight.latest || {};
+  const training = d.training || {}, trainingLatest = training.latest || {};
+  const intensity = (d.fitness || {}).intensity || {};
+  const latestHr = todayObs().filter(o => isNum(o.hr)).at(-1);
   const hr = new Date().getHours();
   const greet = hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
   const name = wearer();
   const score = r.score, stockPulseCurrent=stock().mode==='stock_firmware_estimates' && stockPulse().latest?.night===todayISO();
+  const pulse = stockPulseCurrent && isNum(stockPulse().latest?.pulse) ? stockPulse().latest : (isLastNight(n) && isNum(n.resting_hr) ? n : null);
+  const pulseValue = pulse && isNum(pulse.pulse) ? `${fmt(pulse.pulse)} bpm` : pulse && isNum(pulse.resting_hr) ? `${fmt(pulse.resting_hr)} bpm` : null;
+  const pulseAt = pulse?.observed_at || pulse?.ts;
+  const activityAt = activity.observed_at?.steps || activity.ts;
+  const batteryValue = isNum(battery.percent) && battery.status !== 'stale' ? `${fmt(battery.percent)}%` : null;
+  const readinessValue = isNum(score) ? `${fmt(score)} · ${readinessWord(score)}` : isNum(r.sleep_based_score) ? `${fmt(r.sleep_based_score)} · sleep-only` : null;
   return h('article', { class: 'watch', 'data-m': 'ready' },
     h('div', { class: 'watch-top' },
       h('h1', { class: 'watch-hello' }, name ? `${greet}, ${name}` : greet),
       h('p', { class: 'watch-date' }, new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' }))),
-    h('div', { class: 'watch-main' },
-      h('div', { class: 'watch-ring' }, isNum(score) ? ring(score, { size: 132, stroke: 12, label: `Readiness ${Math.round(score)} of 100` }) : isNum(r.sleep_based_score) ? ring(r.sleep_based_score, { size: 132, stroke: 12, label: `Sleep-only guidance ${Math.round(r.sleep_based_score)} of 100` }) : ring(null, { size: 132, stroke: 12, label: 'Readiness: not enough data' })),
-      h('div', null,
-        h('p', { class: 'watch-score-label' }, h('a', { class: 'card-link', href: '#d/ready' }, isNum(score) ? 'Readiness' : isNum(r.sleep_based_score) ? 'Sleep-only guidance' : 'Readiness')),
-        h('p', { class: 'watch-score-word' }, isNum(score) ? readinessWord(score) : isNum(r.sleep_based_score) ? sleepWord(r.sleep_based_score) : readinessWord(score)),
-        h('p', { class: 'watch-reason' }, isNum(score) ? (r.formula_version==='readiness-stock-v1' ? 'Estimated stock-firmware readiness; check coverage and missing inputs below.' : 'Experimental summary of the available recovery inputs; check coverage and missing inputs below.') : isNum(r.sleep_based_score) ? 'Sleep-only guidance; this is not an overall readiness score.' : (r.reason || 'Not enough inputs yet.')))),
-    h('dl', { class: 'watch-vitals' },
-      vital('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null),
-      vital('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse estimate' : 'Resting HR', stockPulseCurrent && isNum(stockPulse().latest?.pulse) ? `${fmt(stockPulse().latest.pulse)} bpm` : (isLastNight(n) && isNum(n.resting_hr) ? `${fmt(n.resting_hr)} bpm` : null)),
-      vital('hrv', 'HRV status', hs.status && hs.status !== 'baseline_building' && hs.status !== 'insufficient' ? hrvLabel(hs.status)[0] + (hs.provisional ? ' (provisional)' : '') : null, hs.status === 'baseline_building' ? `Learning, ${hs.baseline_nights || 0}/${hs.required_baseline_nights || 14}` : null)));
+    h('div', { class: 'watch-metrics' },
+      watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready'),
+      watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep'),
+      watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps'),
+      watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart'),
+      watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr'),
+      watchMetric('breath', 'Breathing', null, 'Not available yet', 'breath'),
+      watchMetric('hrv', 'HRV', null, ppiSourceUnverified() ? 'Beat timing unverified' : 'Not available yet', 'hrv'),
+      watchMetric('oxygen', 'Blood oxygen', isNum(oxygenLatest.percent) ? `${fmt(oxygenLatest.percent, 1)}%` : null, oxygenLatest.ts ? fmtDateTime(oxygenLatest.ts) : 'No samples yet', 'oxygen'),
+      watchMetric('weight', 'Weight', isNum(weightLatest.kg) ? `${fmt(weightLatest.kg, 1)} kg` : null, weightLatest.date ? `measured ${fmtDay(weightLatest.date)}` : 'No dated reading', 'weight'),
+      watchMetric('train', 'Training load', isNum(trainingLatest.load7) ? fmt(trainingLatest.load7, 1) : null, isNum(trainingLatest.load7) ? '7-day load' : 'Needs history', 'train'),
+      watchMetric('intensity', 'Intensity', isNum(intensity.this_week) ? `${fmt(intensity.this_week)} min` : null, isNum(intensity.this_week) ? 'this week' : 'No weekly total', 'train'),
+      watchMetric('device', 'Watch battery', batteryValue, batteryValue ? (battery.observed_at ? fmtDateTime(battery.observed_at) : 'fresh reading') : battery.status === 'stale' ? 'Stale reading' : 'No reading', 'device')));
 }
-function vital(m, label, value, fallback) {
-  return h('div', { 'data-m': m }, h('dt', null, h('i'), label), h('dd', { class: value ? '' : 'none' }, value || fallback || 'No data'));
+function watchMetric(m, label, value, meta, link) {
+  return h('a', { class: `watch-metric${value ? '' : ' is-empty'}`, 'data-m': m, href: `#d/${link || m}`, 'aria-label': `${label}: ${value || meta || 'No data'}`, title: `${label}: ${value || '—'} · ${meta || 'No data'}` },
+    h('span', { class: 'watch-metric-label' }, h('i'), label),
+    h('strong', { class: 'watch-metric-value' }, value || '—'),
+    h('span', { class: 'watch-metric-meta' }, meta || 'No data'));
 }
 
 /* ================================================================== *
@@ -1686,7 +1704,7 @@ function route() {
 }
 
 function renderNav(active) {
-  const mk = bottom => TABS.map(t => h('a', { href: `#${t.id}`, 'aria-current': t.id === active ? 'page' : null }, bottom ? icon(t.id) : null, h('span', null, t.label)));
+  const mk = bottom => TABS.map(t => h('a', { href: `#${t.id}`, 'aria-current': t.id === active ? 'page' : null }, icon(t.id), h('span', null, t.label)));
   document.querySelector('.tabs-top').replaceChildren(...mk(false));
   document.querySelector('.tabs-bottom').replaceChildren(...mk(true));
 }
@@ -1735,7 +1753,11 @@ function briefPanel(page, opts = {}) {
 
 const PAGES = {
   today() {
-    return [h('div', { class: 'feed' }, watchHero(), briefPanel('today'), CARDS.sleep(), CARDS.hrv(), CARDS.steps(), CARDS.weight(), CARDS.fitness(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.train(), CARDS.rhr(), CARDS.breath(), oxygenCard(), CARDS.stress(), CARDS.workouts(3), CARDS.device())];
+    const section = (title, ...cards) => [h('h2', { class: 'section-title' }, title), h('div', { class: 'feed' }, cards)];
+    return [h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
+      section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), CARDS.breath(), oxygenCard(), CARDS.stress()),
+      section('Activity', CARDS.steps(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.fitness(), CARDS.train(), CARDS.workouts(3)),
+      section('Body & device', CARDS.weight(), CARDS.device())];
   },
   sleep() {
     return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep'), DETAIL.sleep.render(), CARDS.breath())];
