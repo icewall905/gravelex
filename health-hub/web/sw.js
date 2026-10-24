@@ -8,7 +8,8 @@ const SHELL_CACHE = 'pebble-health-shell-' + VERSION;
 const SHELL = [
   'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png',
-  'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'
+  'icons/maskable-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png',
+  'fonts/inter.woff2', 'fonts/space-grotesk-medium.woff2', 'fonts/space-grotesk-bold.woff2'
 ];
 
 self.addEventListener('install', event => {

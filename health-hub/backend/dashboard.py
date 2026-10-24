@@ -264,8 +264,8 @@ def static_file(name):
         abort(404)
     # Code, styles and the service worker always revalidate (a cheap 304 on
     # a LAN), so a browser without the worker never runs stale app code after
-    # an update.  Only icons are cached for long.
-    response = send_from_directory(WEB_DIR, name, max_age=86400 if name.startswith("icons/") else 0)
+    # an update.  Only icons and fonts are cached for long.
+    response = send_from_directory(WEB_DIR, name, max_age=86400 if name.startswith(("icons/", "fonts/")) else 0)
     if name == "manifest.webmanifest":
         response.mimetype = "application/manifest+json"
     return response

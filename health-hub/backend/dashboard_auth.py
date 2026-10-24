@@ -42,7 +42,7 @@ def install(app, web_dir):
             return None
         if not configured():
             return jsonify(error='dashboard_setup_required'), 503
-        if path in ('/login','/auth/login','/styles.css','/app.js','/sw.js','/manifest.webmanifest') or path.startswith('/icons/'):
+        if path in ('/login','/auth/login','/styles.css','/app.js','/sw.js','/manifest.webmanifest') or path.startswith(('/icons/', '/fonts/')):
             return None
         user=accounts.get_user(session.get('user_id')) if session.get('user_id') else None
         if not user or not user['active'] or session.get('version')!=user['session_version']:
