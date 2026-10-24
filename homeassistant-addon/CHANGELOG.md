@@ -1,3 +1,7 @@
+# 0.1.8
+
+- Add seven-night sleep debt to the daily overview with recorded-night coverage and sleep target. Missing nights are excluded rather than treated as zero sleep.
+
 # 0.1.7
 
 - Show dated delivered-PPI variability prominently as a very rough, unvalidated HRV proxy estimate. Explain firmware timing limitations and keep it excluded from readiness and stress.
