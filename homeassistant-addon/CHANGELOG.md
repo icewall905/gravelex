@@ -1,3 +1,8 @@
+# 0.1.5
+
+- Clearly explain why current batched watch data cannot establish HRV or breathing estimates.
+- Show dated delivered PPI variability separately as an unvalidated diagnostic, excluded from readiness and stress.
+
 # 0.1.4
 
 - Original scalable Pebble Health logo across dashboard, sign-in, favicon and web-app icons.
