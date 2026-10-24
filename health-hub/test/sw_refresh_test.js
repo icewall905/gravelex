@@ -16,5 +16,8 @@ async function check(fetcher,cached,options={}) {
   assert.equal((await check(async()=>new Response('unavailable',{status:503}),'old')).body,'old');
   assert.equal((await check(async()=>new Response('unavailable',{status:503}))).status,503);
   await assert.rejects(()=>check(async()=>{throw Error('offline');}),/offline/);
+  const sw=fs.readFileSync(__dirname+'/../web/sw.js','utf8');
+  assert.ok(!sw.includes('DATA_CACHE'));
+  assert.ok(sw.includes("rel.startsWith('api/') || rel.startsWith('auth/')"));
   console.log('service-worker refresh and offline-fallback tests passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

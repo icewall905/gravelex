@@ -2,6 +2,10 @@
 
 The hub runs independently of Home Assistant. Its WebSocket forwarding targets the public [Pebble Watch integration](https://github.com/megageek/pebble-ha-integration).
 
+For a read-only local polling setup, use [`rest.yaml`](rest.yaml) with the hub's `summary:read` API token. The example follows Home Assistant's official [RESTful integration](https://www.home-assistant.io/integrations/rest/) configuration: `resource`, `headers`, `scan_interval`, `sensor`, `value_template`, and JSON attributes. Put the complete `Bearer ...` header and private hub URL in `secrets.yaml`; do not commit either value.
+
+The REST example is independent of the optional WebSocket/MQTT bridge below. It reads only the compact summary and does not expose raw history.
+
 Install that integration following its README. The included `spo2.patch` adds timestamped blood-oxygen state and raw device quality to its existing status sensor implementation. Apply it to a checkout of the integration before copying `custom_components/pebble_ha_integration` into your HA configuration:
 
 ```sh

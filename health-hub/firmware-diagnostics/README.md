@@ -87,10 +87,12 @@ The full debug build uses `CONFIG_SERVICE_DATA_LOGGING_LOG_LEVEL_INFO=y` for the
 The activity module also uses `CONFIG_SERVICE_ACTIVITY_LOG_LEVEL_INFO=y`: its existing SpO2 DEBUG message contains a literal percent escape rejected by the upstream hashed-log validator. Neither setting suppresses compiler errors or the HRM/app diagnostic records.
 
 
-## Verified build result — 2026-10-23
+## Historical maintainer report — 2026-10-23
+
+The following is a retained maintainer report from an offline diagnostic exercise. It is not a release claim, a safety approval, or evidence that a particular watch is ready to flash. Re-run the source, dependency, board-revision, active-slot, PBZ, and rollback checks for every installation.
 
 - Target: `obelix@pvt`, slot 0, diagnostic option enabled; official SDK 0.1.11 (GCC 15.2.1).
-- Build and bundle: passed; firmware name `v4.41.1-dirty` records local source modifications.
+- Build and bundle: reported passed; firmware name `v4.41.1-dirty` records local source modifications.
 - Flash: 2,077,792 of 3,141,632 bytes; RAM: 220,096 of 312,320 bytes.
 - Resource pack: 792,447 of 2,097,152 bytes.
 - Hashed-log dictionary: seven `PPI_DIAG` formats, including result, interval, manager and app stages.

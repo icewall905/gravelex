@@ -1,9 +1,8 @@
 """Pebble Health web app: dashboard, its JSON API, watch pairing and downloads.
 
 Runs as its own process (the ``web`` service) next to the upload receiver
-(``app.py``), sharing the same SQLite database.  It has no login: it is meant
-to sit on a LAN/VPN-only hostname behind a reverse proxy.  Never expose it to
-the public internet without adding authentication.
+(``app.py``), sharing the same SQLite database.  A shared-password session protects dashboard access. Integration and watch
+credentials are separate and scoped. Use HTTPS outside a trusted local network.
 """
 import os
 import json
@@ -22,6 +21,8 @@ import oxygen
 import provenance
 import watch_api
 import workout_edits
+import dashboard_auth
+import api_tokens
 
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent / "web"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
@@ -35,6 +36,7 @@ PAIR_PURPOSE = {
 app = Flask(__name__, static_folder=None)
 # Watch uploads and the Today read endpoint, so one hostname serves everything.
 app.register_blueprint(watch_api.blueprint())
+app.register_blueprint(api_tokens.blueprint())
 
 
 def _json_body():
@@ -53,6 +55,9 @@ ALLOWED_HOSTS = {h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").
 def _check_host():
     if ALLOWED_HOSTS and request.host.split(":")[0].lower() not in ALLOWED_HOSTS:
         abort(403)
+
+
+dashboard_auth.install(app, lambda: WEB_DIR)
 
 
 @app.after_request
@@ -111,8 +116,12 @@ def api_oxygen():
 
 @app.get("/api/summary")
 def api_summary():
+    return dashboard_summary(request.args.get("days", 42))
+
+
+def dashboard_summary(days=42):
     try:
-        result = fitness.summary(int(request.args.get("days", 42)))
+        result = fitness.summary(int(days))
         try:
             data = _scale_data()
             if data:
@@ -253,3 +262,7 @@ def static_file(name):
     if name == "manifest.webmanifest":
         response.mimetype = "application/manifest+json"
     return response
+
+
+import external_api
+app.register_blueprint(external_api.factory(dashboard_summary))

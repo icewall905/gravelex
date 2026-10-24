@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f5f1e8"><title>Sign in · Pebble Health</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>main{max-width:34rem;margin:12vh auto;padding:24px}form{display:grid;gap:16px}.field{display:grid;gap:7px}input{font:inherit;padding:12px;border:1px solid var(--line);border-radius:8px}.sheet-error{color:var(--bad,#a33)}.brand{font-family:var(--font-display,inherit);font-size:2rem}</style>
+</head>
+<body>
+<main tabindex="-1"><p class="brand">Pebble Health</p><h1>Sign in</h1>
+<p>Sign in to manage trusted API tokens and server settings.</p>
+<form id="login-form"><label class="field" for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required autofocus></label><p id="error" class="sheet-error" role="alert" hidden></p><button class="btn primary" type="submit">Sign in</button></form>
+</main>
+<script>
+'use strict';
+const form=document.getElementById('login-form'),password=document.getElementById('password'),error=document.getElementById('error');
+form.addEventListener('submit',async event=>{event.preventDefault();error.hidden=true;const button=form.querySelector('button');button.disabled=true;try{const response=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json','X-PH-Request':'1'},body:JSON.stringify({password:password.value})});let data=null;try{data=await response.json();}catch(e){}if(response.ok){window.location.replace('/');return;}error.textContent=response.status===429?'Too many attempts. Try again later.':'Invalid password.';error.hidden=false;password.select();}catch(e){error.textContent='Could not reach the server. Try again.';error.hidden=false;}finally{button.disabled=false;}});
+</script>
+</body></html>

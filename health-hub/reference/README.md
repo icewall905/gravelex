@@ -1,5 +1,7 @@
 # Local chest-strap RR reference
 
+This is an offline validation tool, separate from the health hub API and phone upload path. It does not grant, consume, or require a hub bearer token.
+
 This workstation tool reads the standard Bluetooth Heart Rate Measurement characteristic. It preserves every notification (including multiple RR intervals per packet), native 1/1024-second RR values, contact flags and host receipt timestamps. It never uploads data or automatically qualifies/calibrates Pebble scores.
 
 A known HRM Pro/Pro+ may advertise the service, but **RR availability must be verified from actual notifications**. A service UUID alone is not proof of RR output. No device address is baked into source. Follow the [Bluetooth SIG Heart Rate Service specification](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/HRS_v1.0/out/en/index-en.html).

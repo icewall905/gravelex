@@ -1,0 +1,38 @@
+# Include this from configuration.yaml, or copy the `rest:` block into it.
+# Define these in Home Assistant secrets.yaml, never in Git:
+#   gravel_health_api_url: https://health.example.invalid/api/v1/summary
+#   gravel_health_summary_authorization: Bearer REPLACE_WITH_SUMMARY_READ_TOKEN
+rest:
+  - resource: !secret gravel_health_api_url
+    method: GET
+    headers:
+      Authorization: !secret gravel_health_summary_authorization
+    scan_interval: 300
+    timeout: 10
+    sensor:
+      - name: GravelEx Readiness Estimate
+        unique_id: gravelex_readiness_estimate
+        value_template: >-
+          {% set metric = value_json.metrics.readiness | default(none) %}
+          {{ metric.value if metric and metric.value is not none else 'unknown' }}
+        unit_of_measurement: ""
+        state_class: measurement
+        json_attributes_path: "$.metrics.readiness"
+        json_attributes:
+          - unit
+          - status
+          - estimated
+          - observed_at
+      - name: GravelEx Overnight Pulse Estimate
+        unique_id: gravelex_overnight_pulse_estimate
+        value_template: >-
+          {% set metric = value_json.metrics.overnight_pulse | default(none) %}
+          {{ metric.value if metric and metric.value is not none else 'unknown' }}
+        unit_of_measurement: "bpm"
+        state_class: measurement
+        json_attributes_path: "$.metrics.overnight_pulse"
+        json_attributes:
+          - unit
+          - status
+          - estimated
+          - observed_at

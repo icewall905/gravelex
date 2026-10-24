@@ -98,6 +98,7 @@ const S = {
   data: null, daysLoaded: 0, loading: false, error: null,
   fetchedAt: 0, offlineSince: null, range: Number(store.get('ph-range')) || 7,
 };
+const API_TOKENS = { tokens: [], scopes: [], loaded: false, secret: null, error: '' };
 if (!RANGES.some(r => r.days === S.range)) S.range = 7;
 const D = () => S.data || {};
 const todayISO = () => (D().recovery && D().recovery.today) || isoOf(new Date());
@@ -108,11 +109,12 @@ const nowSec = () => D().now || Math.floor(Date.now() / 1000);
  * ================================================================== */
 async function api(path, method, body) {
   const res = await fetch(path, {
-    method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    method, headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-PH-Request': '1' },
     body: body ? JSON.stringify(body) : undefined, cache: 'no-store',
   });
   let json = null;
   try { json = await res.json(); } catch (e) { /* not JSON */ }
+  if (res.status === 401 && json && json.error === 'login_required') { clearSessionHealth(); window.location.assign('/login'); throw new Error('Login required.'); }
   if (!res.ok) throw new Error((json && (json.error || json.detail)) || `The server answered ${res.status}.`);
   return json;
 }
@@ -123,10 +125,11 @@ async function load(force) {
   if (!force && S.data && S.daysLoaded >= want && Date.now() - S.fetchedAt < 60000) return;
   S.loading = true; setBusy(true);
   try {
-    const res = await fetch(`api/summary?days=${want}`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    const res = await fetch(`api/summary?days=${want}`, { headers: { Accept: 'application/json', 'X-PH-Request': '1' }, cache: 'no-store' });
     if (!res.ok) {
       let msg = `The server answered ${res.status}.`;
       try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) { /* ignore */ }
+      if (res.status === 401) { clearSessionHealth(); window.location.assign('/login'); return; }
       throw new Error(msg);
     }
     const data = await res.json();
@@ -1349,6 +1352,38 @@ function settingsCard() {
   return card('train', 'Profile', { cls: 'wide' }, form);
 }
 
+function clearApiSecret() { API_TOKENS.secret = null; }
+function clearSessionHealth(broadcast = true) {
+  clearApiSecret(); API_TOKENS.tokens=[]; API_TOKENS.scopes=[]; API_TOKENS.loaded=false;
+  S.data=null; S.daysLoaded=0; S.error=null; S.offlineSince=null;
+  document.body.replaceChildren();
+  if (broadcast) { try { localStorage.setItem('ph-auth-logout', String(Date.now())); } catch (e) { /* private mode */ } }
+}
+async function settingsRequest(path, method = 'GET', body) {
+  const res = await fetch(path, { method, headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-PH-Request': '1' }, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+  let data = null; try { data = await res.json(); } catch (e) { /* safe generic error below */ }
+  if (res.status === 401) { clearSessionHealth(); window.location.assign('/login'); throw new Error('Login required.'); }
+  if (!res.ok) throw new Error('Settings request failed. Try signing in again.');
+  return data || {};
+}
+function apiTokenMetadata(data) { return data.token_info || data.token_record || data; }
+function apiTokensCard() {
+  const doc = HUB_CONFIG.api_docs_url ? h('a', { href: HUB_CONFIG.api_docs_url, target: '_blank', rel: 'noopener' }, 'See API documentation') : null;
+  if (!API_TOKENS.loaded) settingsRequest('api/settings/api-tokens').then(d=>{API_TOKENS.tokens=d.tokens||[];API_TOKENS.scopes=d.scopes||[];API_TOKENS.loaded=true;render();}).catch(()=>{});
+  const name=h('input',{id:'token-name',type:'text',maxlength:80,value:'Home Assistant',required:true});
+  const expiry=h('select',{id:'token-expiry'},[['7','7 days'],['30','30 days'],['90','90 days'],['365','365 days'],['never','Never']].map(([v,t])=>h('option',{value:v,selected:v==='90'},t)));
+  const scopeIds=['summary:read','history:read','raw:read'];
+  const scopes=h('div',{class:'above'},h('span',{class:'field-label'},'Scopes'),scopeIds.map((id,i)=>{const input=h('input',{type:'checkbox',id:`scope-${id}`,value:id,checked:i===0});return h('label',{class:'check',for:`scope-${id}`},input,id==='raw:read'?'raw:read (raw HRV)':id);}));
+  const err=h('p',{class:'sheet-error',role:'alert',hidden:true});
+  const reveal=h('div',{class:'above',hidden:!API_TOKENS.secret});
+  function showSecret(secret, meta) { API_TOKENS.secret=secret; reveal.hidden=false; reveal.replaceChildren(h('p',{class:'lede'},'Copy this token now. It is shown once and is not saved in this browser.'),h('input',{type:'password',readonly:true,value:secret, 'aria-label':'New API token'}),h('button',{type:'button',class:'btn small',onclick:async()=>{try{await navigator.clipboard.writeText(secret);toast('Token copied');}catch(e){}}},'Copy'),h('button',{type:'button',class:'btn small',onclick:()=>{clearApiSecret();reveal.hidden=true;reveal.replaceChildren();}},'Hide')); }
+  const create=h('button',{class:'btn primary',type:'submit'},'Create token');
+  const form=h('form',{class:'above',onsubmit:async e=>{e.preventDefault();err.hidden=true;create.disabled=true;try{const selected=[...scopes.querySelectorAll('input:checked')].map(x=>x.value);const d=await settingsRequest('api/settings/api-tokens','POST',{name:name.value,scopes:selected,expires_in_days:expiry.value==='never'?null:Number(expiry.value)});const meta=apiTokenMetadata(d);if(d.token)showSecret(d.token,meta);API_TOKENS.tokens=[meta,...API_TOKENS.tokens];}catch(x){err.textContent='Could not create token. Check your sign-in and selected scopes.';err.hidden=false;}finally{create.disabled=false;}}},h('div',{class:'form-grid two'},h('label',{class:'field',for:'token-name'},'Token name',name),h('label',{class:'field',for:'token-expiry'},'Expiry',expiry)),scopes,err,h('div',{class:'btn-row'},create));
+  const list=API_TOKENS.tokens.map(t=>h('li',{class:'token-row'},h('strong',null,t.name||'Unnamed token'),h('span',{class:'foot'},`${t.prefix||'token'} · ${(t.scopes||[]).join(', ')} · ${t.revoked_at?'Revoked':t.expires_at?`Expires ${new Date(t.expires_at*1000).toLocaleDateString()}`:'Never expires'}${t.last_used_at?` · Last used ${new Date(t.last_used_at*1000).toLocaleString()}`:''}`),!t.revoked_at?h('button',{type:'button',class:'btn small',onclick:async()=>{try{await settingsRequest(`api/settings/api-tokens/${encodeURIComponent(t.id)}`,'DELETE');API_TOKENS.tokens=API_TOKENS.tokens.filter(x=>x.id!==t.id);render();}catch(e){toast('Could not revoke token');}}},'Revoke'):null));
+  if (API_TOKENS.secret) showSecret(API_TOKENS.secret, null);
+  return card('device','API access',{cls:'wide'},h('p',{class:'lede'},'Manage read-only tokens for trusted integrations. Sign in to this PH server to manage them.',doc?' ':null,doc),form,reveal,list.length?h('ul',{class:'list'},list):h('p',{class:'foot'},'No API tokens yet.'),h('button',{type:'button',class:'btn small',onclick:async()=>{try{await fetch('/auth/logout',{method:'POST',headers:{'X-PH-Request':'1','Accept':'application/json'}});}finally{clearSessionHealth();window.location.assign('/login');}}},'Sign out'));
+}
+
 function themeCard() {
   const cur = store.get('ph-theme') || 'system';
   const btns = [['system', 'Match device'], ['light', 'Light'], ['dark', 'Dark']].map(([k, t]) =>
@@ -1543,7 +1578,8 @@ function pageHead(title, sub, extra) {
 async function regenerateBriefing(btn) {
   btn.disabled = true; btn.textContent = 'Writing…';
   try {
-    const res = await fetch('api/briefing/run', { method: 'POST' });
+    const res = await fetch('api/briefing/run', { method: 'POST', headers: { Accept: 'application/json', 'X-PH-Request': '1' } });
+    if (res.status === 401) { clearSessionHealth(); window.location.assign('/login'); return; }
     const out = await res.json();
     if (out.status === 'disabled') { toast('No language model is configured on the server.', true); return; }
     toast(out.status === 'busy' ? 'A briefing is already being written.' : 'Writing a new briefing; this takes a minute or two.');
@@ -1596,7 +1632,7 @@ const PAGES = {
         h('p',null,h('a',{class:'btn',href:'download/gravelex'},'Download GravelEx APK')),
         h('p',{class:'foot'},'Keep your existing Gravel installed. Only one app should manage the watch at a time.'),
         h('p',null,h('a',{href:'#d/oxygen'},'Health export setup and token'),' · ',sourceLink('Source and instructions'))),
-      briefPanel('more', { regenerate: true }), devicesView(), settingsCard(), themeCard(),
+      briefPanel('more', { regenerate: true }), devicesView(), settingsCard(), apiTokensCard(), themeCard(),
       card('device', 'About', { cls: 'wide' }, h('p', { class: 'lede', style: { marginTop: 0 } }, 'Pebble Health runs on your own server. Your data stays there. Scores marked experimental come from an unvalidated watch sensor and are for personal interest, not medical use.')))];
   },
 };
@@ -1658,7 +1694,10 @@ async function boot() {
   paintThemeButton();
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeButton); } catch (e) { /* old Safari */ }
   dlg().addEventListener('click', e => { if (e.target === dlg()) closeSheet(); });
-  window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); document.getElementById('main').focus({ preventScroll: true }); });
+  window.addEventListener('hashchange', () => { clearApiSecret(); render(); window.scrollTo(0, 0); document.getElementById('main').focus({ preventScroll: true }); });
+  window.addEventListener('beforeunload', clearApiSecret);
+  window.addEventListener('storage', e => { if (e.key === 'ph-auth-logout') { clearSessionHealth(false); window.location.assign('/login'); } });
+  window.addEventListener('pageshow', e => { if (!e.persisted) return; fetch('api/summary?days=1', { headers: { Accept: 'application/json', 'X-PH-Request': '1' }, cache: 'no-store' }).then(res => { if (res.status === 401) { clearSessionHealth(); window.location.assign('/login'); } }).catch(() => {}); });
   let lastW = window.innerWidth, rt = null;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if ((lastW >= 720) !== (window.innerWidth >= 720)) render(); lastW = window.innerWidth; }, 150); });
   window.addEventListener('scroll', () => document.querySelector('.topbar').classList.toggle('scrolled', window.scrollY > 4), { passive: true });

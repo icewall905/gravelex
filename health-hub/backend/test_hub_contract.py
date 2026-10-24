@@ -12,7 +12,12 @@ def web(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, 'WEB_DIR', Path(__file__).parents[1]/'web')
     monkeypatch.delenv('HEALTH_DASHBOARD_URL', raising=False)
     monkeypatch.delenv('HEALTH_SCALE_USER', raising=False)
-    return dashboard.app.test_client()
+    monkeypatch.setenv('PH_PASSWORD_HASH', __import__('werkzeug.security',fromlist=['generate_password_hash']).generate_password_hash('testing-password'))
+    monkeypatch.setenv('PH_SESSION_SECRET','testing-secret')
+    client=dashboard.app.test_client()
+    client.environ_base['HTTP_X_PH_REQUEST']='1'
+    with client.session_transaction() as session: session['authenticated']=True
+    return client
 
 def test_empty_instance_assets_config_and_no_private_environment_leaks(web, monkeypatch):
     monkeypatch.setenv('PUBLIC_URL','https://health.example.org')

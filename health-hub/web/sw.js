@@ -1,11 +1,10 @@
 /* Pebble Health service worker.
    App shell: network-first with a versioned offline fallback.
-   /api/summary: network-first, falling back to the last good response.
+   API and auth requests are network-only and are never stored in Cache Storage.
    Writes (POST/PUT/…) and every other request go straight to the network. */
 'use strict';
-const VERSION = 'v23';
+const VERSION = 'v25';
 const SHELL_CACHE = 'pebble-health-shell-' + VERSION;
-const DATA_CACHE = 'pebble-health-data-v1';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png',
@@ -20,31 +19,11 @@ self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
       .then(keys => Promise.all(keys
-        .filter(k => k.startsWith('pebble-health-') && k !== SHELL_CACHE && k !== DATA_CACHE)
+        .filter(k => k.startsWith('pebble-health-') && k !== SHELL_CACHE)
         .map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
-
-async function summary(request) {
-  const cache = await caches.open(DATA_CACHE);
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const headers = new Headers(response.headers);
-      headers.set('X-Cached-At', String(Date.now()));
-      const body = await response.clone().arrayBuffer();
-      await cache.put(request, new Response(body, { status: 200, headers }));
-    }
-    return response;
-  } catch (err) {
-    const hit = await cache.match(request) || await cache.match(request, { ignoreSearch: true });
-    if (!hit) throw err;
-    const headers = new Headers(hit.headers);
-    headers.set('X-Offline-Fallback', '1');
-    return new Response(await hit.arrayBuffer(), { status: 200, headers });
-  }
-}
 
 async function shell(request) {
   const cache=await caches.open(SHELL_CACHE);
@@ -79,7 +58,7 @@ self.addEventListener('fetch', event => {
   if (url.origin !== self.location.origin) return;
   const scope = new URL(self.registration.scope);
   const rel = url.pathname.slice(scope.pathname.length);
-  if (rel.startsWith('api/summary')) { event.respondWith(summary(request)); return; }
-  if (rel.startsWith('api/') || rel.startsWith('download/') || rel.startsWith('pair')) return;
+  if (rel.startsWith('api/') || rel.startsWith('auth/')) { event.respondWith(fetch(request)); return; }
+  if (rel.startsWith('download/') || rel.startsWith('pair')) return;
   if (request.mode === 'navigate' || SHELL.includes(rel) || rel === '') event.respondWith(shell(request));
 });

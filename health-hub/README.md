@@ -1,6 +1,8 @@
-# Pebble Health hub
+# GravelEx Health hub
 
-The self-hosted companion to GravelEx: the same Pebble Health PWA, durable receiver and analytics used by this project. It stores your own watch data in SQLite and works without Google services, Home Assistant, an external database or a cloud LLM. Optional integrations are configured separately.
+The self-hosted companion to the GravelEx Android app (`tdgs.gravel`): a Pebble Health PWA, durable receiver and analytics service. It stores your own watch data in SQLite and works without Google services, Home Assistant, an external database or a cloud LLM. Optional integrations are configured separately. GravelEx Android releases are published through the project GitHub releases and can be tracked with Obtainium.
+
+The API contract is documented in [API.md](API.md). Stock-firmware pulse, strain and readiness outputs are estimates with explicit missingness and low-confidence limits; they are not medical measurements.
 
 See [FITNESS-ROADMAP.md](FITNESS-ROADMAP.md) for the audited limitations, ordered implementation tasks and delivery status.
 
@@ -16,15 +18,15 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Open `http://localhost:8790`. A fresh instance shows empty history; it contains no demo or personal records. `init-env.sh` creates a fresh receiver credential in a mode 600 `.env`, never prints it, and retains an existing file. `.env`, downloads, databases and backups are Git-ignored. The named `health-data` volume holds SQLite and survives container replacement.
+Read your initial login password with `cat data/bootstrap-password.txt`, then open `http://localhost:8790`. To choose a password, run `python3 scripts/set-password.py` and recreate the web service with `docker compose up -d --force-recreate web`. A fresh instance shows empty history; it contains no demo or personal records. `init-env.sh` creates a fresh receiver credential in a mode 600 `.env`, never prints it, and retains an existing file. `.env`, downloads, databases and backups are Git-ignored. The named `health-data` volume holds SQLite and survives container replacement.
 
-Both published ports bind to 127.0.0.1 by default. On another machine you can initially use SSH port forwarding. To use your phone or install the PWA, provide a reachable HTTPS hostname through your reverse proxy, set `PUBLIC_URL` to that URL and add its hostname to `ALLOWED_HOSTS`. Configure access authentication on the dashboard/proxy before exposing your health history. `BIND_ADDRESS` is configurable when an authenticated LAN/VPN deployment needs a different bind.
+Both published ports bind to 127.0.0.1 by default. On another machine you can initially use SSH port forwarding. To use your phone or install the PWA, provide a reachable HTTPS hostname through your reverse proxy, set `PUBLIC_URL` to that URL and add its hostname to `ALLOWED_HOSTS`. The built-in shared-password login protects your dashboard; it fails closed until the password hash and session secret are configured. `BIND_ADDRESS` is configurable when an authenticated LAN/VPN deployment needs a different bind.
 
-The browser's `/fitness/*` routes accept scoped bearer tokens themselves; allow these through the proxy without interactive browser authentication so the phone can upload. Protect the dashboard, `/api/*` and pairing pages with your chosen proxy authentication. Optional legacy `/health` uploads go to the receiver on 9998 and accept its `AUTH_TOKEN` or a paired history token. Do not publish an unauthenticated dashboard merely because upload routes have tokens.
+The browser's `/fitness/*` routes accept scoped bearer tokens themselves; allow these through the proxy without interactive browser authentication so the phone can upload. The built-in login protects dashboard APIs, settings and pairing pages. `/api/v1/*` accepts its own read-only bearer tokens; if you add another proxy login, allow this prefix through to the application so Home Assistant can authenticate. Optional legacy `/health` uploads go to the receiver on 9998 and accept its `AUTH_TOKEN` or a paired history token. Do not publish an unauthenticated dashboard merely because upload routes have tokens.
 
 ## Connect GravelEx
 
-1. Install the signed APK from your chosen GravelEx release repository. You can track the public GitHub repository in Obtainium.
+1. Install the GravelEx APK (`tdgs.gravel`) from the project's GitHub release repository. You can track that repository in Obtainium.
 2. In the hub, open More → Phone app → Health export setup and token, then create a history upload token. It grants upload access, not history reads, and expires after 30 days without use.
 3. On the phone, open Settings → Health → GravelEx health data export. Enter this hub's HTTPS URL and token, enable automatic export, then Save/Test/Sync.
 4. Health → Blood Oxygen shows actual stored samples; Settings → Health → Blood Oxygen Setup & Status distinguishes the watch preference, local observations and last acknowledged server batch.
@@ -34,7 +36,7 @@ The hub's base URL is supplied through public configuration or derived from its 
 For an APK download button on your own hub, populate the ignored downloads directory:
 
 ```sh
-GRAVELEX_REPOSITORY=icewall905/pebble-app-degoogled ./scripts/fetch-apk.sh
+    GRAVELEX_REPOSITORY=OWNER/REPOSITORY ./scripts/fetch-apk.sh
 ```
 
 Choose your own owner/repository if you maintain a fork. This helper verifies the release checksum before replacing the APK. APK signing remains in the Android release workflow; the hub never receives that private signing key. Set optional `SOURCE_URL` to the public source/instructions URL you want the PWA to link to.
@@ -58,6 +60,8 @@ Every deployment setting is listed in `.env.example`:
 | Purpose | Variables |
 | --- | --- |
 | Private receiver credential | `AUTH_TOKEN` generated by init script |
+| Dashboard password hash | `PH_PASSWORD_HASH` |
+| Dashboard session secret | `PH_SESSION_SECRET` |
 | Network and public links | `BIND_ADDRESS`, `WEB_PORT`, `RECEIVER_PORT`, `PUBLIC_URL`, `SOURCE_URL`, `ALLOWED_HOSTS` |
 | Motion calibration (optional, evidence required) | `HRV_MOTION_POLICIES` |
 | Wearer/local day boundaries | `WEARER_NAME`, `PEBBLE_TZ` |
@@ -68,6 +72,8 @@ Every deployment setting is listed in `.env.example`:
 | Optional local/OpenAI-compatible briefing | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `BRIEFING_TIME` |
 
 HA integration and the timestamped oxygen sensor are documented in [integrations/homeassistant](integrations/homeassistant/README.md). The external SQL weight source expects `(date, weight_kg)` rows; the optional profile query expects `(sex, birthdate, height_cm)`. The optional scale dashboard source expects `/api/scales` and `/api/daily` with `user` and `range` query parameters. Omit these integrations when you only want Pebble data.
+
+The API is local-first and read-only. Keep its scoped bearer tokens separate from phone upload tokens and dashboard password sessions. See [API.md](API.md) for scopes, bounded history queries, login/logout routes, and token handling.
 
 For an LLM briefing, configure both endpoint and model; a local endpoint is supported. Then start the optional service:
 

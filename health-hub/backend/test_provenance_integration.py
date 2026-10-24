@@ -117,11 +117,15 @@ def test_independent_worker_processes_initialize_atomically(store):
         assert worker.returncode==0,error
 
 
-def test_protected_dashboard_projection_is_bounded_and_rejects_bad_timestamp(store):
+def test_protected_dashboard_projection_is_bounded_and_rejects_bad_timestamp(store, monkeypatch):
     import dashboard
     path,ts=store
     fitness.ingest({'source':'gravelex','records':[{'ts':ts,'hr':70,'private_extra':'do-not-return'}]})
+    monkeypatch.setenv('PH_PASSWORD_HASH','configured')
+    monkeypatch.setenv('PH_SESSION_SECRET','configured')
     client=dashboard.app.test_client()
+    client.environ_base['HTTP_X_PH_REQUEST']='1'
+    with client.session_transaction() as session: session['authenticated']=True
     result=client.get('/api/provenance/minute',query_string={'ts':ts})
     assert result.status_code==200
     data=result.get_json()
