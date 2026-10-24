@@ -4,7 +4,7 @@ Investigated 2026-10-24. Read-only inspection; no STT configuration changed.
 
 ## Current conclusion
 
-The watch-specific server path has materially different recognition settings from the inspected HA Wyoming path. This is a concrete software suspect, not proof of the cause of a particular bad transcript. Watch capture is also a credible suspect, supported by historical upstream testing, but not yet measured on this user's current firmware. The installed phone's active STT URL/engine is unconfirmed: no ADB device was connected.
+The watch-specific server path has materially different recognition settings from the inspected HA Wyoming path. This is a concrete software suspect, not proof of the cause of a particular bad transcript. Watch capture is also a credible suspect, supported by historical on-device testing, but not yet measured on this user's current firmware. The installed phone's active STT URL/engine is unconfirmed: no ADB device was connected.
 
 ## Paths inspected
 
@@ -32,7 +32,7 @@ Traefik's inspected configuration rewrites the path and selects an upstream; it 
 - `pebble/src/commonMain/kotlin/coredevices/pebble/services/HybridTranscription.kt`: accepted Speex sessions decode to 320 samples/frame, 16 kHz; failed decode returns an error rather than silently accepting damaged frames.
 - `pebble/src/commonMain/kotlin/com/anopticlabs/gravel/watchapp/WatchSpeex.kt`: wideband decoder constants and frame handling.
 - `util/src/commonMain/kotlin/coredevices/util/transcription/SelfHostedTranscriptionService.kt`: PCM buffered into WAV, with model/language fields; no gain correction, denoise or silence trimming in this upload path.
-- `KNOWN_ISSUES.md`, “Watch dictation accuracy varies sharply between sessions”: historical upstream tests found some captures speech-poor despite adequate loudness, and first syllables sometimes missing when speaking immediately at the microphone icon. Those tests included older firmware and are not a diagnosis of this watch on 4.42.0. Mic occlusion, moisture/debris, firmware gain state and codec/transport remain candidates.
+- `KNOWN_ISSUES.md`, “Watch dictation accuracy varies sharply between sessions”: historical on-device tests found some captures speech-poor despite adequate loudness, and first syllables sometimes missing when speaking immediately at the microphone icon. Those tests included older firmware and are not a diagnosis of this watch on 4.42.0. Mic occlusion, moisture/debris, firmware gain state and codec/transport remain candidates.
 - Debug-only capture hooks retain the last 20 WAV/frame captures privately. Release builds do not expose that capture toggle; do not assume it can be enabled on the installed release.
 
 ## Controlled test plan
