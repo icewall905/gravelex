@@ -1,3 +1,8 @@
+# 0.1.4
+
+- Original scalable Pebble Health logo across dashboard, sign-in, favicon and web-app icons.
+- Consistent regular and maskable app icons generated from the SVG master.
+
 # 0.1.3
 
 - Compact daily overview with dated metric tiles and no embedded graphs.
