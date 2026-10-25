@@ -190,7 +190,7 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
                 "mode": (s.get("stock_estimates") or {}).get("mode"),
                 "overnight_pulse": (s.get("stock_estimates") or {}).get("pulse"),
                 "overnight_strain": (s.get("stock_estimates") or {}).get("strain"),
-                "limitation": "Custom low-confidence estimates from direct pulse summaries, sleep and available confirmed training; not validated Garmin scores or psychological stress. Pulse variability and breathing are not inputs."},
+                "limitation": "Custom low-confidence estimates from direct pulse summaries, sleep and available confirmed training; not validated vendor scores or psychological stress. Pulse variability and breathing are not inputs."},
             "monitor_diagnostics":(s.get("monitor_observations") or {}).get("diagnostics",{}),
             "overnight_spot_pulse":(s.get("monitor_observations") or {}).get("nightly_pulse",[])[-7:],
             "hrv_comparable_series": identity,

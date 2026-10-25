@@ -962,9 +962,9 @@ function weightGraph(span, height, detailed) {
   const latest = isWeight ? (D().weight || {}).latest || {} : metric;
   return [h('label',{for:'weight-metric',class:'foot'},'Graph measurement'), select,
     !isWeight ? big(fmt(metric.value,2), unit) : null,
-    !isWeight ? h('p',{class:'foot'},metric.date ? `Measured ${metric.date} · Garmin scale` : 'No verified measurement date') : null,
+    !isWeight ? h('p',{class:'foot'},metric.date ? `Measured ${metric.date} · connected scale` : 'No verified measurement date') : null,
     items.some(i=>isNum(i.v)) ? lineChart({items,W:detailed?chartW():340,H:height,alt:isWeight,fmtV:v=>fmt(v,1),unit,label:isWeight?'Weight and 7-day trend':`${label} measurements`}) : pending(`No ${label.toLowerCase()} readings in this range`,data.error || 'Measurements appear on the date taken; missing days remain gaps.'),
-    isWeight ? legend([['line','Weigh-ins'],['dash','7-day trend']]) : h('p',{class:'foot'},'Garmin scale measurements. A single reading appears as a point; trends build with more weigh-ins.'),
+    isWeight ? legend([['line','Weigh-ins'],['dash','7-day trend']]) : h('p',{class:'foot'},'Connected scale measurements. A single reading appears as a point; trends build with more weigh-ins.'),
     ['fat_mass_kg','fat_free_mass_kg'].includes(key) ? h('p',{class:'foot'},'Calculated from weight and body fat measured on the same date.') : null];
 }
 
@@ -1095,7 +1095,7 @@ const DETAIL = {
         stats([['7-reading trend',fmt((w.latest||{}).trend_kg,2),'kg'],['Trend change in range',signedKg(change),'kg'],['Weigh-ins in range',`${kgs.length}`]]),
         ...bodyTrendOverview(span),
         h('details',{class:'info'},h('summary',null,'Explore a measurement in detail'),...weightGraph(span,210,true)),
-        info('About these measurements','Garmin takes priority on its measurement date; daily weigh-ins fill other dates. The weight trend averages your last seven weigh-ins. Fat and fat-free mass use weight and body fat from matching dates.'))];
+        info('About these measurements','Scale composition readings take priority on their measurement date; daily weigh-ins fill other dates. The weight trend averages your last seven weigh-ins. Fat and fat-free mass use weight and body fat from matching dates.'))];
     },
   },
   ready: {
@@ -1114,7 +1114,7 @@ const DETAIL = {
           h('p',{class:'foot'},`${r.components_count ?? Object.keys(comps).length} of ${r.total_components ?? 4} inputs · ${isNum(r.effective_weight_coverage) ? fmt(r.effective_weight_coverage*100) : '—'}% configured weight covered${r.provisional ? ' · provisional' : ''}`),
           missingList(r.missing),
           info('How readiness works',
-            r.formula_version==='readiness-stock-v1' ? 'Stock-firmware readiness uses sleep, overnight pulse and training load with the displayed weights. It is a custom heuristic, not a Garmin measurement.' : 'HRV, resting HR and load are compared with personal baselines. Sleep uses duration against your target and timing regularity. The score combines available inputs and remains experimental.',
+            r.formula_version==='readiness-stock-v1' ? 'Stock-firmware readiness uses sleep, overnight pulse and training load with the displayed weights. It is a custom heuristic, not a vendor measurement.' : 'HRV, resting HR and load are compared with personal baselines. Sleep uses duration against your target and timing regularity. The score combines available inputs and remains experimental.',
             r.formula_version==='readiness-stock-v1' ? 'Needs sleep and at least one other available input. With sleep alone, only sleep-only guidance is shown. Missing components are not guessed.' : 'Missing inputs are left out rather than guessed. With fewer than two inputs, or without overnight HRV or sleep, no score is shown.',
             r.method ? `Method: ${r.method}.` : null)),
         readinessHistoryCard(),
@@ -1178,7 +1178,7 @@ const DETAIL = {
           info('How HRV status works',
             'Heart rate variability (RMSSD) is measured in short recordings during the night. The 7-night average is compared with the range that is usual for you.',
             'Balanced means the average sits inside that range. Values outside it are worth noting, not alarming. These recordings are experimental and unvalidated.',
-            'Until 14 Pebble nights exist, a provisional status compares your last 3 nights with your earlier Pebble nights, using how much your HRV varied night to night in your earlier Garmin history.')),
+            'Until 14 Pebble nights exist, a provisional status compares your last 3 nights with your earlier Pebble nights, using how much your HRV varied night to night in your earlier imported history.')),
         card('hrv', 'HRV history', { cls: 'wide' },
           has ? [h('div',{class:'hrv-qualified-series'},lineChart({ items, W: chartW(), H: 180, unit: 'ms', band: isNum(st.baseline_low_ms) ? { lo: st.baseline_low_ms, hi: st.baseline_high_ms } : null, label: 'Qualified nightly HRV' }),
             legend([['line', 'Qualified nightly RMSSD'], ['soft', 'Usual range'], ['gap', 'No usable recording']]))]
@@ -1388,7 +1388,7 @@ function readinessHistoryCard() {
     const first=Math.max(Date.parse(history[0].day+'T00:00:00Z'),last-89*86400000);
     for (let stamp=first;stamp<=last;stamp+=86400000) {
       const day=new Date(stamp).toISOString().slice(0,10), row=byDay.get(day);
-      comparable.push({key:day,label:day,v:row?.comparability_key===current.comparability_key ? row.readiness.score : null});
+      comparable.push({key:day,label:day,v:current.comparability_key && row?.comparability_key===current.comparability_key ? row.readiness.score : null});
     }
   }
   return card('ready','Comparable readiness history',{cls:'wide',chip:expChip()},
