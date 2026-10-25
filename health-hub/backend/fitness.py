@@ -85,6 +85,10 @@ def connect():
     CREATE TABLE IF NOT EXISTS briefings(id INTEGER PRIMARY KEY, created INTEGER, day TEXT, model TEXT, status TEXT, payload TEXT, error TEXT, seconds REAL);
     CREATE TABLE IF NOT EXISTS weights(day TEXT PRIMARY KEY, kg REAL, source TEXT);
     CREATE TABLE IF NOT EXISTS sleep_sessions(id TEXT PRIMARY KEY, start INTEGER, seconds INTEGER, kind TEXT);
+    CREATE TABLE IF NOT EXISTS watch_battery_readings(observed_at INTEGER NOT NULL, received INTEGER,
+      source TEXT NOT NULL, device_id TEXT, percent INTEGER NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS watch_battery_readings_key
+      ON watch_battery_readings(observed_at, source, ifnull(device_id,''));
     """
                 for statement in statements.split(';'):
                     if statement.strip():
@@ -133,11 +137,77 @@ def current_activity(db, now):
 
 
 BATTERY_MAX_AGE_SECONDS = 6 * 3600
+BATTERY_SERIES_DAYS = 7
+BATTERY_SERIES_MAX_POINTS = 2000
+# Consecutive readings farther apart than this cross a period the watch was off,
+# disconnected or unreported; the joined drop is then not an observed discharge.
+# Uploads carry battery roughly every 30-60 minutes, so the threshold keeps the
+# real cadence while excluding multi-hour gaps.
+BATTERY_DISCHARGE_MAX_GAP_SECONDS = 60 * 60
+# An estimate needs enough genuinely observed discharge to mean anything; below
+# these limits the answer is "waiting for more data points", not a number.
+BATTERY_RUNTIME_MIN_OBSERVED_HOURS = 2
+BATTERY_RUNTIME_MIN_DROP_PERCENT = 3
+
+
+def battery_runtime_estimate(series):
+    """Total runtime on a full charge from observed discharge runs only.
+
+    A run is a maximal sequence of non-increasing readings no further apart
+    than the gap threshold; its full span counts, so flat steps between two
+    drops are genuine slow-discharge time, not noise. Charging (a rise) or a
+    long disconnect ends the run; runs without a net drop stay ambiguous
+    (the watch may be on the charger) and are excluded.
+    """
+    drop = 0.0
+    span = 0
+    runs = 0
+    first = 0
+    for i in range(1, len(series) + 1):
+        prev, cur = series[i - 1], series[i] if i < len(series) else None
+        broken = cur is None or cur['ts'] - prev['ts'] > BATTERY_DISCHARGE_MAX_GAP_SECONDS or cur['percent'] > prev['percent']
+        if broken:
+            start = first
+            if series[start]['percent'] >= 100:
+                # Time held at exactly full may be charge time, not discharge.
+                while start < i - 1 and series[start]['percent'] >= 100:
+                    start += 1
+            run_drop = series[start]['percent'] - series[i - 1]['percent']
+            run_span = series[i - 1]['ts'] - series[start]['ts']
+            if run_drop > 0:
+                drop += run_drop
+                span += run_span
+                runs += 1
+            first = i
+    observed_hours = span / 3600
+    if drop < BATTERY_RUNTIME_MIN_DROP_PERCENT or observed_hours < BATTERY_RUNTIME_MIN_OBSERVED_HOURS:
+        return None
+    rate_per_hour = drop / observed_hours
+    return {'full_charge_hours': round(100 / rate_per_hour, 1),
+            'discharge_rate_per_hour': round(rate_per_hour, 2),
+            'observed_discharge_hours': round(observed_hours, 1),
+            'segments': runs}
+
+
+def _ensure_battery_series(db):
+    """Additive schema for the derived battery series; the raw batches stay the store of record."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='watch_battery_readings'").fetchone():
+        db.execute("""CREATE TABLE IF NOT EXISTS watch_battery_readings(
+            observed_at INTEGER NOT NULL, received INTEGER, source TEXT NOT NULL, device_id TEXT, percent INTEGER NOT NULL)""")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS watch_battery_readings_key ON watch_battery_readings(observed_at, source, ifnull(device_id,''))")
+
+
+def record_battery_reading(db, observed, percent, source, device, received):
+    """Keep one row per distinct observation; replays and retries dedupe."""
+    _ensure_battery_series(db)
+    db.execute("INSERT OR IGNORE INTO watch_battery_readings VALUES(?,?,?,?,?)",
+               (int(observed), int(received) if received is not None else None, source, device, int(percent)))
 
 
 def watch_battery(db, now):
     """Resolve battery independently of health backfills and transport receipts."""
     best = None
+    readings = []
     query = "SELECT ts,received,source,payload FROM reports WHERE json_type(payload,'$.watch_status')='object' OR json_type(payload,'$.status.battery_percent') IN ('integer','real')"
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ingest_observations'").fetchone():
         # reports has a (second, source) key: a later page can replace the first
@@ -164,12 +234,36 @@ def watch_battery(db, now):
         if best is None or rank > best[0]:
             best = (rank, {'last_percent': int(percent), 'observed_at': int(observed),
                            'received_at': row['received'], 'source': source, 'device_id': device})
+        readings.append((int(observed), row['received'], source, device, int(percent)))
+    # Every validated observation joins the persistent series. The first run
+    # backfills the full history from the raw batches; later runs only touch
+    # the recent window because older readings are already stored.
+    _ensure_battery_series(db)
+    watermark = ((db.execute('SELECT MAX(observed_at) FROM watch_battery_readings').fetchone()[0] or 0)
+                 - BATTERY_SERIES_DAYS * 86400)
+    db.executemany("INSERT OR IGNORE INTO watch_battery_readings VALUES(?,?,?,?,?)",
+                   [r for r in readings if r[0] >= watermark])
+    # Equal-timestamp observations from two upload paths collapse to one series
+    # point; direct BLE takes precedence, as for the headline reading.
+    series, seen = [], set()
+    for r in db.execute("SELECT observed_at,percent FROM (SELECT observed_at,percent,source"
+                        " FROM watch_battery_readings WHERE observed_at>=?"
+                        " ORDER BY observed_at DESC, source='gravelex_ble' DESC, received DESC LIMIT ?)"
+                        " ORDER BY observed_at, source='gravelex_ble' DESC",
+                        (now - BATTERY_SERIES_DAYS * 86400, BATTERY_SERIES_MAX_POINTS)):
+        if r['observed_at'] in seen:
+            continue
+        seen.add(r['observed_at'])
+        series.append({'ts': r['observed_at'], 'percent': r['percent']})
     if best is None:
-        return {'percent': None, 'status': 'not_collected', 'observed_at': None, 'source': None}
+        return {'percent': None, 'status': 'not_collected', 'observed_at': None, 'source': None,
+                'series': series, 'runtime_estimate': battery_runtime_estimate(series)}
     result = best[1]
     result['age_seconds'] = max(0, now - result['observed_at'])
     result['status'] = 'observed' if result['age_seconds'] <= BATTERY_MAX_AGE_SECONDS else 'stale'
     result['percent'] = result['last_percent'] if result['status'] == 'observed' else None
+    result['series'] = series
+    result['runtime_estimate'] = battery_runtime_estimate(series)
     return result
 
 
@@ -195,6 +289,8 @@ def ingest(data):
         provenance.record_observation(db, "health_batch", source, ts, now, data)
         oxygen.ingest(db, data, now)
         db.execute("INSERT OR REPLACE INTO reports VALUES(?,?,?,?)", (ts, source, now, json.dumps(data)))
+        if 'watch_status' in data:
+            record_battery_reading(db, observed, percent, 'gravelex_ble', status.get('device_id'), now)
         for row in rows:
             if not isinstance(row, dict):
                 raise ValueError("Minute records must be objects")

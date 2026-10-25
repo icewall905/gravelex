@@ -349,6 +349,39 @@ function lineChart({ items, W = 340, H = 150, fmtV = v => fmt(v), unit = '', ban
   return s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': label || 'Line chart' }, kids);
 }
 
+/* Tiny axis-free sparkline for the watch tiles: real gaps stay visible, no grid or labels. */
+function sparkline({ items, unit = '', label, fmtV = v => fmt(v), fmtTip, bars, zeroBase = true }) {
+  const vals = items.map(i => i.v).filter(isNum);
+  if (!vals.length) return null;
+  const tip = it => `${fmtTip ? fmtTip(it) : tipLabel(it)}: ${fmtV(it.v)}${unit ? ' ' + unit : ''}${it.note ? ' (' + it.note + ')' : ''}`;
+  const W = 120, H = 32, top = 3, ph = H - 2 * top;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (bars || zeroBase) lo = Math.min(0, lo);
+  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * .15;
+  if (!(bars || zeroBase)) lo -= pad;
+  hi += pad;
+  const bw = W / Math.max(1, items.length);
+  const X = i => i * bw + bw / 2, Y = v => top + ph - ((v - lo) / (hi - lo)) * ph;
+  const kids = [];
+  if (bars) {
+    items.forEach((it, i) => {
+      const x = i * bw + .75, w = Math.max(1, bw - 1.5);
+      if (isNum(it.v)) kids.push(s('rect', { class: `spark-bar${it.cls ? ' ' + it.cls : ''}`, x, y: Y(it.v), width: w, height: Math.max(1.2, top + ph - Y(it.v)), rx: Math.min(1.5, w / 3) }, s('title', null, tip(it))));
+      else kids.push(s('rect', { class: 'gapmark', x, y: top + ph - 1.5, width: w, height: 1.5 }, s('title', null, `${fmtTip ? fmtTip(it) : tipLabel(it)}: no data`)));
+    });
+  } else {
+    let d = '', open = false;
+    items.forEach((it, i) => { if (isNum(it.v)) { d += `${open ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(it.v).toFixed(1)}`; open = true; } else open = false; });
+    if (d) kids.push(s('path', { class: 'spark-line', d }));
+    // Dense series (battery observations) draw as a line; dots only where they stay readable.
+    if (items.length <= 60) items.forEach((it, i) => {
+      if (isNum(it.v)) kids.push(s('circle', { class: 'spark-dot', cx: X(i), cy: Y(it.v), r: 2.2 }, s('title', null, tip(it))));
+    });
+  }
+  return s('svg', { class: 'watch-spark', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': label || 'Trend' }, kids);
+}
+
 /* Score ring 0–100. */
 function ring(score, { size = 120, stroke = 11, sub, label, draw = true } = {}) {
   const r = (size - stroke) / 2 - 1, c = 2 * Math.PI * r, cx = size / 2;
@@ -642,7 +675,7 @@ const CARDS = {
     const has = isNum(sl.sleep_s);
     const last = nights[nights.length - 1];
     const word = isNum(sl.score) ? sleepWord(sl.score) : null;
-    return card('sleep', 'Sleep', { link: 'sleep', chip: sl.status === 'duration_only' ? chip('Duration only', '', sl.reason) : null },
+    return card('sleep', 'Sleep', { link: 'sleep', cls: 'span2', chip: sl.status === 'duration_only' ? chip('Duration only', '', sl.reason) : null },
       has ? [
         h('div', { class: 'big' }, h('span', { class: 'v' }, fmtDur(sl.sleep_s, true)), isNum(sl.score) ? h('span', { class: 'u' }, `score ${sl.score}, ${word.toLowerCase()}`) : null),
         stats([['Restful', fmtDur(sl.restful_s, true)], ['Need', fmtDur(sl.need_s, true)],
@@ -689,8 +722,7 @@ const CARDS = {
     const st=D().stress || {}, model=stockStrain(), manual=((D().hrv || {}).analysis || {}).baseline_progress?.manual || {};
     if (stock().mode==='stock_firmware_estimates') {
       const score=model.score, fresh=stockStrainFresh(model);
-      return card('stress','Overnight strain',{link:'stress',chip:chip('Estimated','', 'Estimated overnight strain from stock-firmware pulse'),
-        cls:'wide'}, fresh ? [big(fmt(score),'of 100'),h('p',{class:'lede'},`Measured ${fmtDateTime(model.measured_at)} · ${model.reason || 'Estimated overnight strain.'}`)] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh overnight estimate is needed.'),
+      return card('stress','Overnight strain',{link:'stress',chip:chip('Estimated','', 'Estimated overnight strain from stock-firmware pulse')}, fresh ? [big(fmt(score),'of 100'),h('p',{class:'lede'},`Measured ${fmtDateTime(model.measured_at)} · ${model.reason || 'Estimated overnight strain.'}`)] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh overnight estimate is needed.'),
         h('p',{class:'foot'},`Personal baseline: ${model.baseline_days ?? 0} of ${model.required_days ?? 3} nights. This is an estimated overnight strain signal, not mental stress.`),
         h('p',{class:'pending above'},'Stock-firmware estimate · low confidence; a longer baseline does not validate the sensor.'));
     }
@@ -758,11 +790,16 @@ const CARDS = {
   device() {
     const d = D(), lt = d.latest || {}, st = lt.status || {}, col = d.collector || {};
     const c=d.collection_health || {}, age=c.transport?.age_seconds, battery=d.watch_battery || {};
-    const hr=c.measurements?.heart_rate;
+    const hr=c.measurements?.heart_rate, rt=battery.runtime_estimate;
     return card('device', 'Collection and sync', { link: 'device' },
       stats([['Server receipt',isNum(age) ? ago(age) : 'Unknown'],
         ['HR measured',isNum(hr?.age_seconds) ? ago(hr.age_seconds) : 'Not recorded'],
-        ['Watch battery',isNum(battery.percent) ? `${battery.percent}%` : battery.status==='stale' ? 'Stale' : '—']]),
+        ['Watch battery',isNum(battery.percent) ? `${battery.percent}%` : battery.status==='stale' ? 'Stale' : '—'],
+        ['Est. total runtime', rt ? fmtDur(rt.full_charge_hours * 3600, true) : 'Waiting for more data points']]),
+      (battery.series || []).length > 1 ? [lineChart({ items: battery.series.map(p => ({ key: isoOf(new Date(p.ts * 1000)), label: isoOf(new Date(p.ts * 1000)), v: p.percent, note: fmtClock(p.ts) })), H: 140, unit: '%', range: [0, 100], dots: false, label: 'Watch battery charge and discharge, last 7 days' }),
+        h('p', { class: 'foot' }, 'Every stored reading from direct BLE and watch-app observations; the line joins across periods the watch was off or disconnected.')] : null,
+      rt ? h('p', { class: 'foot' }, `Estimated total runtime ${fmtDur(rt.full_charge_hours * 3600, true)} on a full charge · average discharge ${fmt(rt.discharge_rate_per_hour, 2)}%/h from ${fmt(rt.observed_discharge_hours, 1)} h of genuinely observed discharge. Charging and disconnected gaps are excluded; heavy use drains faster than this estimate.`)
+        : (battery.series || []).length ? h('p', { class: 'foot' }, 'Estimated total runtime is waiting for more data points: it needs at least 2 hours of genuinely observed discharge (a drop of at least 3%), with charging, time held at full and long disconnects excluded.') : null,
       h('p',{class:'foot'},battery.observed_at ? `Battery measured ${fmtDateTime(battery.observed_at)}${battery.status==='stale' ? ` · Last reading ${battery.last_percent}%; waiting for a fresh observation.` : ''}` : 'No watch battery observation received.'),
       h('p',{class:'foot'},'Upload activity and sensor freshness are separate. Open for stream timestamps, coverage and night collection evidence.'));
 
@@ -859,28 +896,52 @@ function watchHero() {
   const activityAt = activity.observed_at?.steps || activity.ts;
   const batteryValue = isNum(battery.percent) && battery.status !== 'stale' ? `${fmt(battery.percent)}%` : null;
   const readinessValue = isNum(score) ? `${fmt(score)} · ${readinessWord(score)}` : isNum(r.sleep_based_score) ? `${fmt(r.sleep_based_score)} · sleep-only` : null;
+  /* Seven-day series feeding the tiny per-tile graphs; gaps stay gaps. */
+  const week = dateSpan(7);
+  const readinessHist = new Map((rec().readiness_history || []).map(row => [row.day, row]));
+  const hrvByNight = byNight(rec().nights, 'night');
+  const oxDaily = new Map((oxygen.daily || []).map(row => [row.date, row]));
+  const weightByDay = new Map(((d.weight || {}).entries || []).map(e => [e.date, e]));
+  const intensityDays = new Map((intensity.days || []).map(row => [row.date, row]));
+  const pulseByNight = byNight(stockPulse().points || [], 'night');
+  const loadHist = historyMap();
+  const spark = {
+    ready: sparkline({ items: week.map(day => ({ key: day, label: day, v: (readinessHist.get(day) || {}).readiness?.score ?? null })), unit: 'of 100', label: 'Readiness, last 7 days' }),
+    sleep: sparkline({ items: week.map(day => { const n = sleepByNight.get(day); return { key: day, label: day, v: isNum(n?.sleep_s) ? n.sleep_s / 3600 : null }; }), unit: 'h', fmtV: v => fmt(v, 1), label: 'Sleep per night, last 7 nights' }),
+    debt: isNum(sl.need_s) ? sparkline({ bars: true, items: week.map(day => { const n = sleepByNight.get(day); return { key: day, label: day, v: isNum(n?.sleep_s) ? Math.max(0, (sl.need_s - n.sleep_s) / 3600) : null }; }), unit: 'h short', fmtV: v => fmt(v, 1), label: 'Nightly sleep shortfall, last 7 nights' }) : null,
+    steps: sparkline({ bars: true, zeroBase: true, items: hourlySteps(todayObs()), unit: 'steps', fmtTip: it => `${it.t}:00`, label: 'Steps per hour today' }),
+    hr: sparkline({ zeroBase: false, items: todayObs().filter(o => isNum(o.hr)).map(o => ({ key: o.ts, label: o.ts, v: o.hr, ts: o.ts })), unit: 'bpm', fmtTip: it => fmtClock(it.ts), label: 'Heart rate today' }),
+    pulse: sparkline({ zeroBase: false, items: week.map(day => { const n = pulseByNight.get(day); return { key: day, label: day, v: isNum(n?.pulse) ? n.pulse : null }; }), unit: 'bpm', label: 'Overnight pulse, last 7 nights' }),
+    hrv: sparkline({ zeroBase: false, items: week.map(day => { const n = hrvByNight.get(day); return { key: day, label: day, v: isNum(n?.rmssd_ms) ? n.rmssd_ms : null }; }), unit: 'ms', fmtV: v => fmt(v, 1), label: 'Nightly HRV, last 7 nights' }),
+    oxygen: sparkline({ zeroBase: false, items: week.map(day => { const n = oxDaily.get(day); return { key: day, label: day, v: isNum(n?.percent) ? n.percent : null }; }), unit: '%', fmtV: v => fmt(v, 1), label: 'Blood oxygen, last 7 days' }),
+    weight: sparkline({ zeroBase: false, items: week.map(day => { const e = weightByDay.get(day); return { key: day, label: day, v: isNum(e?.kg) ? e.kg : null }; }), unit: 'kg', fmtV: v => fmt(v, 1), label: 'Weight, last 7 days' }),
+    train: sparkline({ bars: true, items: week.map(day => { const row = loadHist.get(day); return { key: day, label: day, v: isNum(row?.load) ? row.load : null }; }), unit: 'load', fmtV: v => fmt(v, 0), label: 'Daily training load, last 7 days' }),
+    intensity: sparkline({ bars: true, items: week.map(day => { const n = intensityDays.get(day); return { key: day, label: day, v: isNum(n?.moderate) || isNum(n?.vigorous) ? (n.moderate || 0) + 2 * (n.vigorous || 0) : null }; }), unit: 'min', label: 'Intensity minutes, last 7 days' }),
+    battery: sparkline({ zeroBase: false, items: (battery.series || []).map(p => ({ key: p.ts, label: p.ts, v: p.percent, ts: p.ts })), unit: '%', fmtTip: it => fmtDateTime(it.ts), label: 'Watch battery, last 7 days' }),
+  };
   return h('article', { class: 'watch', 'data-m': 'ready' },
     h('div', { class: 'watch-top' },
       h('h1', { class: 'watch-hello' }, name ? `${greet}, ${name}` : greet),
       h('p', { class: 'watch-date' }, new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' }))),
     h('div', { class: 'watch-metrics' },
-      watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready'),
-      watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep'),
-      watchMetric('sleep', 'Sleep debt', isNum(debtSeconds) ? fmtDur(debtSeconds,true) : null, isNum(debtSeconds) ? `7-night shortfall · ${debtNights.length}/7 recorded · target ${fmtDur(sl.need_s,true)}/night${debtNights.length<7 ? ' · missing nights excluded' : ''}` : 'Needs recorded sleep and a target', 'sleep'),
-      watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps'),
-      watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart'),
-      watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr'),
-      watchMetric('hrv', ppiSourceUnverified() ? 'HRV proxy estimate' : 'HRV', ppiSourceUnverified() && latestPpiProxy() ? `${fmt(latestPpiProxy().value_ms,1)} ms` : null, ppiSourceUnverified() && latestPpiProxy() ? `unvalidated · ${fmtDateTime(latestPpiProxy().ts)}` : 'Not available yet', 'hrv'),
-      watchMetric('oxygen', 'Blood oxygen', isNum(oxygenLatest.percent) ? `${fmt(oxygenLatest.percent, 1)}%` : null, oxygenLatest.ts ? fmtDateTime(oxygenLatest.ts) : 'No samples yet', 'oxygen'),
-      watchMetric('weight', 'Weight', isNum(weightLatest.kg) ? `${fmt(weightLatest.kg, 1)} kg` : null, weightLatest.date ? `measured ${fmtDay(weightLatest.date)}` : 'No dated reading', 'weight'),
-      watchMetric('train', 'Training load', isNum(trainingLatest.load7) ? fmt(trainingLatest.load7, 1) : null, isNum(trainingLatest.load7) ? '7-day load' : 'Needs history', 'train'),
-      watchMetric('intensity', 'Intensity', isNum(intensity.this_week) ? `${fmt(intensity.this_week)} min` : null, isNum(intensity.this_week) ? 'this week' : 'No weekly total', 'train'),
-      watchMetric('device', 'Watch battery', batteryValue, batteryValue ? (battery.observed_at ? fmtDateTime(battery.observed_at) : 'fresh reading') : battery.status === 'stale' ? 'Stale reading' : 'No reading', 'device')));
+      watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready', spark.ready),
+      watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep', spark.sleep),
+      watchMetric('sleep', 'Sleep debt', isNum(debtSeconds) ? fmtDur(debtSeconds,true) : null, isNum(debtSeconds) ? `7-night shortfall · ${debtNights.length}/7 recorded · target ${fmtDur(sl.need_s,true)}/night${debtNights.length<7 ? ' · missing nights excluded' : ''}` : 'Needs recorded sleep and a target', 'sleep', spark.debt),
+      watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps', spark.steps),
+      watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart', spark.hr),
+      watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr', spark.pulse),
+      watchMetric('hrv', ppiSourceUnverified() ? 'HRV proxy estimate' : 'HRV', ppiSourceUnverified() && latestPpiProxy() ? `${fmt(latestPpiProxy().value_ms,1)} ms` : null, ppiSourceUnverified() && latestPpiProxy() ? `unvalidated · ${fmtDateTime(latestPpiProxy().ts)}` : 'Not available yet', 'hrv', spark.hrv),
+      watchMetric('oxygen', 'Blood oxygen', isNum(oxygenLatest.percent) ? `${fmt(oxygenLatest.percent, 1)}%` : null, oxygenLatest.ts ? fmtDateTime(oxygenLatest.ts) : 'No samples yet', 'oxygen', spark.oxygen),
+      watchMetric('weight', 'Weight', isNum(weightLatest.kg) ? `${fmt(weightLatest.kg, 1)} kg` : null, weightLatest.date ? `measured ${fmtDay(weightLatest.date)}` : 'No dated reading', 'weight', spark.weight),
+      watchMetric('train', 'Training load', isNum(trainingLatest.load7) ? fmt(trainingLatest.load7, 1) : null, isNum(trainingLatest.load7) ? '7-day load' : 'Needs history', 'train', spark.train),
+      watchMetric('intensity', 'Intensity', isNum(intensity.this_week) ? `${fmt(intensity.this_week)} min` : null, isNum(intensity.this_week) ? 'this week' : 'No weekly total', 'train', spark.intensity),
+      watchMetric('device', 'Watch battery', batteryValue, batteryValue ? (battery.observed_at ? fmtDateTime(battery.observed_at) : 'fresh reading') : battery.status === 'stale' ? 'Stale reading' : 'No reading', 'device', spark.battery)));
 }
-function watchMetric(m, label, value, meta, link) {
+function watchMetric(m, label, value, meta, link, spark) {
   return h('a', { class: `watch-metric${value ? '' : ' is-empty'}`, 'data-m': m, href: `#d/${link || m}`, 'aria-label': `${label}: ${value || meta || 'No data'}`, title: `${label}: ${value || '—'} · ${meta || 'No data'}` },
     h('span', { class: 'watch-metric-label' }, h('i'), label),
     h('strong', { class: 'watch-metric-value' }, value || '—'),
+    spark || null,
     h('span', { class: 'watch-metric-meta' }, meta || 'No data'));
 }
 
@@ -952,6 +1013,69 @@ function oxygenCard(detailed=false) {
     detailed?oxygenSetup():null,
     detailed?info('Measurement limitations',o.note||'Experimental wrist optical readings. No diagnostic interpretation.', 'The device quality byte is retained as reported; its clinical meaning has not been established.'):null,
     detailed&&(o.readings||[]).length?h('details',{class:'info'},h('summary',null,'Recent individual readings'),h('table',null,h('thead',null,h('tr',null,h('th',null,'Measured'),h('th',null,'SpO₂'),h('th',null,'Device quality'))),h('tbody',null,(o.readings||[]).slice(-30).reverse().map(r=>h('tr',null,h('td',null,new Date(r.ts*1000).toLocaleString()),h('td',null,`${fmt(r.percent,1)}%`),h('td',null,fmt(r.quality))))))):null);
+}
+
+/* Battery detail chart: time-scaled charge curve over the stored 7-day series.
+   Slope colours separate charging, discharging and held stretches; the line
+   joins across periods the watch was off or disconnected. */
+function batteryChart(series) {
+  const W = chartW(), H = 300, top = 14, bottom = 26, left = 34, right = 10;
+  const ph = H - top - bottom, pw = W - left - right;
+  const t0 = series[0].ts, t1 = Math.max(series[series.length - 1].ts, t0 + 1);
+  const X = ts => left + ((ts - t0) / (t1 - t0)) * pw;
+  const Y = p => top + ph - (p / 100) * ph;
+  const kids = [];
+  for (let v = 0; v <= 100; v += 25) {
+    kids.push(s('line', { class: `grid${v === 0 ? ' zero' : ''}`, x1: left, x2: W - right, y1: Y(v), y2: Y(v) }));
+    kids.push(s('text', { x: left - 6, y: Y(v) + 3.5, 'text-anchor': 'end' }, `${v}%`));
+  }
+  const midnight = ts => { const d = new Date(ts * 1000); d.setHours(0, 0, 0, 0); return d; };
+  for (let d = midnight(t0); d.getTime() <= midnight(t1).getTime(); d.setDate(d.getDate() + 1)) {
+    const iso = isoOf(d), ts = Math.floor(d.getTime() / 1000);
+    if (ts > t0 && ts < t1) {
+      kids.push(s('line', { class: 'grid', x1: X(ts), x2: X(ts), y1: top, y2: top + ph }));
+      kids.push(s('text', { x: X(ts), y: H - 6, 'text-anchor': 'middle' }, fmtDayShort(iso)));
+    }
+  }
+  let area = '';
+  series.forEach((p, i) => { area += `${i ? 'L' : 'M'}${X(p.ts).toFixed(1)} ${Y(p.percent).toFixed(1)}`; });
+  area += `L${X(t1).toFixed(1)} ${top + ph}L${X(t0).toFixed(1)} ${top + ph}Z`;
+  kids.push(s('path', { class: 'batt-area', d: area }));
+  const pathFor = cls => {
+    let d = '', open = false;
+    for (let i = 1; i < series.length; i++) {
+      const a = series[i - 1], b = series[i];
+      const step = b.percent > a.percent ? 'charge' : b.percent < a.percent ? 'drain' : 'hold';
+      if (step === cls) {
+        d += `${open ? '' : `M${X(a.ts).toFixed(1)} ${Y(a.percent).toFixed(1)}`}L${X(b.ts).toFixed(1)} ${Y(b.percent).toFixed(1)}`;
+        open = true;
+      } else open = false;
+    }
+    return d;
+  };
+  ['charge', 'drain', 'hold'].forEach(cls => { const d = pathFor(cls); if (d) kids.push(s('path', { class: `batt-seg ${cls}`, d })); });
+  const dotR = Math.max(1.2, Math.min(2.2, pw / Math.max(1, series.length) / 2));
+  series.forEach(p => kids.push(s('circle', { class: 'batt-dot', cx: X(p.ts), cy: Y(p.percent), r: dotR }, s('title', null, `${fmtDateTime(p.ts)}: ${p.percent}%`))));
+  const last = series[series.length - 1];
+  kids.push(s('circle', { class: 'batt-now', cx: X(last.ts), cy: Y(last.percent), r: 4 }, s('title', null, `${fmtDateTime(last.ts)}: ${last.percent}%`)));
+  return s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Watch battery charge and discharge, last 7 days' }, kids);
+}
+
+function batteryDetail() {
+  const battery = D().watch_battery || {}, series = battery.series || [], rt = battery.runtime_estimate;
+  return card('device', 'Battery charge and discharge', { cls: 'wide' },
+    series.length > 1 ? batteryChart(series) : pending('No battery history yet', 'Readings appear once the watch reports its battery level through the phone app.'),
+    stats([
+      ['Watch battery', isNum(battery.percent) ? `${battery.percent}%` : battery.status === 'stale' ? 'Stale' : '—'],
+      ['Last reading', battery.observed_at ? fmtDateTime(battery.observed_at) : '—'],
+      ['Est. total runtime', rt ? fmtDur(rt.full_charge_hours * 3600, true) : 'Waiting for more data points'],
+      ['Avg discharge rate', rt ? fmt(rt.discharge_rate_per_hour, 2) : '—', '%/h'],
+      ['Observed discharge', rt ? fmt(rt.observed_discharge_hours, 1) : '—', 'h'],
+      ['Stored readings', String(series.length)],
+    ]),
+    series.length > 1 ? legend([['charge', 'Charging'], ['drain', 'Discharging'], ['hold', 'Held or steady']]) : null,
+    h('p', { class: 'foot' }, 'Direct BLE and watch-app readings over the last 7 days. The line joins across periods the watch was off or disconnected; the runtime estimate uses only genuinely observed discharge and excludes charging, time held at full and long gaps.'),
+    rt ? h('p', { class: 'foot' }, `Estimated total runtime ${fmtDur(rt.full_charge_hours * 3600, true)} on a full charge from the average observed discharge rate; heavy use drains faster than this estimate.`) : null);
 }
 
 const DETAIL = {
@@ -1197,7 +1321,7 @@ const DETAIL = {
     },
   },
 
-  device: { title: 'Watch and sync', m: 'device', noRange: true, render() { return devicesView(); } },
+  device: { title: 'Watch battery and sync', m: 'device', noRange: true, render() { return [batteryDetail(), ...devicesView()]; } },
 };
 
 function compRow(name, comp, weight) {
