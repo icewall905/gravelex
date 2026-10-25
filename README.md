@@ -6,7 +6,7 @@ This is the combined project repository: the extended GravelEx phone app and the
 
 ## Next development priorities
 
-See the actionable [fitness roadmap](health-hub/FITNESS-ROADMAP.md) for moving backend-independent health views and calculations into the phone app, phone-assisted GPS workouts, and an audit of additional watch metrics. These are planned features; the current hub remains necessary for its existing server analytics and household dashboard.
+Moving backend-independent health views and calculations into the phone app, phone-assisted GPS workouts, and an audit of additional watch metrics are planned features. The current hub remains necessary for its existing server analytics and household dashboard.
 
 ## Home Assistant
 

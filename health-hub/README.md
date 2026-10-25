@@ -4,8 +4,6 @@ The self-hosted companion to the GravelEx Android app (`tdgs.gravel`): a Pebble 
 
 The API contract is documented in [API.md](API.md). Stock-firmware pulse, strain and readiness outputs are estimates with explicit missingness and low-confidence limits; they are not medical measurements.
 
-See [FITNESS-ROADMAP.md](FITNESS-ROADMAP.md) for the audited limitations, ordered implementation tasks and delivery status.
-
 ## Start a new instance
 
 Requirements: Docker Engine with Compose v2, and Python 3 for the setup script.

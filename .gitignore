@@ -36,3 +36,10 @@ __pycache__/
 # Private local reference recordings and labels
 /health-hub/reference-data/
 /health-hub/reference/.venv/
+
+# Private working notes and research docs; personal history and vendor
+# references stay local, out of the public repository.
+/health-hub/FITNESS-ROADMAP.md
+/health-hub/HANDOVER.md
+/health-hub/MONITOR-RELIABILITY.md
+/health-hub/STOCK-FIRMWARE.md
