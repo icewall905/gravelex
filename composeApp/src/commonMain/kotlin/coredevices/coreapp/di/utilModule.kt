@@ -151,9 +151,9 @@ val utilModule = module {
                 get<io.rebble.libpebblecommon.connection.HealthDataApi>()
                     .getHealthDataPageAfter(afterTimestamp, limit)
             },
-            readSessions = { afterTimestamp, afterType, types, limit ->
+            readSessions = { afterTimestamp, afterType, limit ->
                 get<io.rebble.libpebblecommon.connection.HealthDataApi>()
-                    .getOverlayEntriesPageAfter(afterTimestamp, afterType, types, limit)
+                    .getOverlayEntriesPageAfter(afterTimestamp, afterType, limit)
             },
             readWatchBattery = {
                 get<LibPebble>().watches.value

@@ -553,7 +553,7 @@ class FakeLibPebble : LibPebble {
         types: List<Int>
     ): List<OverlayDataEntity> = emptyList()
 
-    override suspend fun getOverlayEntriesPageAfter(afterTimestamp: Long, afterType: Int, types: List<Int>, limit: Int) = emptyList<OverlayDataEntity>()
+    override suspend fun getOverlayEntriesPageAfter(afterTimestamp: Long, afterType: Int, limit: Int) = emptyList<OverlayDataEntity>()
 
     override suspend fun getHealthDataForRange(start: Long, end: Long) = emptyList<HealthDataEntity>()
     override suspend fun getDailyAggregates(start: Long, end: Long) = emptyList<DailyMovementAggregate>()

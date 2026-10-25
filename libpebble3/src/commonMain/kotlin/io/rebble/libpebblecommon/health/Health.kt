@@ -201,9 +201,8 @@ class Health(
     override suspend fun getOverlayEntriesPageAfter(
         afterTimestamp: Long,
         afterType: Int,
-        types: List<Int>,
         limit: Int
-    ): List<OverlayDataEntity> = healthDao.getOverlayEntriesPageAfter(afterTimestamp, afterType, types, limit.coerceIn(1, 3000))
+    ): List<OverlayDataEntity> = healthDao.getOverlayEntriesPageAfter(afterTimestamp, afterType, limit.coerceIn(1, 3000))
 
     override suspend fun getHealthDataForRange(start: Long, end: Long): List<HealthDataEntity> =
         healthDao.getHealthDataForRange(start, end)

@@ -53,7 +53,7 @@ class PebbleFitOxygenExportService(
     cipher: SecretCipher,
     httpClient: HttpClient,
     private val readHealth: suspend (Long, Int) -> List<HealthDataEntity>,
-    private val readSessions: suspend (Long, Int, List<Int>, Int) -> List<OverlayDataEntity>,
+    private val readSessions: suspend (Long, Int, Int) -> List<OverlayDataEntity>,
     private val readWatchBattery: suspend () -> WatchBatterySnapshot? = { null },
 ) {
     private val tokenSetting = EncryptedStringSetting(settings, cipher, TOKEN_KEY)
@@ -225,7 +225,7 @@ class PebbleFitOxygenExportService(
                 // hide later valid records. Acknowledgment still precedes cursor writes.
                 val healthPage = readHealth(healthCursor, MAX_PAGE)
                     .filter { it.timestamp > healthCursor }.sortedBy { it.timestamp }.take(MAX_PAGE)
-                val sessionPage = readSessions(sessionCursor, sessionTypeCursor, OVERLAY_TYPES, MAX_SESSIONS)
+                val sessionPage = readSessions(sessionCursor, sessionTypeCursor, MAX_SESSIONS)
                     .filter { it.startTime > sessionCursor || (it.startTime == sessionCursor && it.type > sessionTypeCursor) }
                     .sortedWith(compareBy({ it.startTime }, { it.type })).take(MAX_SESSIONS)
                 if (healthPage.isEmpty() && sessionPage.isEmpty()) {
@@ -284,7 +284,7 @@ class PebbleFitOxygenExportService(
                 }
                 val rows = healthPage.filter { it.timestamp in MIN_TIMESTAMP..(now + 300L) && validHealth(it) }
                 val sessions = sessionPage.filter {
-                    it.startTime in MIN_TIMESTAMP..(now + 300L) && it.duration in 1L..172800L && sessionType(it.type) != null
+                    it.startTime in MIN_TIMESTAMP..(now + 300L) && it.duration in 1L..172800L
                 }
                 skipped += healthPage.size - rows.size + sessionPage.size - sessions.size
                 if (configurationVersion != config.version) return OxygenExportStatus("Settings changed; upload can be retried.", uploaded)
@@ -412,7 +412,6 @@ class PebbleFitOxygenExportService(
         const val MAX_PAGE = 3000
         const val LOOKBACK_SECONDS = 14L * 24L * 60L * 60L
         const val REQUEST_TIMEOUT_MS = 20_000L
-        val OVERLAY_TYPES = listOf(1, 2, 3, 4, 5, 6, 7)
     }
 }
 
@@ -434,19 +433,19 @@ private fun HealthDataEntity.toExportJson() = buildJsonObject {
     put("hr_zone", heartRateZone)
 }
 
-private fun sessionType(type: Int): String? = when (OverlayType.fromValue(type)) {
+private fun sessionType(type: Int): String = when (OverlayType.fromValue(type)) {
     OverlayType.Sleep, OverlayType.Nap -> "sleep"
     OverlayType.DeepSleep, OverlayType.DeepNap -> "restful_sleep"
     OverlayType.Walk -> "walk"
     OverlayType.Run -> "run"
     OverlayType.OpenWorkout -> "workout"
-    null -> null
+    null -> "unknown"
 }
 
 private fun OverlayDataEntity.toExportJson() = buildJsonObject {
     put("start", startTime)
     put("seconds", duration)
-    put("type", sessionType(type) ?: "workout")
+    put("type", sessionType(type))
     put("id", "$startTime:$type")
     put("raw_overlay_type", type)
 }
