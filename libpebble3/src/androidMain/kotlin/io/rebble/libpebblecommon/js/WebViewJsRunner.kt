@@ -165,7 +165,7 @@ class WebViewJsRunner(
 
     // The live-toggle collector launched in start(), kept so stop() can cancel it (see there).
     private var networkPermissionCollector: Job? = null
-    private val pageLoaded = CompletableDeferred<Unit>()
+    private val pageLoaded = CompletableDeferred<Boolean>()
     private var restoreCompleted: Boolean = false
     private val initializedLock = Object()
     private val publicJsInterface = WebViewPKJSInterface(this, device, context, libPebble, jsTokenUtil)
@@ -200,7 +200,7 @@ class WebViewJsRunner(
         override fun onPageFinished(view: WebView?, url: String?) {
             super.onPageFinished(view, url)
             logger.d { "Page finished loading: $url" }
-            pageLoaded.complete(Unit)
+            pageLoaded.complete(true)
         }
 
         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -212,6 +212,7 @@ class WebViewJsRunner(
                     "Error loading page: ${error?.toString()}"
                 }
             }
+            if (request?.isForMainFrame == true) pageLoaded.complete(false)
         }
 
         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
@@ -252,6 +253,7 @@ class WebViewJsRunner(
                         "networkAllowed=$networkAllowed provider=${webViewProvider()}"
             }
             rendererGone = true
+            pageLoaded.complete(false)
             endSession(view)
             return true
         }
@@ -521,15 +523,8 @@ class WebViewJsRunner(
         }
 
         loadApp(jsPath.toString())
-        scope.launch {
-            if (withTimeoutOrNull(PAGE_LOAD_TIMEOUT) { pageLoaded.await() } == null &&
-                synchronized(initializedLock) { webView != null }
-            ) {
-                logger.e {
-                    "Startup page never loaded (provider=${webViewProvider()}): PKJS for " +
-                            "${appInfo.longName} will never become ready"
-                }
-            }
+        if (withTimeoutOrNull(PAGE_LOAD_TIMEOUT) { pageLoaded.await() } != true) {
+            error("PKJS startup page failed to load for ${appInfo.longName}")
         }
     }
 

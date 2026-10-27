@@ -7,6 +7,7 @@ import io.rebble.libpebblecommon.pebblekit.classic.PebbleKitClassicStartListener
 import io.rebble.libpebblecommon.pebblekit.classic.PebbleKitProviderNotifier
 import io.rebble.libpebblecommon.pebblekit.two.PebbleKitCompanionRegistry
 import io.rebble.libpebblecommon.pebblekit.two.PebbleKit2ProviderState
+import io.rebble.libpebblecommon.pebblekit.two.PebbleKit2Datalogging
 
 actual fun getPlatform(): PhoneAppVersion.OSType = PhoneAppVersion.OSType.Android
 
@@ -21,4 +22,5 @@ actual fun performPlatformSpecificInit() {
     // early keeps the window where a legitimate companion is refused as short as possible.
     koin.get<PebbleKitCompanionRegistry>().init()
     koin.get<PebbleKit2ProviderState>().init()
+    koin.get<PebbleKit2Datalogging>().init()
 }

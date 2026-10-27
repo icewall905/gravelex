@@ -44,6 +44,7 @@ import io.rebble.libpebblecommon.pebblekit.classic.PebbleKitProviderNotifier
 import io.rebble.libpebblecommon.pebblekit.two.PebbleKitCompanionRegistry
 import io.rebble.libpebblecommon.pebblekit.two.PebbleKitWatchIdentity
 import io.rebble.libpebblecommon.pebblekit.two.createPebbleKit2ProviderState
+import io.rebble.libpebblecommon.pebblekit.two.PebbleKit2Datalogging
 import io.rebble.libpebblecommon.util.OtherPebbleAndroidApps
 import io.rebble.libpebblecommon.util.SystemGeolocation
 import org.koin.core.module.Module
@@ -106,4 +107,6 @@ actual val platformModule: Module = module {
     single { PebbleKitCompanionRegistry.create(get<LibPebble>(), get(), get()) }
     single { PebbleKitWatchIdentity() }
     single { createPebbleKit2ProviderState(get(), get<LibPebble>(), get(), get(), get()) }
+    singleOf(::PebbleKit2Datalogging)
+
 }
