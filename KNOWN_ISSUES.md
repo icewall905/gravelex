@@ -44,18 +44,6 @@ check when it is handled. Each check spends part of the shared GitHub limit
 (see "Update checks share GitHub's anonymous hourly limit"). The fix is for the
 link to start no check. This entry leaves the file when it no longer does.
 
-## An oversized changelog list can leave an update check waiting
-
-**Status: deferred; to be fixed on its own branch.**
-
-When GitHub returns a changelog list much larger than the 64 KiB the app
-accepts, a Core watch's update check or the build picker can wait
-indefinitely instead of reporting the list as unreadable. The workflow that
-publishes the list refuses one over 64 KiB. The test that sends an endless list
-(`PebbleOsChangelogListTest.stopsReadingABodyThatNeverEnds`) runs into the same
-wait at random and can fail a CI run. This entry leaves the file when the fix
-lands.
-
 ## Classic PebbleKit broadcasts cannot be restricted to authorized callers
 
 **Status: accepted while the classic toggle is on; the surface is off by
@@ -683,13 +671,12 @@ feature being armable.
 
 Upstream's watch-settings debug section (2026-08 sync) gained a "Use Core
 OTA service" toggle that routes firmware checks to a Core Devices OTA
-service. The routing requires a bug-endpoint build config value that this
-fork never sets, a fact the fork's own routing test asserts, so the
-toggle changes nothing on any fork build while its description names a
-firmware source the fork does not use. The toggle stays as upstream
-ships it, except that the setting behind it keeps the fork's off
-default where upstream now defaults it on, so an inert control is not
-shown enabled; hiding it behind the same predicate that makes it functional
+service. The routing requires a bug-endpoint build config value that
+Gravel never sets, a fact BugReportUploadUnplugTest asserts, so the toggle
+changes nothing on any Gravel build. Gravel's description for it says so,
+and the setting behind it keeps Gravel's off default where upstream
+defaulted it on, so an inert control is not shown enabled; hiding it
+behind the same predicate that makes it functional
 remains open as a follow-up, and renaming it would keep an inert control
 under a different label. This entry leaves the file if the toggle is
 hidden behind that predicate or the fork ever sets the endpoint that
@@ -754,6 +741,33 @@ there rather than diverge here. This entry leaves the file when upstream
 disambiguates the match (channel id first, then position-stable matching)
 and the fork syncs it.
 
+## Notification images are read without the album art checks
+
+**Status: open; planned for a branch of its own.**
+
+When a notification carries an image (a messaging photo or a big
+picture), Gravel reads the image the posting app names, with Gravel's
+own access, to cache it for the watch. Album art from media apps is
+checked for where it comes from before it is opened, and for how large
+it is and how long reading it takes while it is read; notification
+images do not get those checks yet. The image reaches only the user's
+own watch, and nothing goes back to the app that posted the
+notification; a slow or very large image can hold up the notifications
+behind it on their way to the watch. This entry leaves the file when
+notification images get the same checks as album art.
+
+## Notebook background jobs are not scheduled where WorkManager cannot start
+
+**Status: accepted; device defect.**
+
+On devices where WorkManager fails as it starts (the failure
+`scheduleBackgroundJob` in MainApplication.kt guards against), the
+Notebook schedules none of its background jobs: automatic backups do
+not run although the setting shows them on, and recordings waiting for
+a charger or a network get no job to start them while Gravel is not
+running. Only Gravel's log says so. This entry leaves the file if the
+Notebook shows the failure or runs those jobs without WorkManager.
+
 ## gradle-wrapper.jar lags the declared Gradle version
 
 **Status: accepted; cosmetic, self-correcting at the next upstream bump.**
@@ -770,24 +784,26 @@ the committed jar matches the declared distribution.
 
 ## Large whisper models are absent from the catalog
 
-**Status: accepted; blocked on the pinned upstream engine revision.**
+**Status: accepted; too slow for watch dictation on the test phone; the
+earlier crash did not recur in the v1.9.5 runs below.**
 
 The catalog originally carried ggml-large-v3-turbo-q5_0. Two findings
 removed it. First, transcribing with it on the test platform (a Pixel
 running GrapheneOS) crashed the app with a native out-of-bounds read
-inside ggml's quantized matrix-multiply path at the pinned whisper.cpp
-revision; the hardened system allocator surfaces the stray read as a
-fault, and a model whose inference can fault the process cannot ship
-for any consumer. Second, whisper.cpp applies the audio-context trim
-only to the main transcription pass, while language auto-detection
-(reached whenever a multilingual model runs with no spoken language
-pinned) encodes at the full 1500-frame context; for a 32-encoder-layer
-model on phone-class CPUs that single pass alone exceeds the watch
-dictation window, so the model could never serve dictation even without
-the crash. Both point at the engine revision rather than the catalog
-design. This entry leaves the file when a large tier is reinstated
-after an upstream fix or a re-pin that passes the same on-device checks
-the smaller models passed.
+inside ggml's quantized matrix-multiply path at whisper.cpp v1.9.2, the
+revision pinned then; the hardened system allocator surfaces the stray
+read as a fault. At v1.9.5 the same file ran three dictation calls and
+a 53-second recording on that phone without a fault, in a debug build
+and in one built with NDEBUG (C asserts compiled out). Second, the
+model is too slow for the watch there: at 4 threads, a 4-second
+dictation took about 13.5 seconds with the language set and 24 with it
+detected, and the recording took about three times its length.
+Gravel's dictation speed check extrapolates the 13.5 seconds to about
+42 for a full 15-second recording, against the 14 seconds Gravel leaves
+a decode after the recording ends. This entry leaves the file when a
+large tier returns to the catalog, either fast enough for watch
+dictation on the test phone or excluded from watch dictation, after it
+passes the engine's on-device suites.
 
 ## Watch dictation accuracy varies sharply between sessions
 
@@ -860,7 +876,7 @@ more than one watch before its threshold can be set.
 Whisper transcribes a recording in 30-second windows and chooses where
 the next window starts from its own timestamps. When it judges a window
 finished before the window's end, it skips the rest of that window
-(whisper.cpp v1.9.3, `src/whisper.cpp`, `whisper_full_with_state`, the
+(whisper.cpp v1.9.5, `src/whisper.cpp`, `whisper_full_with_state`, the
 single-timestamp ending), so speech it did not transcribe there is lost;
 on-device runs of a four-minute test recording that repeats its phrases
 lost whole sentences within a single call. Starting each window at a
@@ -995,21 +1011,24 @@ recording was started right after a reminder.
 
 ## A dictation can wait for a Notebook transcription's first seconds
 
-**Status: accepted; whisper offers no way to stop that part.**
+**Status: accepted; whisper cannot stop the recording's preparation or
+an encoder pass once it has begun.**
 
 A Notebook transcription stops for a dictation only at whisper's next
-abort check, and whisper checks nothing while it prepares the whole
-recording, detects its language when none is set, and encodes the first
-30 seconds (whisper.cpp v1.9.3, `src/whisper.cpp`,
-`whisper_full_with_state`). A dictation that arrives in that stretch
-waits for it: on the test phone with the base model and a four-minute
-recording, a cancel at the start of a call took about 4 seconds to land,
-about 7 when whisper detected the language, and a slower phone or larger
-model takes longer, possibly past the watch's deadline. In the modes where
-local transcription is only a fallback, no hold on the speech engine is
-raised when the watch session opens unless the dictation is to stay on
-the phone, so a local fallback meets this whenever a transcription has
-just started.
+abort check, and whisper makes no abort check while it prepares the
+whole recording and encodes the first 30 seconds (whisper.cpp v1.9.5,
+`src/whisper.cpp`, `whisper_full_with_state`, `whisper_encode_internal`).
+A dictation that arrives in that stretch waits for it: on the test phone
+with the base model and a four-minute recording, a cancel at the start
+of a call took about 4 seconds to land, with the language set or
+detected, and a slower phone or larger model takes longer, possibly past
+the watch's deadline. Gravel does not set the callback whisper calls
+before the first encoder pass (`encoder_begin_callback`,
+`whisper_full_with_state`), which could stop a call canceled while the
+recording is prepared. In the modes where local transcription is only a
+fallback, no hold on the speech engine is raised when the watch session
+opens unless the dictation is to stay on the phone, so a local fallback
+meets this whenever a transcription has just started.
 
 ## Local (with Rebble Fallback) raises no dictation hold when a watch session opens
 
