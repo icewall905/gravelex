@@ -1,0 +1,1 @@
+Updates GravelEx to Gravel 0.4.2 with improved speech recovery, watch settings, notifications and weather. Adds authorized PebbleKit 2 data logging and improves watchapp startup recovery.

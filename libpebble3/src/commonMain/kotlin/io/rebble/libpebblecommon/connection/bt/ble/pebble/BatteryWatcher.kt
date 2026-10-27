@@ -108,12 +108,12 @@ class BatteryWatcher(
         }
     }
 
-    private fun ByteArray.asBatteryLevel(): Int? =
-        if (size == 1) this[0].toInt().and(0xff).takeIf { it in 0..100 } else null
-
     companion object {
         private const val BLUETOOTH_BASE_UUID_POSTFIX = "0000-1000-8000-00805F9B34FB"
         private val BATTERY_SERVICE_UUID: Uuid = Uuid.parse("0000180F-$BLUETOOTH_BASE_UUID_POSTFIX")
         private val BATTERY_LEVEL_CHARACTERISTIC_UUID: Uuid = Uuid.parse("00002A19-$BLUETOOTH_BASE_UUID_POSTFIX")
     }
 }
+
+internal fun ByteArray.asBatteryLevel(): Int? =
+    if (size == 1) this[0].toInt().and(0xff).takeIf { it in 0..100 } else null

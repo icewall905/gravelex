@@ -141,4 +141,3 @@ sealed interface ThirdPartyDatalogEvent {
         override val watchSerial: String,
     ) : ThirdPartyDatalogEvent
 }
-

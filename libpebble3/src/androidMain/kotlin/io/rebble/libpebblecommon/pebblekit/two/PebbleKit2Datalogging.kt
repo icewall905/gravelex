@@ -1,6 +1,7 @@
 package io.rebble.libpebblecommon.pebblekit.two
 
 import android.content.Context
+import android.content.Intent
 import io.rebble.libpebblecommon.WatchConfigFlow
 import io.rebble.libpebblecommon.datalogging.Datalogging
 import io.rebble.libpebblecommon.datalogging.ThirdPartyDatalogEvent
@@ -43,36 +44,38 @@ class PebbleKit2Datalogging(
 
     private suspend fun senderFor(uuid: Uuid): DatalogSender? {
         if (!watchConfig.value.pebbleKit2Enabled) return null
-        val packages = companionPackagesFor(uuid).filter { companionRegistry.isAuthorizedFor(it, uuid.toString()) }
-        if (packages.isEmpty()) return null
-        val connectors = packages.associateWith { DefaultPebbleListenerConnector(context, listOf(it)) }
+        val pkg = withContext(Dispatchers.IO) {
+            companionPackagesFor(uuid).firstOrNull {
+                companionRegistry.isAuthorizedFor(it, uuid.toString()) &&
+                    context.packageManager.queryIntentServices(
+                        Intent("io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH").setPackage(it), 0
+                    ).isNotEmpty()
+            }
+        } ?: return null
+        val connector = DefaultPebbleListenerConnector(context, listOf(pkg))
         return object : DatalogSender {
-            private fun identifier(pkg: String, serial: String): String? = datalogWatchIdentifier(
+            private fun identifier(serial: String): String? = datalogWatchIdentifier(
                 enabled = watchConfig.value.pebbleKit2Enabled,
                 authorized = companionRegistry.isAuthorizedFor(pkg, uuid.toString()),
                 pseudonym = { watchIdentity.pseudonymFor(pkg, serial) },
             )
 
             override suspend fun sendBatch(event: ThirdPartyDatalogEvent.Batch): Boolean {
-                return connectors.all { (pkg, connector) ->
-                    val id = identifier(pkg, event.watchSerial) ?: return@all false
-                    connector.sendOnDataLogReceived(
-                        event.uuid.toJavaUuid(), event.toDataLogSession(), event.data,
-                        event.itemsLeft.toLong(), WatchIdentifier(id),
-                    ) == ReceiveResult.Ack
-                }
+                val id = identifier(event.watchSerial) ?: return false
+                return connector.sendOnDataLogReceived(
+                    event.uuid.toJavaUuid(), event.toDataLogSession(), event.data,
+                    event.itemsLeft.toLong(), WatchIdentifier(id),
+                ) == ReceiveResult.Ack
             }
 
             override suspend fun sendFinished(event: ThirdPartyDatalogEvent.Finished): Boolean {
-                return connectors.all { (pkg, connector) ->
-                    val id = identifier(pkg, event.watchSerial) ?: return@all false
-                    connector.sendOnDataLogSessionFinished(
-                        event.uuid.toJavaUuid(), event.toDataLogSession(), WatchIdentifier(id),
-                    ) == ReceiveResult.Ack
-                }
+                val id = identifier(event.watchSerial) ?: return false
+                return connector.sendOnDataLogSessionFinished(
+                    event.uuid.toJavaUuid(), event.toDataLogSession(), WatchIdentifier(id),
+                ) == ReceiveResult.Ack
             }
 
-            override fun close() = connectors.values.forEach { it.close() }
+            override fun close() = connector.close()
         }
     }
 
