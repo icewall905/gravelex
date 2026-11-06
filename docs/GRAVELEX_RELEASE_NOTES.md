@@ -1,10 +1,11 @@
-GravelEx 0.4.2 incorporates Gravel 0.4.2 and selected Pebble fixes.
+GravelEx 0.5.0 integrates the official Pebble Android updates through November 5, 2026, including 1.17.0.1 and its subsequent fixes, on top of Gravel 0.4.2.
 
-- Updates the on-device Whisper engine and improves recovery after engine failures.
-- Adds watch settings including five-minute heart-rate sampling on supported firmware, quiet-time scheduling, and day/night backlight settings.
-- Improves notifications, weather, watch settings synchronization and download cancellation.
-- Delivers third-party watchapp data logs to authorized PebbleKit 2 companions when PebbleKit 2 is enabled, with per-companion watch identifiers.
-- Cleans up watchapp JavaScript sessions when their WebView fails to start.
-- Retains GravelEx health export, blood-oxygen support and watch battery observations.
+- Adds optional preview watch plugins, granular permission prompts, permission-use history, and plugin configuration-page messaging.
+- Adds store charts, battery-impact information, and updated app details.
+- Lets you reorder the bottom navigation and choose how many tabs it shows, including Notebook.
+- Supports multiple language packs and adds notification-dismissal synchronization, phone-silence preferences, and independent temperature units.
+- Improves Bluetooth connection recovery, Android document opening, background-service shutdown, and optional Health Connect synchronization.
+- Adds authorized watch microphone streaming while preserving GravelEx's dictation deadlines and cancellation behavior.
+- Preserves existing network/location choices, health history, SpO2, battery observations, direct server exports, and the source-built Whisper/llama engines.
 
-Update GravelEx.apk over your existing installation through Obtainium. Package tdgs.gravel and the permanent signing key remain unchanged.
+Update GravelEx.apk over your existing installation through Obtainium. Package tdgs.gravel and the permanent signing key remain unchanged. Google services remain unnecessary; Ring/Index and Core-account cloud services remain outside this fork's supported features.

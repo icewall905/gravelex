@@ -1,5 +1,7 @@
 package io.rebble.libpebblecommon.js
 
+import com.anopticlabs.gravel.testing.TestPluginBridge
+
 import androidx.test.filters.MediumTest
 import androidx.test.platform.app.InstrumentationRegistry
 import com.anopticlabs.gravel.pkjs.FixedNetworkDenyEnforcement
@@ -51,11 +53,13 @@ fun createJsRunner(
     val watchConfigFlow = WatchConfigFlow(configFlow)
     // Remote timeline emulation is off in the default config, so the emulator's DAOs
     // are never reached; HttpInterceptorManager requires the concrete type.
+    val plugins = TestPluginBridge(kotlin.uuid.Uuid.parse(appInfo.uuid), watchConfigFlow, scope)
     val emulator = RemoteTimelineEmulator(
         watchConfigFlow,
         Json,
         FakeTimelinePinRealDao(),
         FakeTimelineReminderRealDao(),
+        permissions = plugins.permissions,
     )
     return WebViewJsRunner(
         appContext = AppContext(context),
@@ -68,6 +72,7 @@ fun createJsRunner(
             },
             lockerEntryDao = FakeLockerEntryDao(),
             watchConfigFlow = watchConfigFlow,
+            permissions = plugins.permissions,
         ),
         device = device,
         appInfo = appInfo,
@@ -81,6 +86,7 @@ fun createJsRunner(
         notificationConfigFlow = NotificationConfigFlow(configFlow),
         watchappPermissions = watchappPermissions,
         networkDenyEnforcement = networkDenyEnforcement,
+        pluginRegistry = plugins.registry, permissions = plugins.permissions, pluginClient = plugins.client,
     )
 }
 

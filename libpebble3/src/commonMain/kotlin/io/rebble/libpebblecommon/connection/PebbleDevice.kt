@@ -7,6 +7,7 @@ import io.rebble.libpebblecommon.connection.bt.ble.pebble.ReversePpogVersion
 import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdater
 import io.rebble.libpebblecommon.connection.endpointmanager.InstalledLanguagePack
 import io.rebble.libpebblecommon.connection.endpointmanager.LanguagePackInstallState
+import io.rebble.libpebblecommon.connection.endpointmanager.WatchLanguagePack
 import io.rebble.libpebblecommon.connection.endpointmanager.musiccontrol.MusicTrack
 import io.rebble.libpebblecommon.js.PKJSApp
 import io.rebble.libpebblecommon.metadata.WatchColor
@@ -185,6 +186,8 @@ object ConnectedPebble {
         suspend fun launchApp(uuid: Uuid)
         suspend fun stopApp(uuid: Uuid)
         val runningApp: StateFlow<Uuid?>
+        /** The app that ran before the one running now (or last), since connecting. */
+        val previousApp: StateFlow<Uuid?>
     }
 
     interface PKJS {
@@ -222,8 +225,11 @@ object ConnectedPebble {
     }
 
     interface LanguageInstall {
-        fun installLanguagePack(path: Path, name: String)
-        fun installLanguagePack(url: String, name: String)
+        suspend fun setActiveLanguage(pack: WatchLanguagePack?): Boolean
+        suspend fun listLanguagePacks(): List<WatchLanguagePack>
+        suspend fun removeLanguagePack(pack: WatchLanguagePack): Boolean
+        fun installLanguagePack(path: Path, name: String, activate: Boolean = true)
+        fun installLanguagePack(url: String, name: String, activate: Boolean = true)
     }
 
     interface LanguageState {

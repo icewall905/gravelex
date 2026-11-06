@@ -1,5 +1,8 @@
 package coredevices.coreapp.di
 
+import coredevices.util.sync.AndroidSyncScheduler
+import coredevices.util.sync.SyncManager
+import coredevices.util.sync.SyncScheduler
 import CoreAppVersion
 import PlatformContext
 import PlatformShareLauncher
@@ -123,4 +126,5 @@ val androidDefaultModule = module {
     // the watch-connection foreground service was off.
     single { AndroidInferenceBoost(androidContext()) } bind InferenceBoost::class
     singleOf(::PebbleBackgroundManager)
+    single<SyncScheduler> { AndroidSyncScheduler(get(), lazy { get<SyncManager>() }) }
 }

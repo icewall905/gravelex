@@ -20,7 +20,6 @@ class PebbleService: Service(), KoinComponent {
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "pebble"
         const val NOTIFICATION_CHANNEL_NAME = "Gravel Service"
-        const val ACTION_STOP = "STOP"
 
         private val logger = Logger.withTag("PebbleService")
     }
@@ -30,20 +29,8 @@ class PebbleService: Service(), KoinComponent {
     }
     private val pebbleBackgroundManager: PebbleBackgroundManager by inject()
 
-    private fun handleIntent(intent: Intent) {
-        when (intent.action) {
-            ACTION_STOP -> {
-                logger.i { "Stopping service due to intent request" }
-                stopSelf()
-            }
-        }
-    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         logger.v { "onStartCommand()" }
-        if (intent != null) {
-            handleIntent(intent)
-        }
         val notificationChannel = NotificationChannelCompat.Builder(
             NOTIFICATION_CHANNEL_ID,
             NotificationManager.IMPORTANCE_MIN)

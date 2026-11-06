@@ -68,6 +68,9 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
         }
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+        }
         jvmTest.dependencies {
             implementation(libs.kotlin.test.junit)
             implementation(libs.modelcontextprotocol.server)

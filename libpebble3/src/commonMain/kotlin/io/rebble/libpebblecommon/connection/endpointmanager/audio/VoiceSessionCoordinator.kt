@@ -90,6 +90,7 @@ internal class VoiceSessionCoordinator(
     private val watchAppCaptures: WatchAppCaptures? = null,
     private val linkPace: StateFlow<LinkPace> = MutableStateFlow(LinkPace.Unknown),
     private val requestFastLink: () -> Unit = {},
+    private val streamAudio: (suspend (VoiceService.SessionSetupRequest) -> Unit)? = null,
 ) {
     companion object {
         private val logger = Logger.withTag("VoiceSession")
@@ -119,7 +120,11 @@ internal class VoiceSessionCoordinator(
                 logger.i { "Voice session ${request.sessionId} supersedes the session in flight" }
                 previous.cancel(CancellationException("superseded by session ${request.sessionId}"))
             }
-            inFlight = scope.launch { handle(request) }
+            inFlight = scope.launch {
+                val stream = streamAudio
+                if (request.sessionType == SessionType.AudioStream && stream != null) stream(request)
+                else handle(request)
+            }
         }
     }
 

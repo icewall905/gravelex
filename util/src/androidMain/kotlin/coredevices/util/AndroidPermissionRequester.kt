@@ -218,6 +218,7 @@ private fun Permission.asAndroidPermissions(): List<String> = when (this) {
         "com.beeper.android.permission.READ_PERMISSION",
         "com.beeper.android.permission.SEND_PERMISSION"
     )
+    Permission.AlarmKit -> emptyList()
     Permission.Reminders -> throw IllegalArgumentException("Not needed on Android")
 }
 

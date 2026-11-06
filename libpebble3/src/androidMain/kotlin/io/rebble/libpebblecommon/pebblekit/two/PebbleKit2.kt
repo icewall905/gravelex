@@ -10,6 +10,9 @@ import io.rebble.libpebblecommon.di.LibPebbleCoroutineScope
 import io.rebble.libpebblecommon.di.LibPebbleKoinComponent
 import io.rebble.libpebblecommon.js.CompanionAppDevice
 import io.rebble.libpebblecommon.metadata.pbw.appinfo.PbwAppInfo
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.permissions.PermissionDecision
+import io.rebble.libpebblecommon.permissions.pebbleKit2Key
 import io.rebble.libpebblecommon.services.appmessage.AppMessageData
 import io.rebble.libpebblecommon.services.appmessage.AppMessageDictionary
 import io.rebble.libpebblecommon.services.appmessage.AppMessageResult
@@ -53,6 +56,7 @@ class PebbleKit2(
     private val connector = DefaultPebbleListenerConnector(getKoin().get(), targetPackages)
     private val errorTracker: ErrorTracker = getKoin().get<ErrorTracker>()
     private val watchConfig: WatchConfigFlow = getKoin().get()
+    private val permissions: AppPermissions = getKoin().get()
 
     val uuid: Uuid by lazy { Uuid.Companion.parse(appInfo.uuid) }
     private var runningScope: CoroutineScope? = null
@@ -123,9 +127,12 @@ class PebbleKit2(
     }
 
 
-    fun isAllowedToCommunicate(pkg: String): Boolean {
-        return targetPackages.contains(pkg)
+    suspend fun isAllowedToCommunicate(pkg: String): Boolean {
+        return targetPackages.contains(pkg) && isAllowed(pkg)
     }
+
+    private suspend fun isAllowed(pkg: String) =
+        !permissions.enforcing || permissions.request(uuid, pebbleKit2Key(pkg)) == PermissionDecision.Granted
 
     suspend fun sendMessage(pebbleDictionary: PebbleDictionary): TransmissionResult {
         val transactionId = (nextTransactionId.getAndIncrement() % UByte.MAX_VALUE.toInt()).toUByte()
@@ -153,6 +160,11 @@ class PebbleKit2(
         incomingConsumer = messages.onEach { appMessageData ->
             try {
                 logger.d { "Got inbound AppMessage" }
+                // Delivered to every package at once, so only if they're all allowed.
+                if (!targetPackages.all { isAllowed(it) }) {
+                    if (!pkjsRunning) replyNACK(appMessageData.transactionId)
+                    return@onEach
+                }
 
                 val pebbleDictionary = appMessageData.data.toPebbleDictionary()
                 val result = connector.sendOnMessageReceived(

@@ -278,6 +278,8 @@ suspend fun HealthSettingsEntryDao.updateHeartRateZonesFromAge() {
     )
 }
 
+
+
 @Serializable
 data class ActivityPrefsValue(
     val heightMm: Short = 1700, // 170cm in mm (default height)

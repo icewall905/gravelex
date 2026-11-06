@@ -12,6 +12,14 @@ class CoreConfigTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test
+    fun navigationMigrationKeepsNotebookNearTheFrontAndPreservesUserOrder() {
+        val migrated = CoreConfig().migrateNavBarTabs()
+        assertEquals(listOf("WatchFaces", "Index", "Notebook", "Watches", "Health", "Notifications", "Settings"), migrated.navBarTabs)
+        val customized = CoreConfig(navBarTabs = listOf("Notebook", "Health", "Settings"))
+        assertEquals(customized, customized.migrateNavBarTabs())
+    }
+
+    @Test
     fun explicitWeatherUnitsSurvivesRoundTrip() {
         WeatherUnit.entries.forEach { unit ->
             val encoded = json.encodeToString(CoreConfig(weatherUnits = unit))

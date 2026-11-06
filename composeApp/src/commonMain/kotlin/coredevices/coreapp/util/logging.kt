@@ -5,17 +5,21 @@ import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 import coredevices.ExperimentalDevices
 import io.ktor.utils.io.core.append
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlinx.io.Sink
 import kotlinx.io.buffered
@@ -30,6 +34,7 @@ import okio.deflate
 import okio.inflate
 import okio.use
 import org.koin.mp.KoinPlatform
+import kotlin.time.Duration.Companion.seconds
 
 fun initLogging() {
     Logger.addLogWriter(KoinPlatform.getKoin().get<FileLogWriter>())
@@ -39,8 +44,15 @@ expect fun generateDeviceSummaryPlatformDetails(): String
 
 suspend fun generateDeviceSummary(experimentalDevices: ExperimentalDevices): String {
     val deviceSummary = generateDeviceSummaryPlatformDetails()
-    val experimentalSummary = experimentalDevices.debugSummary()
-    return deviceSummary + "\n" + (experimentalSummary ?: "")
+    val experimentalSummary = withTimeoutOrNull(5.seconds) {
+        try {
+            experimentalDevices.debugSummary()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            "<RING SUMMARY EXCEPTION: ${e.message}>"
+        }
+    } ?: "<RING SUMMARY TIMEOUT>"
+    return deviceSummary + "\n" + experimentalSummary
 }
 
 class FileLogWriter : LogWriter(), AutoCloseable {

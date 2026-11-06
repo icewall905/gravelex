@@ -71,7 +71,16 @@ kotlin {
         }
     }
 
+    applyDefaultHierarchyTemplate()
+
     sourceSets {
+        val mobileMain by creating {
+            dependsOn(commonMain.get())
+            dependencies { implementation(libs.coredevices.speex) }
+        }
+        androidMain.get().dependsOn(mobileMain)
+        iosMain.get().dependsOn(mobileMain)
+
         all {
             languageSettings {
                 optIn("kotlin.ExperimentalUnsignedTypes")
@@ -120,6 +129,7 @@ kotlin {
         }
 
         commonTest.dependencies {
+            implementation(libs.ktor.client.mock)
             implementation(libs.kotlin.test)
             implementation(libs.coroutines.test)
             implementation(libs.settings.test)
@@ -127,6 +137,7 @@ kotlin {
 
         androidMain.dependencies {
             implementation(libs.androidx.core.ktx)
+            implementation(libs.androidx.documentfile)
             implementation(libs.pebblekit)
             // Fork: ProxyController for the watchapp network black-hole (layer 3).
             implementation(libs.androidx.webkit)
@@ -137,11 +148,7 @@ kotlin {
             implementation(libs.ktor.websockets)
         }
 
-        jvmMain.dependencies {
-        }
-
         jvmTest.dependencies {
-            implementation(libs.kotlin.test)
             implementation(libs.kotlin.test.junit)
             implementation(libs.ktor.websockets)
             implementation(libs.ktor.cio)
@@ -158,6 +165,7 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlin.test.junit)
             implementation(libs.coroutines.test)
+            implementation(libs.settings.test)
         }
     }
 }
@@ -187,7 +195,6 @@ afterEvaluate {
 
 dependencies {
 //    add("kspCommonMainMetadata", libs.room.compiler)
-//    add("kspJvm", libs.room.compiler)
     add("kspCommonMainMetadata", project(":blobdbgen"))
     add("kspAndroid", libs.room.compiler)
 

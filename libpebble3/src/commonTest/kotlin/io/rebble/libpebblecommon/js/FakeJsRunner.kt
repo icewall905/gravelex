@@ -21,6 +21,11 @@ class FakeJsRunner(
     lockerEntry: LockerEntry,
     device: CompanionAppDevice,
 ) : JsRunner(appInfo, lockerEntry, Path("unused.js"), device, Channel(Channel.UNLIMITED)) {
+    override val networkAccess = io.rebble.libpebblecommon.permissions.NetworkAccess { _, _ ->
+        io.rebble.libpebblecommon.plugin.PluginNetworkVerdict.Allowed
+    }
+    override suspend fun signalAudioStream(json: String) {}
+    override suspend fun signalConfigMessage(requestId: Int, json: String) {}
     val evals = mutableListOf<String>()
     val interceptResponses = mutableListOf<Pair<String, InterceptResponse>>()
 

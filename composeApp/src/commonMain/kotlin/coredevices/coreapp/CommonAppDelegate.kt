@@ -1,5 +1,6 @@
 package coredevices.coreapp
 
+import coredevices.util.sync.SyncManager
 import PlatformContext
 import co.touchlab.kermit.Logger
 import com.anopticlabs.gravel.models.ModelCatalog
@@ -17,6 +18,8 @@ import coredevices.firestore.UsersDao
 import coredevices.pebble.PebbleAppDelegate
 import coredevices.pebble.account.FirestoreKnownWatchesSync
 import coredevices.pebble.account.FirestoreLocker
+import coredevices.pebble.account.PermissionDecisionSync
+import coredevices.pebble.account.PermissionSettingsSync
 import coredevices.pebble.health.PlatformHealthSync
 import coredevices.pebble.services.PebbleAccountProvider
 import coredevices.pebble.weather.WeatherFetcher
@@ -175,8 +178,11 @@ class CommonAppDelegate(
     private val pebbleAccountProvider: PebbleAccountProvider,
     private val firestoreLocker: FirestoreLocker,
     private val firestoreKnownWatchesSync: FirestoreKnownWatchesSync,
+    private val permissionSettingsSync: PermissionSettingsSync,
+    private val permissionDecisionSync: PermissionDecisionSync,
     private val libPebble: LibPebble,
     private val platformHealthSync: PlatformHealthSync,
+    private val syncManager: SyncManager,
 ) : CoreBackgroundSync {
     private val logger = Logger.withTag("CommonAppDelegate")
     private val syncInProgress = MutableStateFlow(false)
@@ -251,8 +257,13 @@ class CommonAppDelegate(
         }
         firestoreLocker.init()
         firestoreKnownWatchesSync.init()
+        permissionSettingsSync.init()
+        permissionDecisionSync.init()
         oneTimeSetLockerOrderMode()
         platformHealthSync.startAutoSync(GlobalScope)
+        GlobalScope.launch(Dispatchers.Default) {
+            syncManager.resume()
+        }
         if (settings.getBoolean(SHOWN_ONBOARDING, false)) {
             doneInitialOnboarding.onDoneInitialOnboarding()
         }

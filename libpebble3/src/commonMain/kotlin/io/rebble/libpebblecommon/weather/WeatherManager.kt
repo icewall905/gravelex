@@ -16,6 +16,8 @@ class WeatherManager(
     private val libPebbleCoroutineScope: LibPebbleCoroutineScope,
     private val appPrefsEntryDao: AppPrefsEntryDao,
 ): Weather {
+    override val currentWeather = weatherAppEntryDao.getAllFlow()
+
     override fun updateWeatherData(weatherData: List<WeatherLocationData>) {
         libPebbleCoroutineScope.launch {
             val existing = weatherAppEntryDao.getAll()
@@ -94,6 +96,9 @@ data class WeatherDailyForecast(
     val humidityPct: Int? = null,
     val visibilityM: Int? = null,
     val precipSumMm: Int? = null,
+    /** Phone-side only (the watch's sunrise and sunset come in timeline pins): for the weather plugin. */
+    val sunriseUtcSecs: Long? = null,
+    val sunsetUtcSecs: Long? = null,
 )
 
 /**

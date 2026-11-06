@@ -172,9 +172,9 @@ class BlobDB(
     private fun dynamicQuery(
         dao: BlobDbDao<BlobDbRecord>,
         insert: Boolean,
+        insertOnlyAfter: Instant,
         collector: suspend (items: List<BlobDbRecord>) -> Unit,
     ) {
-        val initialTimestamp = timeProvider.now()
         watchScope.launch {
             val tickerFlow = flow {
                 while (true) {
@@ -189,7 +189,7 @@ class BlobDB(
                         dao.dirtyRecordsForWatchInsert(
                             transport = identifier.asString,
                             timestampMs = timeProvider.now().toEpochMilliseconds(),
-                            insertOnlyAfterMs = initialTimestamp.toEpochMilliseconds(),
+                            insertOnlyAfterMs = insertOnlyAfter.toEpochMilliseconds(),
                         )
                     } else {
                         dao.dirtyRecordsForWatchDelete(
@@ -215,6 +215,8 @@ class BlobDB(
         capabilities: Set<ProtocolCapsFlag>,
         firmwareVersion: FirmwareVersion,
     ) {
+        // Captured before the watch is marked connected, so that items added from then on are sent.
+        val insertOnlyAfter = timeProvider.now()
         val params = ValueParams(
             platform = watchType,
             capabilities = capabilities,
@@ -336,14 +338,14 @@ class BlobDB(
 
             blobDatabases.get().forEach { db ->
                 db.deleteStaleRecords(timeProvider.now().toEpochMilliseconds())
-                dynamicQuery(dao = db, insert = true) { dirty ->
+                dynamicQuery(dao = db, insert = true, insertOnlyAfter = insertOnlyAfter) { dirty ->
                     dirty.forEach { item ->
                         operationLock.withLock {
                             handleInsert(db, item, params, blobDbVersion)
                         }
                     }
                 }
-                dynamicQuery(dao = db, insert = false) { dirty ->
+                dynamicQuery(dao = db, insert = false, insertOnlyAfter = insertOnlyAfter) { dirty ->
                     dirty.forEach { item ->
                         operationLock.withLock {
                             handleDelete(db, item)

@@ -142,6 +142,8 @@ class WhisperHandleLifecycleTest {
         override fun updateLastConnectedSerial(serial: String?) {}
         override fun updateRingTransferDurationMetric(duration: Duration) {}
         override fun updateRingLifetimeCollectionCount(serial: String, count: Int) {}
+    override fun updateRingBatteryVoltage(voltageMilliV: Int) {}
+    override fun incrementHeartbeatCounter(name: String) {}
     }
 
     private fun configFor(modelName: String) = CoreConfig(

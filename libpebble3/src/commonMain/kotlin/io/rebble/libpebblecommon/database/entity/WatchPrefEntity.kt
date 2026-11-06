@@ -34,6 +34,7 @@ import io.rebble.libpebblecommon.util.Endian
 import io.rebble.libpebblecommon.util.asTimelineColor
 import io.rebble.libpebblecommon.util.toPebbleColor
 import io.rebble.libpebblecommon.util.toProtocolNumber
+import kotlinx.datetime.LocalTime
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
@@ -187,6 +188,7 @@ class QLMappable(
  * (e.g. 22:00 to 07:00).
  */
 @Immutable
+@Serializable
 data class QuietTimeSchedule(
     val fromHour: Int,
     val fromMinute: Int,
@@ -196,6 +198,12 @@ data class QuietTimeSchedule(
     fun fromTime(): String = time(fromHour, fromMinute)
     fun toTime(): String = time(toHour, toMinute)
     fun encode(): String = "${fromTime()}-${toTime()}"
+
+    fun contains(time: LocalTime): Boolean {
+        val from = LocalTime(fromHour, fromMinute)
+        val to = LocalTime(toHour, toMinute)
+        return if (from < to) time >= from && time < to else time >= from || time < to
+    }
 
     companion object {
         private fun time(hour: Int, minute: Int): String =
@@ -265,6 +273,8 @@ enum class BoolWatchPref(
     AlternativeNotificationStyle("notifDesignStyle", "Alternative notification banner Style (B/W watches)", false),
     NotificationVibeDelay("notifVibeDelay", "Delay Notification Vibration", true, description = "Delay notification vibration until the notification is visible (after animations)"),
     NotificationBacklight("notifBacklight", "Notifications - Backlight", true, description = "Turn on the backlight when a notification arrives"),
+    RespectPhoneSilence("notifRespectPhoneSilence", "Respect Phone Do Not Disturb", false, description = "Notifications silenced by the phone's Do Not Disturb / Focus are delivered quietly (no popup, vibration or backlight)"),
+    NotificationDismissalSync("notifDismissalSync", "Sync Notification Dismissals", false, description = "Notifications dismissed or acted on are removed from the watch's notification history completely (otherwise they are just removed if visible in the notification popup)"),
     MenuScrollWrapAround("menuScrollWrapAround", "Menu Scrolling - Wrap Around", false, description = "Up button will go to the bottom of menus"),
     QuietTimeMotionBacklight("dndMotionBacklight", "Quiet Time - Motion Backlight", true, description = "Enable motion backlight during Quiet Time"),
     QuietTimeTouchBacklight("dndTouchBacklight", "Quiet Time - Touch Backlight", true, description = "Enable touch backlight during Quiet Time"),
@@ -443,6 +453,24 @@ enum class WindUnits(override val code: UByte, override val displayName: String)
     Mph(2u, "mph"),
     MetersPerSecond(3u, "m/s"),
     Knots(4u, "knots"),
+    ;
+
+    fun resolved(imperialUnits: Boolean): WindUnits = when {
+        this != FromDistance -> this
+        imperialUnits -> Mph
+        else -> KmH
+    }
+}
+
+/** Temperature is labelled separately from distance so the UK (Celsius, but miles) is expressible. */
+enum class TemperatureUnits(override val code: UByte, override val displayName: String) : WatchPrefEnum {
+    FromDistance(0u, "Automatic"),
+    Celsius(1u, "°C"),
+    Fahrenheit(2u, "°F"),
+    ;
+
+    fun isFahrenheit(imperialUnits: Boolean): Boolean =
+        this == Fahrenheit || (this == FromDistance && imperialUnits)
 }
 
 enum class MotionSensitivityLevel(override val code: UByte, override val displayName: String) : WatchPrefEnum {
@@ -489,23 +517,6 @@ enum class BacklightPresetMode(override val code: UByte, override val displayNam
     Standard(1u, "Standard"),
     BatterySaver(2u, "Battery Saver"),
     Advanced(3u, "Advanced"),
-}
-
-// Built-in firmware languages. Codes MUST match the ShellLanguage enum in
-// pebble-firmware:src/fw/shell/prefs.h. "Custom" (0) means the watch uses whatever language pack
-// was uploaded via PutBytes (see LanguagePackInstaller); the rest are baked into the firmware.
-// Labels mirror the on-watch Settings > Display > Language menu.
-enum class WatchLanguage(override val code: UByte, override val displayName: String) : WatchPrefEnum {
-    Custom(0u, "Custom (Language Pack)"),
-    English(1u, "English"),
-    Catalan(2u, "Català"),
-    German(3u, "Deutsch"),
-    Spanish(4u, "Español"),
-    French(5u, "Français"),
-    Italian(6u, "Italiano"),
-    Dutch(7u, "Nederlands"),
-    Portuguese(8u, "Português"),
-    Polish(9u, "Polski"),
 }
 
 // How the Timeline Quick View peek is drawn on watchfaces that don't support it. Codes match
@@ -643,12 +654,12 @@ enum class EnumWatchPref(
         defaultValue = WindUnits.FromDistance,
         options = WindUnits.entries,
     ),
-    Language(
-        id = "language",
-        displayName = "Language",
-        description = "Built-in firmware language. Choose Custom to use an uploaded language pack.",
-        defaultValue = WatchLanguage.Custom,
-        options = WatchLanguage.entries,
+    Temperature(
+        id = "unitsTemperature",
+        displayName = "Temperature",
+        description = "Automatic follows the Imperial Units setting.",
+        defaultValue = TemperatureUnits.FromDistance,
+        options = TemperatureUnits.entries,
     ),
     TimelineQuickViewUnsupportedFaces(
         id = "timelineQuickViewWatchfaceFit",
@@ -859,7 +870,7 @@ enum class ColorWatchPref(
 - heartRatePreferences (see HealthSettingsEntry)
 - spo2Preferences / bloodOxygenPreferences / bloodOxygenActivityPreferences (health toggles - belong with HealthSettingsEntry, not here)
 - workerId (need UI to figure out which apps are eligible)
-- langEnglish (legacy bool, superseded by the `language` enum we already sync)
+- language / langEnglish (holds a per-watch pack slot; set through LanguagePackInstaller instead)
 - textStyle (legacy content size; firmware no longer reads it - superseded by systemTextSize/notifTextSize)
  */
 

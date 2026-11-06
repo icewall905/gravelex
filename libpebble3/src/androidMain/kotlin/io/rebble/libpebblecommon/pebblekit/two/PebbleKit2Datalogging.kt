@@ -1,5 +1,9 @@
 package io.rebble.libpebblecommon.pebblekit.two
 
+import io.rebble.libpebblecommon.metadata.pbw.appinfo.pebbleKit2Packages
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.permissions.PermissionDecision
+import io.rebble.libpebblecommon.permissions.pebbleKit2Key
 import android.content.Context
 import android.content.Intent
 import io.rebble.libpebblecommon.WatchConfigFlow
@@ -33,6 +37,7 @@ class PebbleKit2Datalogging(
     private val watchConfig: WatchConfigFlow,
     private val companionRegistry: PebbleKitCompanionRegistry,
     private val watchIdentity: PebbleKitWatchIdentity,
+    private val permissions: AppPermissions,
 ) {
     private val delivery = DatalogDelivery(coroutineScope, ::senderFor)
 

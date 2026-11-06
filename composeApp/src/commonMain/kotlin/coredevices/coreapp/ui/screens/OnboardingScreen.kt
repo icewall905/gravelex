@@ -68,12 +68,14 @@ import coredevices.pebble.ui.PebbleRoutes
 import coredevices.pebble.ui.PreviewWrapper
 import coredevices.pebble.ui.WHATS_NEW_VERSION
 import coredevices.ui.PebbleElevatedButton
+import coredevices.ui.SecondaryProfileWarningDialog
 import coredevices.ui.SignInButtons
 import coredevices.util.CoreConfig
 import coredevices.util.CoreConfigHolder
 import coredevices.util.DoneInitialOnboarding
 import coredevices.util.Permission
 import coredevices.util.PermissionRequester
+import coredevices.util.SecondaryProfileWarning
 import coredevices.util.name
 import coredevices.util.rememberUiContext
 import coredevices.util.requestIsFullScreen
@@ -152,6 +154,24 @@ fun OnboardingScreen(
     val scope = rememberCoroutineScope()
     val settings: Settings = koinInject()
     val doneInitialOnboarding: DoneInitialOnboarding = koinInject()
+    val secondaryProfileWarning: SecondaryProfileWarning = koinInject()
+    var showSecondaryProfileWarning by remember { mutableStateOf(false) }
+
+    fun chooseIndexDevice(choice: DeviceChoice) {
+        viewModel.setIndexEnabled(true)
+        viewModel.deviceChoice.value = choice
+        if (secondaryProfileWarning.pending) {
+            showSecondaryProfileWarning = true
+        } else {
+            viewModel.stage.value = OnboardingStage.Permissions
+        }
+    }
+    if (showSecondaryProfileWarning) {
+        SecondaryProfileWarningDialog {
+            showSecondaryProfileWarning = false
+            viewModel.stage.value = OnboardingStage.Permissions
+        }
+    }
 
     fun exitOnboarding() {
         logger.v { "exitOnboarding" }

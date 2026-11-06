@@ -1,5 +1,8 @@
 package io.rebble.libpebblecommon.js
 
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.plugin.PluginClient
+import io.rebble.libpebblecommon.plugin.PluginRegistry
 import android.net.Uri
 import android.webkit.JavascriptInterface
 import androidx.core.net.toUri
@@ -23,7 +26,10 @@ class WebViewPrivatePKJSInterface(
     httpInterceptorManager: HttpInterceptorManager,
     notificationConfigFlow: NotificationConfigFlow,
     watchappPermissions: WatchappPermissionResolver,
-): PrivatePKJSInterface(webViewJsRunner, device, scope, outgoingAppMessages, logMessages, jsTokenUtil, remoteTimelineEmulator, httpInterceptorManager, notificationConfigFlow, watchappPermissions) {
+    pluginRegistry: PluginRegistry,
+    permissions: AppPermissions,
+    pluginClient: PluginClient,
+): PrivatePKJSInterface(webViewJsRunner, device, scope, outgoingAppMessages, logMessages, jsTokenUtil, remoteTimelineEmulator, httpInterceptorManager, notificationConfigFlow, watchappPermissions, pluginRegistry, permissions, pluginClient) {
 
     companion object {
         private val logger = Logger.withTag(WebViewPrivatePKJSInterface::class.simpleName!!)
@@ -161,5 +167,38 @@ class WebViewPrivatePKJSInterface(
     @JavascriptInterface
     override fun deleteTimelinePin(id: String) {
         super.deleteTimelinePin(id)
+    }
+
+    @JavascriptInterface
+    override fun subscribeToSource(subscriptionId: Int, requestJson: String) {
+        super.subscribeToSource(subscriptionId, requestJson)
+    }
+
+    @JavascriptInterface
+    override fun unsubscribeSource(subscriptionId: Int) {
+        super.unsubscribeSource(subscriptionId)
+    }
+
+    @JavascriptInterface
+    override fun invokeAction(callId: Int, requestJson: String) {
+        super.invokeAction(callId, requestJson)
+    }
+
+    @JavascriptInterface
+    override fun enumeratePlugins(): String = super.enumeratePlugins()
+
+    @JavascriptInterface
+    override fun queryPermission(callId: Int, permission: String) {
+        super.queryPermission(callId, permission)
+    }
+
+    @JavascriptInterface
+    override fun configMessageReply(requestId: Int, json: String) {
+        super.configMessageReply(requestId, json)
+    }
+
+    @JavascriptInterface
+    override fun sendConfigMessage(json: String) {
+        super.sendConfigMessage(json)
     }
 }

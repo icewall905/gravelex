@@ -97,5 +97,7 @@ class KMPHaversineSatelliteManager private constructor() {
     val lastRing: StateFlow<KMPHaversineSatellite?> = MutableStateFlow(null)
 
     @Suppress("UNUSED_PARAMETER")
+    fun notifyPairedSatelliteChanged() {}
+
     suspend fun getSatelliteById(id: String): KMPHaversineSatellite? = null
 }

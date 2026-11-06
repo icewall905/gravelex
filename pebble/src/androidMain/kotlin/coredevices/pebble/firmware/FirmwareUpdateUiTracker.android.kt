@@ -20,6 +20,7 @@ actual fun notifyFirmwareUpdate(
     body: String,
     key: Int,
     identifier: PebbleIdentifier,
+    showUpdateAction: Boolean,
 ) {
     val context = appContext.context
     context.createFwupNotificationChannel()

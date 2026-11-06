@@ -1,5 +1,6 @@
 package coredevices.pebble.ui
 
+import kotlinx.coroutines.GlobalScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,12 +34,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -58,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +90,9 @@ import coreapp.pebble.generated.resources.apps
 import coredevices.database.AppstoreCollectionDao
 import coredevices.database.AppstoreSource
 import coredevices.database.AppstoreSourceDao
+import coredevices.database.PLUGIN_DATA_APPS_SLUG
+import coredevices.libindex.LibIndex
+import coredevices.libindex.device.KnownIndexDevice
 import coredevices.pebble.PebbleDeepLinkHandler
 import coredevices.pebble.Platform
 import coredevices.pebble.rememberLibPebble
@@ -94,10 +101,14 @@ import coredevices.pebble.services.AppStoreHomeResult
 import coredevices.pebble.services.PebbleWebServices
 import coredevices.pebble.services.SearchPagingSource
 import coredevices.pebble.services.StoreCategory
+import coredevices.pebble.services.isPebbleFeed
 import coredevices.ui.PebbleElevatedButton
 import io.rebble.libpebblecommon.connection.AppContext
 import io.rebble.libpebblecommon.connection.ConnectedPebbleDevice
+import io.rebble.libpebblecommon.connection.KnownPebbleDevice
 import io.rebble.libpebblecommon.connection.LibPebble
+import io.rebble.libpebblecommon.permissions.InstallReview
+import io.rebble.libpebblecommon.plugin.PluginMetadata
 import io.rebble.libpebblecommon.locker.AppType
 import io.rebble.libpebblecommon.locker.SystemApps
 import io.rebble.libpebblecommon.metadata.WatchType
@@ -117,6 +128,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlin.time.Duration.Companion.milliseconds
 import org.jetbrains.compose.resources.stringResource
@@ -201,6 +213,7 @@ class LockerViewModel(
     val searchListState = LazyListState()
     val searchGridState = LazyGridState()
     val type = mutableStateOf(AppType.Watchface)
+    var defaultType = AppType.Watchface
     var storeIsRefreshing by mutableStateOf(false)
     var lockerIsRefreshing by mutableStateOf(false)
 
@@ -300,11 +313,55 @@ fun LockerScreen(
     Box(modifier = Modifier.background(MaterialTheme.colorScheme.background).imePadding()) {
         val viewModel = koinViewModel<LockerViewModel>()
         val sharedViewModel: SharedLockerViewModel = koinInject()
+        val topChartsViewModel: TopChartsViewModel = koinInject()
         sharedViewModel.Init()
         val scope = rememberCoroutineScope()
         val libPebble = rememberLibPebble()
         val lastConnectedWatch = lastConnectedWatch()
         val appContext = koinInject<AppContext>()
+        var sideloadReview by remember { mutableStateOf<PendingSideload?>(null) }
+        // Outlives this screen: installing waits for the watch to sync.
+        fun install(path: Path, granted: Map<String, Boolean?>) =
+            GlobalScope.launch { libPebble.sideloadApp(path, granted = granted) }
+        fun sideload(path: Path) {
+            scope.launch {
+                val review = libPebble.reviewSideload(path)
+                if (review == null) install(path, emptyMap()) else sideloadReview = PendingSideload(path, review)
+            }
+        }
+        sideloadReview?.let { pending ->
+            InstallReviewDialog(pending.review) { granted ->
+                sideloadReview = null
+                if (granted != null) install(pending.path, granted)
+            }
+        }
+        val deepLinks: PebbleDeepLinkHandler = koinInject()
+        val pendingAppSideload by deepLinks.pendingAppSideload.collectAsState()
+        LaunchedEffect(pendingAppSideload) {
+            pendingAppSideload?.let {
+                deepLinks.consumePendingAppSideload()
+                sideload(it)
+            }
+        }
+        val pluginsEnabled = libPebble.config.collectAsState().value.watchConfig.enablePlugins
+        val rings by koinInject<LibIndex>().rings.collectAsState()
+        val watches by libPebble.watches.collectAsState()
+        val defaultType = if (
+            pluginsEnabled && rings.any { it is KnownIndexDevice } && watches.none { it is KnownPebbleDevice }
+        ) AppType.Plugin else AppType.Watchface
+        LaunchedEffect(defaultType) {
+            if (viewModel.defaultType != defaultType) {
+                viewModel.defaultType = defaultType
+                viewModel.type.value = defaultType
+            }
+        }
+        val pendingLockerTab by deepLinks.pendingLockerTab.collectAsState()
+        LaunchedEffect(pendingLockerTab) {
+            pendingLockerTab?.let {
+                deepLinks.consumePendingLockerTab()
+                viewModel.type.value = it
+            }
+        }
         val launchInstallAppDialog = rememberOpenDocumentLauncher {
             it?.firstOrNull()?.let { file ->
                 val tempAppPath = getTempFilePath(appContext, "temp.pbw")
@@ -313,9 +370,7 @@ fun LockerScreen(
                         source.transferTo(sink)
                     }
                 }
-                scope.launch {
-                    libPebble.sideloadApp(tempAppPath)
-                }
+                sideload(tempAppPath)
             }
         }
         val openInstallAppDialog = remember(launchInstallAppDialog) {
@@ -331,12 +386,13 @@ fun LockerScreen(
             return
         }
         val storeHomeForType = viewModel.storeHomeAllFeeds[viewModel.type.value]
-        val storeHome = remember(storeHomeForType, collections, viewModel.type.value) {
+        val storeHome = remember(storeHomeForType, collections, viewModel.type.value, pluginsEnabled) {
             val collectionRules = collections!!.groupBy { it.sourceId }
             storeHomeForType?.map { (source, home) ->
                 val homeFiltered = home.let {
                     it.copy(collections = it.collections.filter { col ->
-                        collectionRules[source.id]?.firstOrNull { it.slug == col.slug && it.type == viewModel.type.value }?.enabled ?: false
+                        (pluginsEnabled || col.slug != PLUGIN_DATA_APPS_SLUG) &&
+                            collectionRules[source.id]?.firstOrNull { it.slug == col.slug && it.type == viewModel.type.value }?.enabled ?: false
                     })
                 }
                 val categories = homeFiltered.categories.filter{
@@ -347,6 +403,7 @@ fun LockerScreen(
         }
         val settings: Settings = koinInject()
         val showDebugOptions = settings.showDebugOptions()
+        var pluginsHelpDismissed by remember { mutableStateOf(settings.pluginsHelpDismissed()) }
         LaunchedEffect(showDebugOptions) {
             topBarParams.actions {
                 if (showDebugOptions) {
@@ -377,7 +434,7 @@ fun LockerScreen(
                         viewModel.searchState.typing = false
                         viewModel.searchState.query = ""
                     } else {
-                        viewModel.type.value = AppType.Watchface
+                        viewModel.type.value = viewModel.defaultType
                     }
                 }
             }
@@ -412,6 +469,7 @@ fun LockerScreen(
         )
         val activeWatchface = loadActiveWatchface(sharedViewModel.watchType.value)
         val activeWatchapp = loadActiveWatchapp(sharedViewModel.watchType.value)
+        val nativePlugins = rememberNativePlugins()
         if (lockerEntries == null || activeWatchface == null || currentHearts == null) {
             // Don't render the screen at all until we've read the locker from db
             // (otherwise scrolling can get really confused while it's momentarily empty)
@@ -425,6 +483,11 @@ fun LockerScreen(
                     sharedLockerViewModel = sharedViewModel,
                     showWatchfaceOrderSetting = viewModel.type.value == AppType.Watchface,
                 )
+                PendingPermissionRequests(onReview = { appUuid ->
+                    navBarNav.navigateTo(
+                        PebbleNavBarRoutes.LockerAppRoute(uuid = appUuid.toString(), storedId = null, storeSource = null)
+                    )
+                })
                 if (viewModel.searchState.query.isNotEmpty()) {
                     val lockerUuids = remember(lockerEntries) { lockerEntries.mapTo(HashSet()) { it.uuid } }
                     val filteredStoreResults = remember(viewModel.searchPager, sharedViewModel.showIncompatible.value, sharedViewModel.showScaled.value, lockerUuids) {
@@ -459,12 +522,13 @@ fun LockerScreen(
                     }
                 } else {
                     PullToRefreshBox(isRefreshing = viewModel.storeIsRefreshing || viewModel.lockerIsRefreshing, onRefresh = {
+                        topChartsViewModel.clear()
                         viewModel.startLockerRefresh(libPebble, sharedViewModel.watchType.value)
                     }) {
-                        val active = if (viewModel.type.value == AppType.Watchface) {
-                            activeWatchface
-                        } else {
-                            activeWatchapp
+                        val active = when (viewModel.type.value) {
+                            AppType.Watchface -> activeWatchface
+                            AppType.Watchapp -> activeWatchapp
+                            AppType.Plugin -> null
                         }
                         val myApps by remember(lockerEntries, active) {
                             derivedStateOf {
@@ -516,6 +580,8 @@ fun LockerScreen(
                                 title: String,
                                 items: List<CommonApp>,
                                 highlightInLocker: Boolean,
+                                nativePlugins: List<PluginMetadata> = emptyList(),
+                                titleAction: (@Composable () -> Unit)? = null,
                                 onClick: (() -> Unit)? = null
                             ) {
                                 AppCarousel(
@@ -524,8 +590,21 @@ fun LockerScreen(
                                     navBarNav = navBarNav,
                                     topBarParams = topBarParams,
                                     highlightInLocker = highlightInLocker,
+                                    nativePlugins = nativePlugins,
+                                    titleAction = titleAction,
                                     onClick = onClick,
                                 )
+                            }
+                            if (viewModel.type.value == AppType.Plugin && !pluginsHelpDismissed) {
+                                item(contentType = "plugins_help", key = "plugins_help") {
+                                    PluginsHelpCard(
+                                        onDismiss = {
+                                            settings.dismissPluginsHelp()
+                                            pluginsHelpDismissed = true
+                                        },
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    )
+                                }
                             }
                             active?.let {
                                 item(
@@ -599,6 +678,21 @@ fun LockerScreen(
                                     viewModel.type.value.myCollectionName(),
                                     myAppsToDisplay,
                                     highlightInLocker = false,
+                                    nativePlugins = if (viewModel.type.value == AppType.Plugin) nativePlugins else emptyList(),
+                                    titleAction = if (viewModel.type.value == AppType.Plugin) {
+                                        {
+                                            IconButton(onClick = {
+                                                navBarNav.navigateTo(
+                                                    PebbleNavBarRoutes.WatchSettingsCategoryRoute(
+                                                        section = Section.Plugins.name,
+                                                        topLevelType = TopLevelType.Phone.name,
+                                                    )
+                                                )
+                                            }) {
+                                                Icon(Icons.Default.Settings, contentDescription = "Plugin settings")
+                                            }
+                                        }
+                                    } else null,
                                     onClick = {
                                         navBarNav.navigateTo(
                                             PebbleNavBarRoutes.MyCollectionRoute(
@@ -634,6 +728,16 @@ fun LockerScreen(
                                                 contentDescription = "Configure Feeds"
                                             )
                                         }
+                                    }
+                                }
+                                if (source.isPebbleFeed()) {
+                                    item(contentType = "top_charts", key = "top_charts_${source.id}") {
+                                        TopChartsSection(
+                                            source = source,
+                                            type = viewModel.type.value,
+                                            navBarNav = navBarNav,
+                                            topBarParams = topBarParams,
+                                        )
                                     }
                                 }
                                 if (viewModel.type.value == AppType.Watchapp) {
@@ -960,26 +1064,32 @@ fun AppCarousel(
     navBarNav: NavBarNav,
     topBarParams: TopBarParams,
     highlightInLocker: Boolean,
+    nativePlugins: List<PluginMetadata> = emptyList(),
+    titleAction: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
 ) {
-    if (items.isEmpty()) {
+    if (items.isEmpty() && nativePlugins.isEmpty()) {
         logger.d { "Not showing collection $title as it has no items" }
         return
     }
     Column {
-        Row(modifier = Modifier.padding(horizontal = 16.dp)
-            .let {
-            if (onClick != null) {
-                it.clickable { onClick() }
-            } else {
-                it
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.padding(horizontal = 16.dp)
+                .let {
+                if (onClick != null) {
+                    it.clickable { onClick() }
+                } else {
+                    it
+                }
+            }, verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontSize = 24.sp, modifier = Modifier.padding(vertical = 8.dp))
+                Spacer(modifier = Modifier.width(7.dp))
+                if (onClick != null) {
+                    Icon(Icons.AutoMirrored.Default.ArrowForward, contentDescription = "See all", modifier = Modifier)
+                }
             }
-        }, verticalAlignment = Alignment.CenterVertically) {
-            Text(title, fontSize = 24.sp, modifier = Modifier.padding(vertical = 8.dp))
-            Spacer(modifier = Modifier.width(7.dp))
-            if (onClick != null) {
-                Icon(Icons.AutoMirrored.Default.ArrowForward, contentDescription = "See all", modifier = Modifier)
-            }
+            Spacer(modifier = Modifier.weight(1f))
+            titleAction?.invoke()
         }
         LazyRow(
             modifier = Modifier
@@ -997,6 +1107,9 @@ fun AppCarousel(
                     topBarParams = topBarParams,
                     highlightInLocker = highlightInLocker,
                 )
+            }
+            items(nativePlugins, key = { it.pluginUuid }) { plugin ->
+                NativePluginCard(plugin, navBarNav)
             }
         }
     }
@@ -1098,7 +1211,7 @@ val testApps = listOf(
     )
 )
 
-private val NATIVE_SCREENSHOT_HEIGHT = 100.dp
+internal val NATIVE_SCREENSHOT_HEIGHT = 100.dp
 
 @Composable
 fun NativeWatchfaceCard(
@@ -1142,6 +1255,9 @@ fun NativeWatchfaceMainContent(
                 modifier = imageModifier,
                 size = NATIVE_SCREENSHOT_HEIGHT,
             )
+            if (entry.commonAppType is CommonAppType.Locker) {
+                PermissionRequestBadge(entry.uuid, Modifier.align(Alignment.TopEnd).padding(8.dp))
+            }
         }
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1151,7 +1267,8 @@ fun NativeWatchfaceMainContent(
                 AsyncImage(
                     model = entry.listImageUrl,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp).padding(end = 3.dp)
+                    modifier = Modifier.size(18.dp).padding(end = 3.dp),
+                    colorFilter = entry.listImageColorFilter(),
                 )
             }
             Text(
@@ -1206,17 +1323,27 @@ fun NativeWatchfaceListItem(
             .padding(vertical = 8.dp, horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppImage(
-            entry,
-            modifier = Modifier.width(62.dp).clip(RoundedCornerShape(8.dp)),
-            size = 74.dp,
-        )
+        Box {
+            AppImage(
+                entry,
+                modifier = Modifier.width(62.dp).clip(RoundedCornerShape(8.dp)),
+                size = 74.dp,
+            )
+            if (entry.commonAppType is CommonAppType.Locker) {
+                PermissionRequestBadge(entry.uuid, Modifier.align(Alignment.TopEnd))
+            }
+        }
         Column(
             modifier = Modifier.padding(start = 12.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (entry.type == AppType.Watchapp) {
-                    AsyncImage(model = entry.listImageUrl, contentDescription = null, modifier = Modifier.size(21.dp))
+                    AsyncImage(
+                        model = entry.listImageUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(21.dp),
+                        colorFilter = entry.listImageColorFilter(),
+                    )
                     Spacer(modifier = Modifier.width(5.dp))
                 }
                 Text(
@@ -1278,6 +1405,10 @@ private fun SectionHeader(text: String) {
 }
 
 @Composable
+fun CommonApp.listImageColorFilter(): ColorFilter? =
+    if (listImageTintable) ColorFilter.tint(LocalContentColor.current) else null
+
+@Composable
 fun AppImage(entry: CommonApp, modifier: Modifier, size: Dp) {
     val placeholderColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
     val placeholder = remember {
@@ -1290,6 +1421,7 @@ fun AppImage(entry: CommonApp, modifier: Modifier, size: Dp) {
                 val url = when (entry.type) {
                     AppType.Watchapp -> entry.screenshotImageUrl
                     AppType.Watchface -> entry.screenshotImageUrl
+                    AppType.Plugin -> entry.listImageUrl ?: entry.screenshotImageUrl
                 }
                 ImageRequest.Builder(context)
                     .memoryCachePolicy(CachePolicy.ENABLED)
@@ -1323,9 +1455,12 @@ fun AppImage(entry: CommonApp, modifier: Modifier, size: Dp) {
             .widthIn(max = size),
 //            .background(Color.Green),
         placeholder = placeholder,
+        colorFilter = if (entry.type == AppType.Plugin && entry.listImageUrl != null) entry.listImageColorFilter() else null,
         onError = { e ->
             logger.w(e.result.throwable) { "Error loading app image for ${entry.uuid}" }
         },
 //                contentScale = ContentScale.Fit,
     )
 }
+
+private data class PendingSideload(val path: Path, val review: InstallReview)

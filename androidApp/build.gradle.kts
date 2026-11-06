@@ -153,6 +153,9 @@ configurations.matching {
 
 dependencies {
     implementation(project(":composeApp"))
+    // App manifest overlays reference components supplied by these KMP libraries.
+    implementation(project(":pebble"))
+    implementation(project(":libpebble3"))
     // Components this module's manifest declares, so lint can resolve them.
     implementation(project(":util"))
     // Gravel: the Notebook's receivers, which the merged manifest declares.
@@ -245,6 +248,9 @@ dependencies {
  */
 val allowedExportedComponents = setOf(
     "activity|coredevices.coreapp.MainActivity|perm=|read=|write=",
+    // Both aliases enter MainActivity's existing user-confirmed file-open flow.
+    "activity-alias|coredevices.coreapp.FileOpenActivity|perm=|read=|write=",
+    "activity-alias|coredevices.coreapp.SamsungFileOpenActivity|perm=|read=|write=",
     "activity-alias|coredevices.coreapp.HealthPermissionsRationaleActivity|perm=|read=|write=",
     "activity-alias|coredevices.coreapp.ViewPermissionUsageActivity|perm=android.permission.START_VIEW_PERMISSION_USAGE|read=|write=",
     "service|androidx.health.platform.client.impl.sdkservice.HealthDataSdkService|perm=|read=|write=",
@@ -424,7 +430,7 @@ abstract class VerifyApkContents : DefaultTask() {
     abstract val requiredEntries: ListProperty<String>
 
     /**
-     * Type descriptors that no classes*.dex may name. Where Gravel's UDP socket filter is
+     * Type descriptors or descriptor prefixes that no classes*.dex may name. Where Gravel's UDP socket filter is
      * installed, code that opens one of the listed Java UDP socket types fails at run time;
      * this turns naming one into a build failure. DatagramPacket is listed with them and opens
      * no socket.
@@ -454,8 +460,7 @@ abstract class VerifyApkContents : DefaultTask() {
                         val named = dexTypes.filter { (_, needle) -> bytes.indexOfSequence(needle) >= 0 }.map { it.first }
                         if (named.isNotEmpty()) {
                             report.appendLine(
-                                "${apk.name} ${dex.name} names $named, which the UDP socket filter " +
-                                    "(:socketfilter) refuses when installed",
+                                "${apk.name} ${dex.name} names forbidden types $named",
                             )
                         }
                     }
@@ -724,6 +729,11 @@ androidComponents {
                 } else {
                     emptyList()
                 },
+            )
+            forbiddenDexTypes.addAll(
+                "Lcom/google/firebase/",
+                "Lcom/google/android/gms/",
+                "Lcom/google/android/play/",
             )
             expectSigned.set(variant.buildType != "release" || localReleaseBuild || signReleaseWithKeystore)
         }

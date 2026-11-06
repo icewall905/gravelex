@@ -1,0 +1,342 @@
+package io.rebble.libpebblecommon.js
+
+import co.touchlab.kermit.Logger
+import io.ktor.client.HttpClient
+import io.ktor.client.request.basicAuth
+import io.ktor.client.request.header
+import io.ktor.client.request.request
+import io.ktor.client.request.setBody
+import io.ktor.client.request.url
+import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.util.encodeBase64
+import io.ktor.util.flattenEntries
+import io.ktor.utils.io.charsets.MalformedInputException
+import io.rebble.libpebblecommon.permissions.NetworkAccess
+import io.rebble.libpebblecommon.plugin.PluginNetworkVerdict
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlin.uuid.Uuid
+
+private const val UNSENT = 0
+private const val OPENED = 1
+private const val HEADERS = 2
+private const val LOADING = 3
+private const val DONE = 4
+
+class XMLHTTPRequestManager(
+    private val scope: CoroutineScope,
+    private val eval: (String) -> Unit,
+    private val httpInterceptorManager: HttpInterceptorManager,
+    private val appUuid: Uuid,
+    private val client: HttpClient,
+    private val networkAccess: NetworkAccess,
+    /**
+     * The JS object responses are delivered into: `<jsTarget>._instances.get(id)`. PKJS gets the
+     * `XMLHttpRequest` class it writes against; a plugin gets `fetch`'s own registry, so nothing
+     * has to hand a plugin an XHR just to carry a reply back.
+     */
+    private val jsTarget: String = "XMLHttpRequest",
+): JsEngineInterface, AutoCloseable {
+    private var lastInstance = 0
+    private val instances = mutableMapOf<Int, XHRInstance>()
+    private val logger = Logger.withTag("XMLHTTPRequestManager")
+
+    override val methods = listOf(
+        "getXHRInstanceID",
+        "open",
+        "setRequestHeader",
+        "send",
+        "abort",
+    )
+
+    override val name = "_XMLHTTPRequestManager"
+
+    override fun dispatch(method: String, args: List<Any?>) = when (method) {
+        "getXHRInstanceID" -> getXHRInstanceID()
+        "open" -> {
+            open(
+                (args[0] as Number).toDouble(),
+                args[1].toString(),
+                args[2].toString(),
+                when (val v = args[3]) {
+                    is Boolean -> v
+                    is Number -> v.toInt() != 0
+                    else -> true
+                },
+                args[4].toString(),
+                args[5].toString()
+            )
+            null
+        }
+        "setRequestHeader" -> { setRequestHeader((args[0] as Number).toDouble(), args[1].toString(), args[2] ?: ""); null }
+        "send" -> { send((args[0] as Number).toDouble(), args[1]?.toString() ?: "", args.getOrNull(2)); null }
+        "abort" -> { abort((args[0] as Number).toDouble()); null }
+        else -> error("Unknown method: $method")
+    }
+
+    private fun getXHRInstanceID(): Int {
+        val id = ++lastInstance
+        instances[id] = XHRInstance(id)
+        return id
+    }
+
+    // JSC uses double for numbers
+    private fun open(instanceId: Double, method: String, url: String, async: Boolean, user: String, password: String) {
+        logger.d { "Instance $instanceId open()" }
+        val userNullable = user.ifEmpty { null }
+        val passwordNullable = password.ifEmpty { null }
+        instances[instanceId.toInt()]?.open(method, url, async, userNullable, passwordNullable)
+    }
+
+    private fun setRequestHeader(instanceId: Double, header: String, value: Any) {
+        instances[instanceId.toInt()]?.setRequestHeader(header, value)
+    }
+
+    private fun send(instanceId: Double, responseType: String, data: Any?) {
+        logger.d { "Instance $instanceId send()" }
+        val responseTypeNullable = responseType.ifEmpty { null }
+        val bytes = when (data) {
+            is ByteArray -> data
+            is String -> data.encodeToByteArray()
+            null -> null
+            else -> {
+                logger.e { "Invalid data type for send: ${data::class.simpleName}" }
+                null
+            }
+        }
+        instances[instanceId.toInt()]?.send(bytes, responseTypeNullable)
+    }
+
+    private fun abort(instanceId: Double) {
+        instances[instanceId.toInt()]?.abort()
+    }
+
+    inner class XHRInstance(val id: Int) {
+        private var async: Boolean = true
+        private var url: String? = null
+        private var method: HttpMethod? = null
+        private var user: String? = null
+        private var password: String? = null
+        private val headers = mutableMapOf<String, Any>()
+        var requestJob: Job? = null
+
+        private val jsInstance = "$jsTarget._instances.get($id)"
+
+        private fun changeReadyState(newState: Int) {
+            eval("$jsInstance.readyState = $newState")
+            dispatchEvent(XHREvent.ReadyStateChange)
+        }
+
+        private fun dispatchEvent(event: XHREvent) {
+            val evt = "{\"type\": \"${event.toJsName()}\"}"
+            // The fetch shim drops its instance on the resolving event, so a trailing one (load is
+            // followed by loadend) would otherwise call a method on undefined.
+            eval("$jsInstance && $jsInstance._dispatchEvent(${Json.encodeToString(event.toJsName())}, ${Json.encodeToString(evt)})")
+        }
+
+        fun open(method: String, url: String, async: Boolean?, user: String?, password: String?) {
+            this.async = async ?: true
+            this.url = url
+            this.method = HttpMethod.parse(method)
+            this.user = user
+            this.password = password
+            this.headers.clear()
+            if (!this.async) {
+                logger.w { "Synchronous XHR opened" }
+            }
+        }
+
+        fun setRequestHeader(header: String, value: Any) {
+            headers[header] = value
+        }
+
+        /**
+         * Checks network access against both the host in the URL and the host in the headers
+         */
+        private suspend fun checkAccess(url: String, headers: Map<String, Any>): PluginNetworkVerdict {
+            val verdict = networkAccess.check(url, wait = false)
+            if (verdict is PluginNetworkVerdict.Denied) return verdict
+            val hostUrl = hostHeaderUrl(url, headers) ?: return verdict
+            return networkAccess.check(hostUrl, wait = false)
+        }
+
+        private fun dispatchError(notAllowed: Boolean = false) {
+            if (notAllowed) eval("$jsInstance && ($jsInstance._notAllowed = true)")
+            changeReadyState(DONE)
+            dispatchEvent(XHREvent.Error)
+        }
+
+        fun send(data: ByteArray?, responseType: String?) {
+            // What was checked is what's sent, whatever open()/setRequestHeader() do meanwhile.
+            val url = url!!
+            val method = method!!
+            val user = user
+            val password = password
+            val headers = headers.toMap()
+            suspend fun execute() {
+                if (async) {
+                    dispatchEvent(XHREvent.LoadStart)
+                }
+                // Served on the phone, so no network check; interceptors check their own permissions.
+                if (httpInterceptorManager.shouldIntercept(url)) {
+                    val response = httpInterceptorManager.onIntercepted(url, method.value, data?.decodeToString(), appUuid)
+                    scope.launch {
+                        val responseHeaders = Json.encodeToString<Map<String, String>>(emptyMap())
+                        val status = Json.encodeToString(response.status)
+                        val statusText = Json.encodeToString(if (response.status == 200) "OK" else "Error")
+                        val body = Json.encodeToString(response.result)
+                        eval("$jsInstance._onResponseComplete($responseHeaders, $status, $statusText, $body)")
+                        changeReadyState(DONE)
+                        dispatchEvent(XHREvent.Load)
+                        dispatchEvent(XHREvent.LoadEnd)
+                    }
+                    return
+                }
+                val verdict = checkAccess(url, headers)
+                if (verdict is PluginNetworkVerdict.Denied) {
+                    logger.w { "$appUuid blocked: ${verdict.reason}" }
+                    dispatchError(notAllowed = true)
+                    return
+                }
+                val response = try {
+                    client.request {
+                        this.method = method
+                        this.url(url)
+                        if (user != null && password != null) {
+                            basicAuth(user, password)
+                        }
+                        if (data != null) {
+                            setBody(data)
+                        }
+                        headers.entries.forEach {
+                            header(it.key, it.value)
+                        }
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    logger.e { "Request timed out: ${e.message}" }
+                    scope.launch {
+                        changeReadyState(DONE)
+                        dispatchEvent(XHREvent.Timeout)
+                    }
+                    return
+                } catch (e: Exception) {
+                    logger.e(e) { "Request (size ${data?.size}) failed: ${e.message}" }
+                    scope.launch { dispatchError() }
+                    return
+                }
+                val responseHeaders = try {
+                    Json.encodeToString(response.headers
+                        .flattenEntries()
+                        .toMap()
+                        .mapKeys { it.key.lowercase() })
+                } catch (e: Throwable) {
+                    logger.e(e) { "Failed to serialize response headers: ${e.message}" }
+                    scope.launch { dispatchError() }
+                    return
+                }
+                val body = try {
+                    when (responseType) {
+                        "arraybuffer" -> Json.encodeToString(response.bodyAsBytes().encodeBase64())
+                        "text", "", "json", null -> {
+                            val text = try {
+                                response.bodyAsText()
+                            } catch (e: MalformedInputException) {
+                                logger.e(e) { "Response has charset errors: ${e.message}. Decoding as UTF-8 with replacements" }
+                                // Replace invalid sequences
+                                response.bodyAsBytes().decodeToString(throwOnInvalidSequence = false)
+                            }
+                            Json.encodeToString(text)
+                        }
+                        else -> {
+                            logger.e { "Invalid response type: $responseType" }
+                            "null"
+                        }
+                    }
+                } catch (e: Throwable) {
+                    logger.e(e) { "Failed to read response body (type $responseType): ${e.message}" }
+                    scope.launch { dispatchError() }
+                    return
+                }
+                val status = Json.encodeToString(response.status.value)
+                val statusText = Json.encodeToString(response.status.description)
+                logger.v { "XHR Response: $status $statusText" }
+                scope.launch {
+                    eval("$jsInstance._onResponseComplete($responseHeaders, $status, $statusText, $body)")
+                    changeReadyState(DONE)
+                    dispatchEvent(XHREvent.Load)
+                    dispatchEvent(XHREvent.LoadEnd)
+                }
+            }
+            if (async) {
+                requestJob = scope.launch(Dispatchers.IO) {
+                    execute()
+                }
+            } else {
+                runBlocking(Dispatchers.IO) {
+                    execute()
+                }
+            }
+        }
+
+        fun abort() {
+            requestJob?.cancel("Aborted by JS")
+            requestJob = null
+            changeReadyState(DONE)
+            dispatchEvent(XHREvent.Abort)
+        }
+    }
+
+    override fun close() {
+        instances.values.forEach { it.requestJob?.cancel("Closing") }
+        instances.clear()
+    }
+}
+
+/** Internally  */
+internal fun hostHeaderUrl(url: String, headers: Map<String, Any>): String? {
+    val host = headers.entries
+        .firstOrNull { it.key.equals(HttpHeaders.Host, ignoreCase = true) }
+        ?.value?.toString()?.trim()
+        ?.ifEmpty { null }
+        ?: return null
+    return "${url.substringBefore("://")}://$host/"
+}
+
+enum class XHREvent {
+    Abort,
+    Error,
+    Load,
+    LoadEnd,
+    LoadStart,
+    Progress,
+    ReadyStateChange,
+    Timeout;
+    companion object {
+        fun fromString(event: String): XHREvent? {
+            return entries.firstOrNull { it.name.equals(event, ignoreCase = true) }
+        }
+    }
+
+    fun toJsName(): String {
+        return name.lowercase()
+    }
+}
+
+@Serializable
+data class CompleteXHRResponse(
+    val responseHeaders: Map<String, String>,
+    val responseData: String,
+    val status: Int,
+    val contentType: String?
+)

@@ -5,14 +5,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,9 +25,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.unit.dp
 import co.touchlab.kermit.Logger
 import com.multiplatform.webview.request.RequestInterceptor
 import com.multiplatform.webview.request.WebRequest
@@ -37,20 +46,31 @@ import com.multiplatform.webview.web.rememberWebViewNavigator
 import com.multiplatform.webview.web.rememberWebViewState
 import coreapp.util.generated.resources.Res
 import coreapp.util.generated.resources.back
-import coredevices.pebble.rememberLibPebble
+import coredevices.pebble.config.ConfigPageBridge
+import coredevices.pebble.config.ConfigPageClosedListener
+import coredevices.pebble.config.ConfigPageSessions
+import coredevices.pebble.config.ConfigScriptIds
+import coredevices.pebble.config.PluginConfigFileAccess
+import coredevices.pebble.config.performWebSignIn
+import coredevices.pebble.config.webSignInSupported
+import coredevices.util.isDebugBuild
+import coredevices.util.rememberUiContext
 import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import io.ktor.http.decodeURLPart
-import io.rebble.libpebblecommon.connection.ConnectedPebbleDevice
+import io.rebble.libpebblecommon.connection.AppContext
+import io.rebble.libpebblecommon.connection.LibPebble
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import org.jetbrains.compose.resources.stringResource
+import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
 private const val URL_DATA_PREFIX = "data:text/html;charset=utf-8,"
@@ -66,65 +86,71 @@ internal object WatchappSettingsUrlCache {
 }
 internal expect fun webViewFactory(
     params: WebViewFactoryParam,
-    uuid: Uuid
+    uuid: Uuid,
+    /** Null leaves the page with no `Pebble` object, which is what a plain webview should be. */
+    bridge: ConfigPageBridge?,
+    /** Blocking; whatever the page loads or connects to is checked against the app's permissions. */
+    mayLoad: (String) -> Boolean,
+    network: ConfigPageNetwork,
 ): NativeWebView
+
+/** Limits what a config page may connect to, on top of [webViewFactory]'s per-request checks. */
+internal expect class ConfigPageNetwork
+
+/** [domains] each cover their subdomains; null leaves the page unrestricted. */
+internal expect suspend fun configPageNetwork(uuid: Uuid, domains: List<String>?): ConfigPageNetwork
 
 internal expect suspend fun restoreLocalStorage(webView: NativeWebView)
 internal expect fun persistLocalStorage(webView: NativeWebView)
 
-// onRendererGone runs on the main thread once the page's renderer process has exited.
 @Composable
-internal expect fun rememberPlatformWebViewParams(onRendererGone: () -> Unit): PlatformWebViewParams?
+internal expect fun rememberPlatformWebViewParams(mayLoad: (String) -> Boolean, onRendererGone: () -> Unit): PlatformWebViewParams?
 
 private val logger = Logger.withTag("WatchappSettingsScreen")
 
-@OptIn(ExperimentalCoroutinesApi::class)
 @Composable
 fun WatchappSettingsScreen(
     coreNav: CoreNav,
-    watchIdentifier: String,
+    /** What is being configured: a watchapp, a plugin, or a pbw that ships both. */
+    uuid: String,
     title: String,
 ) {
-    val url = remember(watchIdentifier) {
-        normalizeWatchappSettingsUrl(WatchappSettingsUrlCache.get(watchIdentifier) ?: "")
+    val libPebble = koinInject<LibPebble>()
+    // Opened from outside the locker (a plugin picked as an Index destination), nothing is cached.
+    val resolvedUrl by produceState(initialValue = WatchappSettingsUrlCache.get(uuid), uuid) {
+        if (value == null) {
+            value = runCatching { Uuid.parse(uuid) }.getOrNull()
+                ?.let { libPebble.appConfigPageUrl(it) } ?: ""
+        }
     }
-    DisposableEffect(watchIdentifier) {
-        onDispose { WatchappSettingsUrlCache.remove(watchIdentifier) }
+    val url = resolvedUrl?.let(::normalizeWatchappSettingsUrl) ?: return
+    val closedListener: ConfigPageClosedListener = koinInject()
+    DisposableEffect(uuid) {
+        onDispose {
+            WatchappSettingsUrlCache.remove(uuid)
+            runCatching { Uuid.parse(uuid) }.getOrNull()?.let(closedListener::onConfigPageClosed)
+        }
     }
     Box(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
-        val libPebble = rememberLibPebble()
-        val pkjsSessionFlow = remember(watchIdentifier) {
-            libPebble.watches
-                .flatMapLatest { watches ->
-                    watches.filterIsInstance<ConnectedPebbleDevice>().firstOrNull { watch ->
-                        watch.identifier.asString == watchIdentifier
-                    }?.currentPKJSSession ?: emptyFlow()
-                }
-        }
-        val pkjsSession by pkjsSessionFlow.collectAsState(null)
-        // Close the screen if the PKJS session we opened settings for ends or is
-        // replaced — otherwise the webviewclosed event would route to a different
-        // app's session.
-        var originalSessionUuid by remember { mutableStateOf<Uuid?>(null) }
-        LaunchedEffect(pkjsSession?.uuid) {
-            val currentUuid = pkjsSession?.uuid
-            if (originalSessionUuid == null) {
-                if (currentUuid != null) originalSessionUuid = currentUuid
-            } else if (currentUuid != originalSessionUuid) {
-                logger.d {
-                    "PKJS session changed (was $originalSessionUuid, now $currentUuid); closing settings"
-                }
-                withContext(Dispatchers.Main) {
-                    coreNav.goBack()
-                }
+        val sessions: ConfigPageSessions = koinInject()
+        val session by remember(uuid, title) { sessions.sessionsFor(uuid, title) }
+            .collectAsState(null)
+        // Nothing left to configure — the watchapp stopped and there is no plugin behind it.
+        LaunchedEffect(session) {
+            if (session?.isOrphaned == true) {
+                logger.d { "No scripts left for $uuid; closing settings" }
+                withContext(Dispatchers.Main) { coreNav.goBack() }
             }
         }
-        val platformWebViewParams = rememberPlatformWebViewParams(
-            onRendererGone = {
-                logger.w { "Settings page renderer gone; closing settings" }
-                coreNav.goBack()
-            },
-        )
+        val webViewUuid = remember(uuid) { runCatching { Uuid.parse(uuid) }.getOrNull() }
+        val mayLoad = remember(webViewUuid) {
+            { url: String -> webViewUuid != null && runBlocking { libPebble.mayLoadInConfigPage(webViewUuid, url) } }
+        }
+        val platformParams = rememberPlatformWebViewParams(mayLoad, onRendererGone = { coreNav.goBack() })
+        // Fixed when the page opens: a domain approved later applies from the next visit.
+        val network by produceState<ConfigPageNetwork?>(null, webViewUuid) {
+            value = webViewUuid?.let { configPageNetwork(it, libPebble.configPageDomains(it)) }
+        }
         val state = rememberWebViewState(url) {
             androidWebSettings.domStorageEnabled = true
             iOSWebSettings.isInspectable = true
@@ -133,9 +159,7 @@ fun WatchappSettingsScreen(
             SettingsRequestInterceptor(
                 onSuccess = { data ->
                     runCatching { state.nativeWebView }.getOrNull()?.let { persistLocalStorage(it) }
-                    pkjsSession?.triggerOnWebviewClosed(data) ?: run {
-                        logger.w { "No PKJS session found for $watchIdentifier, cannot handle webview close" }
-                    }
+                    session?.onPageClosed(data)
                     withContext(Dispatchers.Main) {
                         coreNav.goBack()
                     }
@@ -149,6 +173,91 @@ fun WatchappSettingsScreen(
             )
         }
         val navigator = rememberWebViewNavigator(requestInterceptor = interceptor)
+        val scope = rememberCoroutineScope()
+        // One bridge for the life of the screen: it is installed when the WebView is built,
+        // before any page has loaded, and picks up scripts as they resolve.
+        val bridge = remember { if (sessions.enabled) ConfigPageBridge(scope) else null }
+        val uiContext = rememberUiContext()
+        val appContext: AppContext = koinInject()
+        val debugBuild = remember { appContext.isDebugBuild() }
+        val webSignInApp by remember(webViewUuid) {
+            webViewUuid?.let { libPebble.getLockerApp(it) } ?: flowOf(null)
+        }.collectAsState(null)
+        LaunchedEffect(bridge, webSignInApp, uiContext, debugBuild) {
+            val ctx = uiContext
+            // Only offer web sign-in where the platform can isolate its cookie jar.
+            bridge?.webSignIn = if (ctx != null && webSignInSupported() &&
+                webSignInApp?.mayUseWebSignIn(debugBuild) == true) {
+                { request -> performWebSignIn(ctx, request) }
+            } else {
+                null
+            }
+        }
+        var linkRequest by remember { mutableStateOf<LinkRequest?>(null) }
+        LaunchedEffect(bridge) {
+            bridge?.openUrl = { url ->
+                // One at a time, so a page can't swap the url while the user is reading it.
+                if (linkRequest != null) {
+                    false
+                } else {
+                    val answer = CompletableDeferred<Boolean>()
+                    linkRequest = LinkRequest(url, Url(url).host, answer)
+                    answer.await()
+                }
+            }
+        }
+        linkRequest?.let { request ->
+            val uriHandler = LocalUriHandler.current
+            val close = { opened: Boolean ->
+                request.answer.complete(opened)
+                linkRequest = null
+            }
+            AlertDialog(
+                onDismissRequest = { close(false) },
+                title = { Text("Open in browser?") },
+                text = {
+                    Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                        Text("$title wants to open a page on")
+                        Text(request.host, style = MaterialTheme.typography.titleMedium)
+                        Text(request.url, style = MaterialTheme.typography.bodySmall)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { close(runCatching { uriHandler.openUri(request.url) }.isSuccess) }) {
+                        Text("Open")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { close(false) }) { Text("Cancel") }
+                },
+            )
+        }
+        LaunchedEffect(bridge, session, uiContext, webViewUuid) {
+            val ctx = uiContext
+            val pluginUuid = webViewUuid
+            // Only a plugin can use a granted file, so a page with none behind it gets no picker.
+            bridge?.fileAccess = if (ctx != null && pluginUuid != null &&
+                session?.scripts?.containsKey(ConfigScriptIds.PLUGIN) == true) {
+                PluginConfigFileAccess(libPebble, pluginUuid, ctx)
+            } else {
+                null
+            }
+        }
+        DisposableEffect(session) {
+            val open = session
+            bridge?.scripts = open?.scripts.orEmpty()
+            // Starting a plugin takes a moment; the page waits for its 'ready' event.
+            val starting = scope.launch { open?.open { target -> bridge?.ready(target) } }
+            onDispose {
+                starting.cancel()
+                open?.scripts?.keys?.forEach { bridge?.forget(it) }
+                bridge?.scripts = emptyMap()
+                scope.launch { open?.close() }
+            }
+        }
+        LaunchedEffect(session) {
+            session?.messages?.collect { (target, json) -> bridge?.push(target, json) }
+        }
         LaunchedEffect(state.loadingState) {
             if (state.loadingState is LoadingState.Loading) {
                 logger.d { "Page load finished, applying shims" }
@@ -179,18 +288,21 @@ fun WatchappSettingsScreen(
                 )
             }
         ) { paddingValues ->
-            pkjsSession?.uuid?.let { uuid ->
+            val pageNetwork = network
+            if (webViewUuid != null && pageNetwork != null) {
                 WebView(
                     state = state,
                     modifier = Modifier.fillMaxSize().padding(paddingValues),
                     navigator = navigator,
-                    platformWebViewParams = platformWebViewParams,
-                    factory = { webViewFactory(it, uuid) }
+                    platformWebViewParams = platformParams,
+                    factory = { webViewFactory(it, webViewUuid, bridge, mayLoad, pageNetwork) }
                 )
             }
         }
     }
 }
+
+private class LinkRequest(val url: String, val host: String, val answer: CompletableDeferred<Boolean>)
 
 internal fun normalizeWatchappSettingsUrl(url: String): String {
     val parsed = runCatching { Url(url) }.getOrNull() ?: return url

@@ -132,6 +132,8 @@ fun BugReportScreen(
     pebble: Boolean,
     recordingPath: String?,
     screenshotPath: String?,
+    screenContext: String? = null,
+    initialText: String? = null,
 ) {
     Box(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
         val platform = koinInject<Platform>()
@@ -144,7 +146,7 @@ fun BugReportScreen(
         val coreConfig by coreConfigFlow.flow.collectAsState()
         val bugReportProcessor = koinInject<BugReportProcessor>()
         val nextBugReportContext = koinInject<NextBugReportContext>()
-        val (userMessage, setUserMessage) = remember { mutableStateOf("") }
+        val (userMessage, setUserMessage) = remember { mutableStateOf(initialText ?: "") }
         val (sending, setSending) = remember { mutableStateOf(false) }
         val (showSuccess, setShowSuccess) = remember { mutableStateOf(false) }
         val (sendRecording, setSendRecording) = remember { mutableStateOf(recordingPath != null) }
@@ -221,7 +223,7 @@ fun BugReportScreen(
                     userMessage = userMessage,
                     userName = currentUser?.userName,
                     userEmail = currentUser?.userEmail,
-                    screenContext = nextBugReportContext.nextContext ?: "",
+                    screenContext = screenContext ?: nextBugReportContext.nextContext ?: "",
                     attachments = attachments ?: emptyList(),
                     sendRecording = sendRecording,
                     sendRecentRecordings = !isWatch && sendRecentRecordings,

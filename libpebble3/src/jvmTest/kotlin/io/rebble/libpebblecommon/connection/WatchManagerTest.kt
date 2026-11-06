@@ -270,6 +270,7 @@ class WatchManagerTest {
             }
         }
         val analytics = object : LibPebbleAnalytics {
+            override fun incrementHeartbeatCounter(name: String) {}
             override fun logEvent(
                 name: String,
                 parameters: Map<String, String>

@@ -85,6 +85,8 @@ class RealPebbleAccountTest {
         override suspend fun initUserDevToken(rebbleUserToken: String?) {}
         override suspend fun updateLastConnectedWatch(serial: String) {}
         override suspend fun updateRingLifetimeCollectionCount(serial: String, count: Int) {}
+        override suspend fun updateRingBatteryVoltage(serial: String, voltageMilliV: Int) {}
+        override suspend fun signOut() {}
         override fun init() {}
     }
 

@@ -12,7 +12,7 @@ import com.multiplatform.webview.web.AccompanistWebViewClient
  * the library's release path (compose-webview-multiplatform 2.0.3, AccompanistWebView) only
  * calls the caller's onDispose.
  */
-class RendererGoneAwareWebViewClient(
+open class RendererGoneAwareWebViewClient(
     private val onRendererGone: (view: WebView, didCrash: Boolean) -> Unit,
 ) : AccompanistWebViewClient() {
     // Platform contract: see WebViewJsRunner's override.

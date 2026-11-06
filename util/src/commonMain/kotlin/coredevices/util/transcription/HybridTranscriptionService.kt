@@ -1,11 +1,19 @@
 package coredevices.util.transcription
 
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import co.touchlab.kermit.Logger
 import com.anopticlabs.gravel.transcription.ServerDictationHold
 import coredevices.analytics.CoreAnalytics
 import coredevices.util.AudioEncoding
 import coredevices.util.CoreConfigFlow
 import coredevices.util.models.CactusSTTMode
+import coredevices.util.models.ModelDownloadManager
+import coredevices.util.models.inProgress
+import io.rebble.libpebblecommon.plugin.Connections
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -14,6 +22,7 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -25,6 +34,7 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlin.time.TimeSource
 
 /**
  * Mode-aware [TranscriptionService] that routes between the local whisper model
@@ -45,21 +55,62 @@ class HybridTranscriptionService(
     private val selfHosted: SelfHostedTranscriptionService? = null,
     // Gravel: shared with the Notebook's long recordings on that server.
     private val serverDictation: ServerDictationHold,
-) : TranscriptionService {
+    private val modelDownloads: ModelDownloadManager? = null,
+) : LocalTranscriptionService {
     companion object {
         private val logger = Logger.withTag("HybridTranscriptionService")
         private val wisprSkipInterval = 1.seconds
+
+        private const val LOCAL_TIMEOUT_FACTOR = 3.5
+        private const val BYTES_PER_SAMPLE = 2
+        private val localTimeoutBaseline = 10.seconds
+        private val minLocalTimeout = 10.seconds
+        private val maxLocalTimeout = 45.seconds
+        private val remoteFallbackReserve = 7.seconds
+        private val connectionQueryTimeout = 1.seconds
+
+        /** Warm the local model when it is the preferred engine, or likely to be the fallback. */
+        internal fun shouldWarmUpLocalModel(mode: CactusSTTMode, connection: String?): Boolean =
+            when (mode) {
+                CactusSTTMode.LocalOnly, CactusSTTMode.LocalFirst -> true
+                CactusSTTMode.RemoteFirst, CactusSTTMode.RebbleFirst, CactusSTTMode.RebbleFallback ->
+                    connection == Connections.NONE
+                else -> false
+            }
+
+        /**
+         * Budget for a local run: a fixed baseline plus a per-second allowance, capped by what is
+         * left of the caller's [remaining] budget after keeping [reserve] for a fallback leg.
+         */
+        internal fun localTimeout(
+            audio: ByteArray,
+            sampleRate: Int,
+            remaining: Duration? = null,
+            reserve: Duration = Duration.ZERO,
+        ): Duration {
+            val seconds = audio.size / (sampleRate * BYTES_PER_SAMPLE).coerceAtLeast(1).toDouble()
+            val byClip = (localTimeoutBaseline + (seconds * LOCAL_TIMEOUT_FACTOR).seconds)
+                .coerceIn(minLocalTimeout, maxLocalTimeout)
+            if (remaining == null) return byClip
+            return minOf(byClip, (remaining - reserve).coerceAtLeast(Duration.ZERO))
+        }
     }
 
     // Read fresh from the config StateFlow on every access so a runtime mode/model change takes
     // effect without restarting the app (not cached in a stateIn that nothing collects).
     private val sttConfig get() = coreConfigFlow.value.sttConfig
 
+    private val scope = CoroutineScope(Dispatchers.Default)
+
     private val lastErrorMutex = Mutex()
     private var lastWisprError = Instant.DISTANT_PAST
 
     private var _lastSuccessfulMode: CactusSTTMode? = null
     private var _lastModelUsed: String? = null
+
+    private val _modelPrompts = MutableSharedFlow<SpeechModelPrompt>(extraBufferCapacity = 1)
+
+    override val modelPrompts: SharedFlow<SpeechModelPrompt> = _modelPrompts.asSharedFlow()
 
     // Diagnostics consumed by the bug report STT summary.
     val configuredMode get() = sttConfig.mode
@@ -177,8 +228,36 @@ class HybridTranscriptionService(
     private data class RoutedResult(
         val text: String?,
         val modeUsed: CactusSTTMode,
-        val modelUsed: String?
+        val modelUsed: String?,
+        val localFallback: Boolean = false,
     )
+
+    private suspend fun remoteAvailable(): Boolean = wisprFlow.isAvailable() || kirinki.isAvailable()
+
+    private fun cactusModelAvailability(): SpeechModelAvailability = when {
+        whisper.isLocalAvailable() -> SpeechModelAvailability.Installed
+        modelDownloads?.downloadStatus?.value?.inProgress == true -> SpeechModelAvailability.Downloading
+        else -> SpeechModelAvailability.NotDownloaded
+    }
+
+    /**
+     * Runs an on-device engine leg, turning its [TranscriptionException.TranscriptionRequiresDownload]
+     * into a user prompt before rethrowing so the mode's usual fallback still runs.
+     */
+    private suspend fun <T> onDeviceLeg(
+        mode: CactusSTTMode,
+        cloudFallback: Boolean,
+        availability: suspend () -> SpeechModelAvailability,
+        block: suspend () -> T,
+    ): T = try {
+        block()
+    } catch (e: TranscriptionException.TranscriptionRequiresDownload) {
+        speechModelPrompt(mode, availability(), cloudFallback)?.let { prompt ->
+            logger.i { "On-device model unavailable: $prompt" }
+            _modelPrompts.tryEmit(prompt)
+        }
+        throw e
+    }
 
     /**
      * Run remote transcription: through the self-hosted server when one is configured, else via
@@ -281,8 +360,12 @@ class HybridTranscriptionService(
         conversationContext: STTConversationContext?,
         dictionaryContext: List<String>?,
         contentContext: String?,
-        initialTimeout: Duration? = null
+        initialTimeout: Duration? = null,
+        totalTimeout: Duration? = null,
     ): RoutedResult {
+        val start = TimeSource.Monotonic.markNow()
+        fun remaining(): Duration? = totalTimeout?.minus(start.elapsedNow())
+
         suspend fun remote(willFallbackLocal: Boolean): TranscriptionSessionStatus.Transcription =
             remoteTranscribe(
                 audio = audio,
@@ -294,6 +377,15 @@ class HybridTranscriptionService(
                 willFallbackLocal = willFallbackLocal,
                 initialTimeout = initialTimeout ?: if (willFallbackLocal) 7.seconds else 10.seconds
             )
+
+        suspend fun local(cloudFallback: Boolean, reserve: Duration = Duration.ZERO): String =
+            onDeviceLeg(sttConfig.mode, cloudFallback, { cactusModelAvailability() }) {
+                whisper.transcribeLocal(
+                    audio,
+                    sampleRate,
+                    timeout = localTimeout(audio, sampleRate, remaining(), reserve),
+                )
+            }
 
         logger.d { "Using transcription mode ${sttConfig.mode}" }
         if (keepsDictationOnPhone()) {
@@ -340,7 +432,9 @@ class HybridTranscriptionService(
                     return RoutedResult(result.text, CactusSTTMode.RemoteOnly, result.modelUsed)
                 }
                 val text = try {
-                    platform.transcribe(audio, sampleRate, languageTag).also {
+                    onDeviceLeg(sttMode, remoteAvailable(), { platform.modelAvailability(languageTag) }) {
+                        platform.transcribe(audio, sampleRate, languageTag)
+                    }.also {
                         analytics.logTranscriptionSuccess("platform")
                     }
                 } catch (e: CancellationException) {
@@ -416,8 +510,10 @@ class HybridTranscriptionService(
         contentContext: String?,
         encoding: AudioEncoding,
         initialTimeout: Duration?,
+        totalTimeout: Duration?,
     ): Flow<TranscriptionSessionStatus> = flow {
         logger.d { "HybridTranscriptionService.transcribe() called" }
+        val start = TimeSource.Monotonic.markNow()
         // Kick off local model init concurrently with audio collection so it's warm if we need it.
         earlyInit()
         // Gravel: this dictation's server hold replaces the ones raised as its session opened and ends with it.
@@ -428,7 +524,7 @@ class HybridTranscriptionService(
             null
         }
         try {
-            dictate(audioStreamFrames, sampleRate, language, conversationContext, dictionaryContext, contentContext, initialTimeout)
+            dictate(audioStreamFrames, sampleRate, language, conversationContext, dictionaryContext, contentContext, initialTimeout, totalTimeout)
         } finally {
             serverHold?.let(serverDictation::release)
         }
@@ -442,7 +538,9 @@ class HybridTranscriptionService(
         dictionaryContext: List<String>?,
         contentContext: String?,
         initialTimeout: Duration?,
+        totalTimeout: Duration?,
     ) {
+        val start = TimeSource.Monotonic.markNow()
         emit(TranscriptionSessionStatus.Open)
 
         if (audioStreamFrames == null) return
@@ -460,8 +558,7 @@ class HybridTranscriptionService(
         }
 
         try {
-            val start = Clock.System.now()
-            val (text, modeUsed, modelUsed) = route(
+            val (text, modeUsed, modelUsed, localFallback) = route(
                 audio = buffer.readByteArray(),
                 sampleRate = sampleRate,
                 language = language,
@@ -469,8 +566,9 @@ class HybridTranscriptionService(
                 dictionaryContext = dictionaryContext,
                 contentContext = contentContext,
                 initialTimeout = initialTimeout,
+                totalTimeout = totalTimeout?.minus(start.elapsedNow()),
             )
-            val duration = Clock.System.now() - start
+            val duration = start.elapsedNow()
             logger.d { "Transcription completed in $duration" }
 
             validateContainsSpeech(text, modelUsed)
@@ -487,7 +585,8 @@ class HybridTranscriptionService(
             emit(TranscriptionSessionStatus.Transcription(
                 text?.ifBlank { null }
                     ?: throw TranscriptionException.NoSpeechDetected("Failed to understand audio", modelUsed = modelUsed),
-                modelUsed
+                modelUsed,
+                localFallback,
             ))
         } catch (e: TimeoutCancellationException) {
             logger.e(e) { "Uncaught timeout during transcription" }

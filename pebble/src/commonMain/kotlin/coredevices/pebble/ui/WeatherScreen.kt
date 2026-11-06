@@ -13,10 +13,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.EditLocationAlt
+import androidx.compose.material.icons.filled.EditLocation
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Refresh
@@ -43,19 +44,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import co.touchlab.kermit.Logger
 import coredevices.database.WeatherLocationDao
 import coredevices.database.WeatherLocationEntity
 import coredevices.pebble.weather.WeatherFetcher
-import coredevices.pebble.weather.manualWeatherLocation
-import coredevices.pebble.weather.parseLatitude
-import coredevices.pebble.weather.parseLongitude
 import coredevices.pebble.weather.usefulName
 import coredevices.ui.M3Dialog
 import dev.jordond.compass.Place
 import dev.jordond.compass.autocomplete.Autocomplete
 import dev.jordond.compass.autocomplete.mobile
+import dev.jordond.compass.geocoder.Geocoder
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -111,9 +111,7 @@ fun WeatherScreen(navBarNav: NavBarNav, topBarParams: TopBarParams) {
                 }
             },
             allowCurrentLocation = !locations.any { it.currentLocation },
-            // max+1, not size: delete doesn't compact indices, so size can collide
-            // with a surviving row and make the ORDER BY tie-break unspecified.
-            orderIndex = (locations.maxOfOrNull { it.orderIndex } ?: -1) + 1,
+            orderIndex = locations.size,
         )
     }
 
@@ -171,7 +169,13 @@ fun WeatherScreen(navBarNav: NavBarNav, topBarParams: TopBarParams) {
                             ListItem(
                                 headlineContent = { Text(location.name) },
                                 supportingContent = {
-                                    Text(if (location.currentLocation) "Current Location" else "Fixed Location")
+                                    Text(
+                                        when {
+                                            location.currentLocation -> "Current Location"
+                                            location.manual -> "Manual Location"
+                                            else -> "Fixed Location"
+                                        }
+                                    )
                                 },
                                 trailingContent = {
                                     IconButton(onClick = { locationToDelete = location }) {
@@ -196,16 +200,35 @@ private fun AddWeatherLocationDialog(
     allowCurrentLocation: Boolean,
     orderIndex: Int,
 ) {
-    var mode by remember { mutableStateOf(AddLocationMode.Choose) }
+    val geocoder: Geocoder = koinInject()
+    val searchAvailable = remember { geocoder.isAvailable() }
+    var mode by remember {
+        mutableStateOf(if (allowCurrentLocation || searchAvailable) AddLocationMode.Choose else AddLocationMode.Manual)
+    }
     var addressQuery by remember { mutableStateOf("") }
     val autoComplete = remember { Autocomplete.mobile() }
     var suggestions by remember { mutableStateOf<List<Place>>(emptyList()) }
     var searchFailed by remember { mutableStateOf(false) }
-    var latitudeText by remember { mutableStateOf("") }
-    var longitudeText by remember { mutableStateOf("") }
-    var nameText by remember { mutableStateOf("") }
-    val latitude = parseLatitude(latitudeText)
-    val longitude = parseLongitude(longitudeText)
+    var manualName by remember { mutableStateOf("") }
+    var manualLatitude by remember { mutableStateOf("") }
+    var manualLongitude by remember { mutableStateOf("") }
+    val parsedLatitude = parseCoordinate(manualLatitude, 90.0)
+    val parsedLongitude = parseCoordinate(manualLongitude, 180.0)
+
+    fun addLocation(name: String, latitude: Double?, longitude: Double?, currentLocation: Boolean = false, manual: Boolean = false) {
+        onAddLocation(
+            WeatherLocationEntity(
+                key = Uuid.random(),
+                name = name,
+                latitude = latitude,
+                longitude = longitude,
+                currentLocation = currentLocation,
+                manual = manual,
+                orderIndex = orderIndex,
+            )
+        )
+        onDismiss()
+    }
 
     LaunchedEffect(addressQuery) {
         if (addressQuery.length >= 3) {
@@ -236,18 +259,13 @@ private fun AddWeatherLocationDialog(
                 }
             )
         },
-        scrollableContent = mode == AddLocationMode.Manual,
         buttons = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
             if (mode == AddLocationMode.Manual) {
                 Spacer(Modifier.width(8.dp))
                 TextButton(
-                    enabled = latitude != null && longitude != null,
-                    onClick = {
-                        if (latitude == null || longitude == null) return@TextButton
-                        onAddLocation(manualWeatherLocation(latitude, longitude, nameText, orderIndex))
-                        onDismiss()
-                    },
+                    onClick = { addLocation(manualName.trim(), parsedLatitude, parsedLongitude, manual = true) },
+                    enabled = manualName.isNotBlank() && parsedLatitude != null && parsedLongitude != null,
                 ) { Text("Add") }
             }
         },
@@ -255,35 +273,57 @@ private fun AddWeatherLocationDialog(
         when (mode) {
             AddLocationMode.Choose -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (allowCurrentLocation) {
-                    AddLocationChoice(
+                    AddLocationOption(
                         icon = Icons.Default.MyLocation,
                         title = "Current Location",
-                        subtitle = "Uses your device's location",
-                    ) {
-                        val location = WeatherLocationEntity(
-                            key = Uuid.random(),
-                            name = "Current Location",
-                            latitude = null,
-                            longitude = null,
-                            currentLocation = true,
-                            orderIndex = orderIndex,
-                        )
-                        onAddLocation(location)
-                        onDismiss()
-                    }
+                        description = "Uses your device's location",
+                        onClick = { addLocation("Current Location", null, null, currentLocation = true) },
+                    )
                 }
+                if (searchAvailable) {
+                    AddLocationOption(
+                        icon = Icons.Default.LocationOn,
+                        title = "Fixed Location",
+                        description = "Search for a specific address",
+                        onClick = { mode = AddLocationMode.Search },
+                    )
+                }
+                AddLocationOption(
+                    icon = Icons.Default.EditLocation,
+                    title = "Manual Coordinates",
+                    description = "Enter latitude and longitude",
+                    onClick = { mode = AddLocationMode.Manual },
+                )
+            }
 
-                AddLocationChoice(
-                    icon = Icons.Default.LocationOn,
-                    title = "Fixed Location",
-                    subtitle = "Search for a specific address",
-                ) { mode = AddLocationMode.Search }
-
-                AddLocationChoice(
-                    icon = Icons.Default.EditLocationAlt,
-                    title = "Coordinates",
-                    subtitle = "Enter latitude and longitude",
-                ) { mode = AddLocationMode.Manual }
+            AddLocationMode.Manual -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = manualName,
+                    onValueChange = { manualName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Name") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = manualLatitude,
+                    onValueChange = { manualLatitude = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Latitude") },
+                    placeholder = { Text("e.g. 51.5074") },
+                    isError = manualLatitude.isNotBlank() && parsedLatitude == null,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+                OutlinedTextField(
+                    value = manualLongitude,
+                    onValueChange = { manualLongitude = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Longitude") },
+                    placeholder = { Text("e.g. -0.1278") },
+                    isError = manualLongitude.isNotBlank() && parsedLongitude == null,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
             }
 
             AddLocationMode.Search -> Column {
@@ -311,17 +351,11 @@ private fun AddWeatherLocationDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        val locationName = place.usefulName() ?: displayName
-                                        val location = WeatherLocationEntity(
-                                            key = Uuid.random(),
-                                            name = locationName,
-                                            latitude = place.coordinates.latitude,
-                                            longitude = place.coordinates.longitude,
-                                            currentLocation = false,
-                                            orderIndex = orderIndex,
+                                        addLocation(
+                                            place.usefulName() ?: displayName,
+                                            place.coordinates.latitude,
+                                            place.coordinates.longitude,
                                         )
-                                        onAddLocation(location)
-                                        onDismiss()
                                     }
                                     .padding(vertical = 10.dp, horizontal = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -346,10 +380,6 @@ private fun AddWeatherLocationDialog(
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = 12.dp),
                     )
-                    TextButton(
-                        onClick = { mode = AddLocationMode.Manual },
-                        modifier = Modifier.padding(top = 4.dp),
-                    ) { Text("Enter coordinates instead") }
                 } else if (addressQuery.length >= 3) {
                     Text(
                         "Type to search for locations...",
@@ -359,52 +389,18 @@ private fun AddWeatherLocationDialog(
                     )
                 }
             }
-
-            // Plain text keyboard on these fields: some IMEs' decimal layouts
-            // have no minus key, which southern/western coordinates need.
-            AddLocationMode.Manual -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = latitudeText,
-                    onValueChange = { latitudeText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Latitude") },
-                    placeholder = { Text("e.g. 51.5074") },
-                    singleLine = true,
-                    isError = latitudeText.isNotBlank() && latitude == null,
-                    supportingText = if (latitudeText.isNotBlank() && latitude == null) {
-                        { Text("Number between -90 and 90") }
-                    } else null,
-                )
-                OutlinedTextField(
-                    value = longitudeText,
-                    onValueChange = { longitudeText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Longitude") },
-                    placeholder = { Text("e.g. -0.1278") },
-                    singleLine = true,
-                    isError = longitudeText.isNotBlank() && longitude == null,
-                    supportingText = if (longitudeText.isNotBlank() && longitude == null) {
-                        { Text("Number between -180 and 180") }
-                    } else null,
-                )
-                OutlinedTextField(
-                    value = nameText,
-                    onValueChange = { nameText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Name (optional)") },
-                    placeholder = { Text("Defaults to the coordinates") },
-                    singleLine = true,
-                )
-            }
         }
     }
 }
 
+internal fun parseCoordinate(text: String, limit: Double): Double? =
+    text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it in -limit..limit }
+
 @Composable
-private fun AddLocationChoice(
+private fun AddLocationOption(
     icon: ImageVector,
     title: String,
-    subtitle: String,
+    description: String,
     onClick: () -> Unit,
 ) {
     Row(
@@ -414,16 +410,12 @@ private fun AddLocationChoice(
             .padding(vertical = 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-        )
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(
-                subtitle,
+                description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

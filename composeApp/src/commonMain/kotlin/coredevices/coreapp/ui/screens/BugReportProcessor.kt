@@ -19,6 +19,8 @@ import coredevices.util.CompanionDevice
 import coredevices.util.CoreConfigFlow
 import coredevices.util.PermissionRequester
 import coredevices.util.models.CactusSTTMode
+import coredevices.util.storage.appStorageBreakdown
+import coredevices.util.storage.formatStorageSummary
 import coredevices.util.transcription.HybridTranscriptionService
 import dev.gitlive.firebase.Firebase
 import dev.gitlive.firebase.auth.auth
@@ -56,6 +58,7 @@ import kotlinx.serialization.json.JsonObject
 import org.koin.mp.KoinPlatform
 import size
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 
 data class BugReportGenerationParams(
@@ -287,6 +290,9 @@ class BugReportProcessor(
         val pkjsSummary = getPKJSSummary()
         val sttSummary = getSTTSummary()
         val pebbleContext = pebbleScreenContext()
+        val storageSummary = withContext(Dispatchers.IO) {
+            formatStorageSummary(appContext.appStorageBreakdown())
+        }
         val summaryWithAttachmentCount = buildString {
             append(deviceSummary)
             append(pkjsSummary)
@@ -341,7 +347,8 @@ class BugReportProcessor(
                         summary = summaryWithAttachmentCount,
                         latestLogs = lastNLines,
                         googleIdToken = userIdToken,
-                        sourceIsExperimentalDevice = params.includeExperimentalDebugInfo
+                        sourceIsExperimentalDevice = params.includeExperimentalDebugInfo,
+                        indexRebootLogs = null,
                     )
                 } catch (e: Exception) {
                     Logger.e(e) { "Failed to send bug report" }

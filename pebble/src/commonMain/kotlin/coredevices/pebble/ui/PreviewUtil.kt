@@ -25,6 +25,8 @@ import coredevices.database.HeartEntity
 import coredevices.database.HeartsDao
 import coredevices.firestore.PebbleUser
 import coredevices.firestore.UsersDao
+import coredevices.libindex.IndexDevices
+import coredevices.libindex.LibIndex
 import coredevices.libindex.device.IndexIdentifier
 import coredevices.pebble.PebbleDeepLinkHandler
 import coredevices.pebble.PebbleFeatures
@@ -53,14 +55,15 @@ import coredevices.util.CoreConfig
 import coredevices.util.CoreConfigFlow
 import coredevices.util.CoreConfigHolder
 import coredevices.util.DoneInitialOnboarding
+import coredevices.util.SecondaryProfileWarning
 import coredevices.util.Permission
 import coredevices.util.PermissionRequester
 import coredevices.util.PermissionResult
 import coredevices.util.RequiredPermissions
 import coredevices.util.WeatherUnit
 import io.rebble.libpebblecommon.connection.AppContext
+import io.rebble.libpebblecommon.connection.CommonConnectedDevice
 import io.rebble.libpebblecommon.connection.FakeLibPebble
-import io.rebble.libpebblecommon.connection.FirmwareUpdateCheckResult
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.connection.NotificationApps
 import io.rebble.libpebblecommon.connection.PebbleIdentifier
@@ -134,14 +137,9 @@ private fun fakePebbleModule(appContext: AppContext) = module {
     val firmwareUpdateUiTracker = object : FirmwareUpdateUiTracker {
         override fun didFirmwareUpdateCheckFromUi() {}
         override fun shouldUiUpdateCheck(): Boolean = false
-        override fun maybeNotifyFirmwareUpdate(
-            update: FirmwareUpdateCheckResult,
-            identifier: PebbleIdentifier,
-            watchName: String
-        ) {
-        }
+        override fun onConnectedWatch(watch: io.rebble.libpebblecommon.connection.CommonConnectedDevice) {}
+        override fun updateWatchNow(libPebble: LibPebble, identifier: String) {}
 
-        override fun firmwareUpdateIsInProgress(identifier: PebbleIdentifier) {}
     }
     single { themeProvider } bind ThemeProvider::class
     single { NotificationScreenViewModel() }
@@ -149,6 +147,7 @@ private fun fakePebbleModule(appContext: AppContext) = module {
     single { NotificationAppScreenViewModel() }
     single { NotificationAppsScreenViewModel() }
     single { DoneInitialOnboarding() }
+    single { SecondaryProfileWarning(get(), isSecondaryProfile = false) }
     val storeSourceDao = object : AppstoreSourceDao {
         override suspend fun insertSource(source: AppstoreSource): Long = 0
 
@@ -197,6 +196,8 @@ private fun fakePebbleModule(appContext: AppContext) = module {
         override suspend fun initUserDevToken(rebbleUserToken: String?) {}
         override suspend fun updateLastConnectedWatch(serial: String) {}
         override suspend fun updateRingLifetimeCollectionCount(serial: String, count: Int) {}
+        override suspend fun updateRingBatteryVoltage(serial: String, voltageMilliV: Int) {}
+        override suspend fun signOut() {}
 
         override fun init() {}
     }
@@ -262,7 +263,18 @@ private fun fakePebbleModule(appContext: AppContext) = module {
 
     }
     single { LockerViewModel(webServices, storeSourceDao) }
+    single<LibIndex> {
+        object : LibIndex {
+            override val isScanning = MutableStateFlow(false)
+            override fun startScan() {}
+            override fun stopScan() {}
+            override val rings: IndexDevices = MutableStateFlow(emptyList())
+            override fun warnIfNoCompanionAssociations() {}
+            override fun init(bluetoothPermissionChanged: Flow<Boolean>) {}
+        }
+    }
     single { SharedLockerViewModel() }
+    single { TopChartsViewModel(storeSourceDao) }
     single { storeSourceDao } bind AppstoreSourceDao::class
     single { configProvider } bind BootConfigProvider::class
     single { FakeLibPebble() } binds arrayOf(LibPebble::class, NotificationApps::class)
@@ -339,6 +351,11 @@ private fun fakePebbleModule(appContext: AppContext) = module {
         override val requestIndexCompanion: StateFlow<Boolean> = MutableStateFlow(false)
         override val pendingFirmwareSideload: StateFlow<PendingFirmwareSideload?> =
             MutableStateFlow(null)
+        override val pendingAppSideload: StateFlow<Path?> = MutableStateFlow(null)
+        override fun consumePendingAppSideload() {}
+        override val pendingLockerTab: StateFlow<AppType?> = MutableStateFlow(null)
+        override fun consumePendingLockerTab() {}
+        override fun navigateToLockerTab(type: AppType) {}
         override fun consumeRequestIndexCompanion() {}
         override fun confirmPendingFirmwareSideload() {}
         override fun dismissPendingFirmwareSideload() {}
@@ -377,7 +394,8 @@ private fun fakePebbleModule(appContext: AppContext) = module {
     single { object : CompanionDevice {
         override suspend fun registerDevice(
             identifier: IndexIdentifier,
-            uiContext: PlatformUiContext
+            uiContext: PlatformUiContext,
+            useClassicAssociation: Boolean
         ) {
 
         }
@@ -395,6 +413,14 @@ private fun fakePebbleModule(appContext: AppContext) = module {
 
         override fun hasApprovedDevice(identifier: IndexIdentifier): Boolean {
             return true
+        }
+
+        override fun canRemoveBond(identifier: IndexIdentifier): Boolean {
+            return false
+        }
+
+        override fun removeBond(identifier: IndexIdentifier): Boolean {
+            return false
         }
 
         override fun cdmPreviouslyCrashed(): Boolean {

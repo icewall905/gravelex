@@ -108,6 +108,8 @@ class DocumentReference internal constructor() {
 
     suspend fun <T> set(data: T, merge: Boolean = false) {}
 
+    suspend fun <T> set(data: T, merge: Boolean, configure: FirestoreEncodeSettings.() -> Unit) {}
+
     suspend fun <T> update(data: T) {}
 
     suspend fun delete() {}
@@ -216,3 +218,5 @@ object BaseTimestampSerializer : KSerializer<BaseTimestamp> {
     override fun serialize(encoder: Encoder, value: BaseTimestamp): Unit =
         throw SerializationException("Stub Firestore cannot encode native timestamps")
 }
+
+class FirestoreEncodeSettings { var encodeDefaults: Boolean = true }

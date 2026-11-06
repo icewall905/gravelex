@@ -3,7 +3,7 @@ package io.rebble.libpebblecommon.locker
 import io.rebble.libpebblecommon.LibPebbleConfig
 import io.rebble.libpebblecommon.LibPebbleConfigFlow
 import io.rebble.libpebblecommon.WatchConfig
-import io.rebble.libpebblecommon.database.dao.FakeLockerAppPermissionDao
+import io.rebble.libpebblecommon.database.dao.FakeForkAppPermissionDao
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -33,7 +33,7 @@ class WatchappPermissionResolverTest {
     /** The config flow is exposed so tests can flip a global default mid-collection. */
     private class Fixture(
         val resolver: WatchappPermissionResolver,
-        val dao: FakeLockerAppPermissionDao,
+        val dao: FakeForkAppPermissionDao,
         val config: MutableStateFlow<LibPebbleConfig>,
     )
 
@@ -41,7 +41,7 @@ class WatchappPermissionResolverTest {
         networkDefault: Boolean = false,
         locationDefault: Boolean = false,
     ): Fixture {
-        val dao = FakeLockerAppPermissionDao()
+        val dao = FakeForkAppPermissionDao()
         val config = MutableStateFlow(
             LibPebbleConfig(
                 watchConfig = WatchConfig(

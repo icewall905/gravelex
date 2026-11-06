@@ -1,5 +1,10 @@
 package io.rebble.libpebblecommon.datalogging
 
+import io.rebble.libpebblecommon.structmapper.SBytes
+import io.rebble.libpebblecommon.structmapper.SUInt
+import io.rebble.libpebblecommon.structmapper.StructMappable
+import io.rebble.libpebblecommon.util.DataBuffer
+import io.rebble.libpebblecommon.util.Endian
 import co.touchlab.kermit.Logger
 import io.rebble.libpebblecommon.SystemAppIDs.SYSTEM_APP_UUID
 import io.rebble.libpebblecommon.connection.WebServices

@@ -1,5 +1,11 @@
 package io.rebble.libpebblecommon.di
 
+import io.rebble.libpebblecommon.plugin.MusicPlugin
+import io.rebble.libpebblecommon.plugin.NotificationsPlugin
+import io.rebble.libpebblecommon.plugin.PhoneBatteryMonitor
+import io.rebble.libpebblecommon.plugin.PhoneSoundPlayer
+import io.rebble.libpebblecommon.plugin.PhoneNetworkMonitor
+import io.rebble.libpebblecommon.plugin.PlatformPlugins
 import android.app.Application
 import io.rebble.libpebblecommon.calendar.AndroidCalendarActionHandler
 import io.rebble.libpebblecommon.calendar.AndroidSystemCalendar
@@ -16,6 +22,7 @@ import io.rebble.libpebblecommon.connection.PlatformFlags
 import io.rebble.libpebblecommon.connection.bt.ble.BlePlatformConfig
 import io.rebble.libpebblecommon.connection.bt.classic.pebble.BtClassicConnector
 import io.rebble.libpebblecommon.connection.endpointmanager.timeline.AndroidNotificationActionHandler
+import io.rebble.libpebblecommon.connection.NotificationReplies
 import io.rebble.libpebblecommon.connection.endpointmanager.timeline.PlatformNotificationActionHandler
 import io.rebble.libpebblecommon.contacts.SystemContacts
 import io.rebble.libpebblecommon.io.rebble.libpebblecommon.calls.AndroidPhoneReceiver
@@ -51,6 +58,7 @@ import org.koin.core.module.Module
 import org.koin.core.module.dsl.scopedOf
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.bind
+import org.koin.dsl.binds
 import org.koin.dsl.module
 
 actual val platformModule: Module = module {
@@ -60,6 +68,7 @@ actual val platformModule: Module = module {
                 ProtocolCapsFlag.SupportsExtendedMusicProtocol,
                 ProtocolCapsFlag.SupportsImageFetch,
                 ProtocolCapsFlag.SupportsTwoWayDismissal,
+                ProtocolCapsFlag.SupportsNotificationWindowState,
             )
         )
     }
@@ -69,7 +78,7 @@ actual val platformModule: Module = module {
         )
     }
     singleOf(::AndroidPebbleNotificationListenerConnection) bind NotificationListenerConnection::class
-    singleOf(::AndroidNotificationActionHandler) bind PlatformNotificationActionHandler::class
+    singleOf(::AndroidNotificationActionHandler) binds arrayOf(PlatformNotificationActionHandler::class, NotificationReplies::class)
     singleOf(::AndroidNotificationAppsSync) bind NotificationAppsSync::class
     singleOf(::AndroidSystemCalendar) bind SystemCalendar::class
     singleOf(::AndroidCalendarActionHandler) bind PlatformCalendarActionHandler::class
@@ -81,6 +90,12 @@ actual val platformModule: Module = module {
     singleOf(::AndroidSystemContacts) bind SystemContacts::class
     singleOf(::AndroidPhoneReceiver) bind LegacyPhoneReceiver::class
     singleOf(::NotificationCallDetector)
+    singleOf(::PhoneBatteryMonitor)
+    singleOf(::PhoneSoundPlayer)
+    singleOf(::PhoneNetworkMonitor)
+    singleOf(::MusicPlugin)
+    singleOf(::NotificationsPlugin)
+    single { PlatformPlugins(setOf(get<MusicPlugin>(), get<NotificationsPlugin>())) }
     single { get<AppContext>().context }
     single { get<AppContext>().context as Application }
     single { NotificationHandler(setOf(get<BasicNotificationProcessor>()), get(), get(), get(), get(), get(), get(), get(), get(), get()) }

@@ -1,5 +1,7 @@
 package coredevices.coreapp.di
 
+import coredevices.util.sync.SyncHandler
+import coredevices.util.sync.SyncManager
 import AppUpdateTracker
 import NextBugReportContext
 import com.anopticlabs.gravel.models.InferenceExclusion
@@ -8,9 +10,13 @@ import com.russhwolf.settings.Settings
 import coredevices.CoreBackgroundSync
 import coredevices.EnableExperimentalDevices
 import coredevices.analytics.CoreAnalytics
+import coredevices.analytics.HeartbeatMetricsSource
 import coredevices.analytics.RealCoreAnalytics
+import coredevices.api.EngDashOtaApi
+import coredevices.api.EngDashOtaApiImpl
 import coredevices.api.WisprFlowAuth
 import coredevices.coreapp.CommonAppDelegate
+import coredevices.pebble.config.ConfigPageClosedListener
 import coredevices.pebble.health.HealthSyncTracker
 import coredevices.pebble.health.PlatformHealthSync
 import coredevices.pebble.health.PebbleFitOxygenExportService
@@ -20,6 +26,7 @@ import coredevices.coreapp.ui.screens.OnboardingViewModel
 import coredevices.coreapp.util.FileLogWriter
 import coredevices.database.CoreDatabase
 import coredevices.database.UserConfigDao
+import coredevices.database.SyncTaskDao
 import coredevices.database.getCoreRoomDatabase
 import coredevices.coreapp.account.SignedOutUsersDao
 import coredevices.firestore.UsersDao
@@ -28,6 +35,7 @@ import coredevices.util.CoreConfig
 import coredevices.util.CoreConfigFlow
 import coredevices.util.CoreConfigHolder
 import coredevices.util.DoneInitialOnboarding
+import coredevices.util.SecondaryProfileWarning
 import coredevices.util.OAuthRedirectHandler
 import coredevices.util.models.ModelManager
 import coredevices.util.transcription.dictationThreadCount
@@ -39,6 +47,7 @@ import coredevices.util.transcription.HybridTranscriptionService
 import coredevices.util.transcription.SelfHostedServerStore
 import coredevices.util.transcription.SelfHostedTranscriptionService
 import coredevices.util.transcription.KirinkiTranscriptionService
+import coredevices.util.transcription.LocalTranscriptionService
 import coredevices.util.transcription.PlatformSpeechRecognizer
 import coredevices.util.transcription.TranscriptionService
 import coredevices.util.transcription.WisprFlowRESTTranscriptionService
@@ -50,9 +59,11 @@ import dev.gitlive.firebase.firestore.FirebaseFirestoreSettings
 import dev.gitlive.firebase.firestore.firestore
 import dev.gitlive.firebase.firestore.firestoreSettings
 import dev.gitlive.firebase.firestore.persistentCacheSettings
+import io.rebble.libpebblecommon.plugin.PhoneNetworkMonitor
 import org.koin.core.module.dsl.singleOf
 import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.bind
+import org.koin.dsl.binds
 import org.koin.dsl.module
 import theme.RealThemeProvider
 import theme.ThemeProvider
@@ -79,8 +90,9 @@ val utilModule = module {
     singleOf(::EnableExperimentalDevices)
     singleOf(::AppResumed)
     singleOf(::DoneInitialOnboarding)
+    single { SecondaryProfileWarning(get(), get<coredevices.util.Platform>().isSecondaryProfile) }
     singleOf(::AppUpdateTracker)
-    singleOf(::RealCoreAnalytics) bind CoreAnalytics::class
+    single { RealCoreAnalytics(get(), get(), get(), metricsSources = { getAll<HeartbeatMetricsSource>() }) } bind CoreAnalytics::class
     single { getCoreRoomDatabase(get()) }
     single { get<CoreDatabase>().analyticsDao() }
     single { get<CoreDatabase>().appstoreSourceDao() }
@@ -88,6 +100,8 @@ val utilModule = module {
     single { get<CoreDatabase>().weatherLocationDao() }
     single { get<CoreDatabase>().heartsDao() }
     single { get<CoreDatabase>().analyticsHeartbeatDao() }
+    single { get<CoreDatabase>().syncTaskDao() }
+    single { SyncManager(store = get<SyncTaskDao>(), handlers = { getAll<SyncHandler>() }, scheduler = get()) }
     single { UserConfigDao { get() } }
     single { CoreConfigHolder(defaultValue = CoreConfig(), get(), get()) }
     single { CoreConfigFlow(get<CoreConfigHolder>().config) }
@@ -107,6 +121,7 @@ val utilModule = module {
     }
     single { DictationSpeedTracker(get()) }
     singleOf(::OAuthRedirectHandler)
+    single { ConfigPageClosedListener {} }
     singleOf(::WisprFlowAuth)
     single {
         WhisperTranscriptionService(
@@ -129,8 +144,8 @@ val utilModule = module {
     }
     singleOf(::PlatformSpeechRecognizer)
     single {
-        HybridTranscriptionService(get(), get(), get(), get(), get(), get(), selfHosted = get(), serverDictation = get())
-    } bind TranscriptionService::class
+        HybridTranscriptionService(get(), get(), get(), get(), get(), get(), selfHosted = get(), serverDictation = get(), modelDownloads = get())
+    } binds arrayOf(TranscriptionService::class, LocalTranscriptionService::class)
     single { ServerDictationHold() }
     // Fork: the self-hosted transcription server and what it remembers
     // (encrypted bearer token, pinned certificate).
@@ -172,5 +187,5 @@ val utilModule = module {
             },
         )
     }
-    singleOf(::PlatformHealthSync)
+    single { PlatformHealthSync(get(), get(), get(), lazy { get() }, get(), get()) }
 }

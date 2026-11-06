@@ -51,6 +51,8 @@ class FirmwareUpdateCheckRoutingTest {
         override fun updateLastConnectedSerial(serial: String?) = fail("analytics touched: updateLastConnectedSerial")
         override fun updateRingTransferDurationMetric(duration: Duration) = fail("analytics touched: updateRingTransferDurationMetric")
         override fun updateRingLifetimeCollectionCount(serial: String, count: Int) = fail("analytics touched: updateRingLifetimeCollectionCount")
+        override fun updateRingBatteryVoltage(voltageMilliV: Int) = fail("analytics touched: updateRingBatteryVoltage")
+        override fun incrementHeartbeatCounter(name: String) = fail("analytics touched: incrementHeartbeatCounter")
     }
 
     // Eng-dash is doubly disabled in fork builds (BUG_URL is never set, and

@@ -3,7 +3,7 @@ package io.rebble.libpebblecommon.js
 import io.rebble.libpebblecommon.LibPebbleConfig
 import io.rebble.libpebblecommon.LibPebbleConfigFlow
 import io.rebble.libpebblecommon.WatchConfig
-import io.rebble.libpebblecommon.database.dao.FakeLockerAppPermissionDao
+import io.rebble.libpebblecommon.database.dao.FakeForkAppPermissionDao
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import io.rebble.libpebblecommon.di.LibPebbleKoinComponent
 import io.rebble.libpebblecommon.locker.PermissionSetting
@@ -73,7 +73,7 @@ class GeolocationInterfaceTest {
 
     private fun fixture(scope: CoroutineScope, locationDefault: Boolean = false): Fixture {
         val resolver = WatchappPermissionResolver(
-            FakeLockerAppPermissionDao(),
+            FakeForkAppPermissionDao(),
             LibPebbleConfigFlow(
                 MutableStateFlow(
                     LibPebbleConfig(

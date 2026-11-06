@@ -10,7 +10,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.serialization.json.JsonElement
 
-class McpSession(
+open class McpSession(
     private val integrations: List<McpIntegration>,
     private val scope: CoroutineScope
 ) {
@@ -22,7 +22,6 @@ class McpSession(
     suspend fun openSession() {
         for (integration in integrations) {
             try {
-                integration.resetCache()
                 integration.connect()
             } catch (e: Exception) {
                 // Log and continue with other integrations
@@ -37,14 +36,15 @@ class McpSession(
         }
     }
 
-    suspend fun listTools(): List<McpSessionTool> {
+    open suspend fun listTools(): List<McpSessionTool> {
         return integrations.map {
             scope.async {
                 try {
                     it.listTools().map { tool ->
                         McpSessionTool(
                             integrationName = it.name,
-                            tool = tool
+                            tool = tool,
+                            integrationDescription = it.description,
                         )
                     }
                 } catch (e: Exception) {
@@ -57,7 +57,7 @@ class McpSession(
             .flatten()
     }
 
-    suspend fun getExtraContext(context: SessionContext?, includePromptsFrom: Map<String, Set<String>> = emptyMap()): String? {
+    open suspend fun getExtraContext(context: SessionContext?, includePromptsFrom: Map<String, Set<String>> = emptyMap()): String? {
         return integrations
             .map {
                 scope.async {
@@ -84,7 +84,7 @@ class McpSession(
      * @param requireExists If true, throws an exception if the integration is not found.
      * @return ToolCallResult indicating success or failure of the tool call.
      */
-    suspend fun callTool(
+    open suspend fun callTool(
         integrationName: String,
         toolName: String,
         jsonInput: Map<String, JsonElement>,
@@ -106,8 +106,21 @@ class McpSession(
 
 data class McpSessionTool(
     val integrationName: String,
-    val tool: McpTool
+    val tool: McpTool,
+    val integrationDescription: String? = null,
 )
+
+/** The name a cloud model calls this tool by: integration and tool joined, then [sanitizeToolName]d. */
+fun McpSessionTool.compositeName(): String = sanitizeToolName("${integrationName}__${tool.definition.name}")
+
+/**
+ * The strictest subset providers accept for a function name: the MCP spec's (a-z, A-Z, 0-9, _, -)
+ * without dots, at most 64 characters. Covers Gemini and Claude.
+ */
+fun sanitizeToolName(name: String): String = name.trim().replace(TOOL_NAME_INVALID_CHARS, "_").take(MAX_TOOL_NAME_LENGTH)
+
+private val TOOL_NAME_INVALID_CHARS = Regex("[^a-zA-Z0-9_-]")
+private const val MAX_TOOL_NAME_LENGTH = 64
 
 /**
  * Integration names must survive round-trip through the model as part of a composite tool name.

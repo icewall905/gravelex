@@ -1,5 +1,8 @@
 package io.rebble.libpebblecommon.js
 
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.permissions.PermissionDecision
+import io.rebble.libpebblecommon.plugin.PluginPermissions
 import co.touchlab.kermit.Logger
 import io.ktor.http.quote
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
@@ -10,6 +13,8 @@ import io.rebble.libpebblecommon.util.SystemGeolocation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
@@ -22,10 +27,15 @@ import kotlin.uuid.Uuid
 
 abstract class GeolocationInterface(
     private val scope: CoroutineScope,
-    private val jsRunner: JsRunner,
+    private val eval: suspend (String) -> Unit,
+    private val appUuid: Uuid,
+    private val prompt: Boolean = true,
 ): LibPebbleKoinComponent {
+    constructor(scope: CoroutineScope, jsRunner: JsRunner) : this(scope, jsRunner::eval, Uuid.parse(jsRunner.appInfo.uuid))
+
     private val logger = Logger.withTag("GeolocationInterface")
     private val watchappPermissions: WatchappPermissionResolver by inject()
+    private val permissions: AppPermissions? by lazy { getKoin().getOrNull<AppPermissions>() }
     private val systemGeolocation: SystemGeolocation by inject()
     private var requestIDs = (1..Int.MAX_VALUE).iterator()
     private var watchIDs = (1..Int.MAX_VALUE).iterator()
@@ -54,11 +64,11 @@ abstract class GeolocationInterface(
         when (result) {
             is GeolocationPositionResult.Success -> {
                 Logger.i { "Geolocation get position success" }
-                jsRunner.eval("_PebbleGeoCB._resultGetSuccess($id, ${result.latitude}, ${result.longitude}, ${result.accuracy}, ${result.altitude}, ${result.heading}, ${result.speed})")
+                eval("_PebbleGeoCB._resultGetSuccess($id, ${result.latitude}, ${result.longitude}, ${result.accuracy}, ${result.altitude}, ${result.heading}, ${result.speed})")
             }
             is GeolocationPositionResult.Error -> {
                 Logger.w { "Geolocation get position error: ${result.message}" }
-                jsRunner.eval("_PebbleGeoCB._resultGetError($id, ${result.message.quote()})")
+                eval("_PebbleGeoCB._resultGetError($id, ${result.message.quote()})")
             }
         }
     }
@@ -66,10 +76,10 @@ abstract class GeolocationInterface(
     private suspend fun triggerPositionResultWatch(id: Int, result: GeolocationPositionResult) {
         when (result) {
             is GeolocationPositionResult.Success -> {
-                jsRunner.eval("_PebbleGeoCB._resultWatchSuccess($id, ${result.latitude}, ${result.longitude}, ${result.accuracy}, ${result.altitude}, ${result.heading}, ${result.speed})")
+                eval("_PebbleGeoCB._resultWatchSuccess($id, ${result.latitude}, ${result.longitude}, ${result.accuracy}, ${result.altitude}, ${result.heading}, ${result.speed})")
             }
             is GeolocationPositionResult.Error -> {
-                jsRunner.eval("_PebbleGeoCB._resultWatchError($id, ${result.message.quote()})")
+                eval("_PebbleGeoCB._resultWatchError($id, ${result.message.quote()})")
             }
         }
     }
@@ -80,11 +90,13 @@ abstract class GeolocationInterface(
     // every watchapp got phone GPS silently. Now a missing/FollowGlobal app inherits
     // the deny-by-default global, and denial is reported back to the JS callback as a
     // geolocation error rather than being swallowed.
-    private suspend fun geolocationPermissionGranted(): Boolean =
-        watchappPermissions.isWatchappPermissionGranted(
-            Uuid.parse(jsRunner.appInfo.uuid),
-            LockerAppPermissionType.Location,
-        )
+    private suspend fun geolocationPermissionGranted(): Boolean {
+        if (!watchappPermissions.isWatchappPermissionGranted(appUuid, LockerAppPermissionType.Location)) return false
+        val upstream = permissions ?: return true
+        val decision = if (prompt) upstream.request(appUuid, PluginPermissions.LOCATION, wait = true)
+            else upstream.check(appUuid, PluginPermissions.LOCATION)
+        return decision == PermissionDecision.Granted
+    }
 
     open fun getRequestCallbackID() = getNextRequestID()
     open fun getWatchCallbackID() = getNextWatchID()
@@ -114,6 +126,13 @@ abstract class GeolocationInterface(
         logger.d { "watchPosition(highAccuracy=$highAccuracy)" }
         val highAccuracyBool = highAccuracy > 0
         val job = scope.launch {
+            val upstream = permissions
+            val subject = upstream?.subjectOf(appUuid)
+            val upstreamGrant = if (upstream != null && subject != null) {
+                if (prompt) upstream.request(subject, PluginPermissions.LOCATION)
+                upstream.grantedKeys(subject, listOf(PluginPermissions.LOCATION)).map { PluginPermissions.LOCATION in it }
+            } else flowOf(upstream == null || !upstream.enforcing)
+
             // The grant is enforced for the life of the watch, not only at
             // subscription time: a watchface can hold a subscription for days, so a
             // one-shot check would keep streaming phone GPS long after the user
@@ -126,11 +145,12 @@ abstract class GeolocationInterface(
             // endWatches none of this happens: no stream and no callback.
             combine(
                 watchappPermissions.watchappPermissionGranted(
-                    Uuid.parse(jsRunner.appInfo.uuid),
+                    appUuid,
                     LockerAppPermissionType.Location,
                 ),
                 watchesEnded,
-            ) { granted, ended -> if (ended) null else granted }
+                upstreamGrant,
+            ) { granted, ended, approved -> if (ended) null else granted && approved }
                 .distinctUntilChanged()
                 .collectLatest { granted ->
                     when (granted) {
@@ -176,6 +196,35 @@ abstract class GeolocationInterface(
         watchesEnded.value = true
     }
 
+    /** For engines that pass arguments as a list. */
+    fun dispatchCall(method: String, args: List<Any?>): Int? {
+        fun num(i: Int) = args.getOrNull(i) as? Number
+        return when (method) {
+            "getCurrentPosition" -> {
+                val id = num(0)?.toDouble() ?: return null
+                val maxAge = num(1)?.toDouble() ?: -1.0
+                val timeout = num(2)?.toDouble() ?: -1.0
+                val highAccuracy = num(3)?.toDouble() ?: 0.0
+                getCurrentPosition(id, maxAge, timeout, highAccuracy)
+            }
+            "watchPosition" -> {
+                val id = num(0)?.toDouble() ?: return null
+                val interval = num(1)?.toDouble() ?: 500.0
+                val highAccuracy = num(2)?.toDouble() ?: 0.0
+                watchPosition(id, interval, highAccuracy)
+            }
+            "clearWatch" -> { num(0)?.toInt()?.let { clearWatch(it) }; null }
+            "getRequestCallbackID" -> getRequestCallbackID()
+            "getWatchCallbackID" -> getWatchCallbackID()
+            else -> error("Unknown method: $method")
+        }
+    }
+
+    fun clearAllWatches() {
+        endWatches()
+        watchJobs.values.forEach { it.cancel() }
+        watchJobs.clear()
+    }
     companion object {
         // Hard cap on concurrently registered watchPosition watches per session.
         // Every registration pins a live grant collector until it is cleared or

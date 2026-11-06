@@ -1,5 +1,8 @@
 package coredevices.util.models
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.withContext
 import com.anopticlabs.gravel.models.LlmModel
 import com.anopticlabs.gravel.models.ModelCatalog
 import com.anopticlabs.gravel.models.PinnedModel
@@ -200,6 +203,7 @@ sealed class RecommendedModel {
  */
 data class ModelInfo(
     val createdAt: kotlin.time.Instant = kotlin.time.Clock.System.now(),
+    val intendedTask: String? = null,
     val slug: String,
     val sizeInMB: Int = 0,
     val url: String = "",

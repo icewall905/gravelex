@@ -29,8 +29,10 @@ jobs:
         run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;28.2.13676358'
       - name: Test and assemble unsigned release
         run: >-
-          ./gradlew :libpebble3:jvmTest :pebble:testAndroidHostTest
-          :androidApp:assembleRelease --max-workers=4 --no-configuration-cache
+          ./gradlew testDebugUnitTest testAndroidHostTest jvmTest
+          :androidApp:lintRelease :androidApp:assembleRelease --max-workers=4 --no-configuration-cache
+      - name: Verify the existing-install database upgrade
+        run: python3 scripts/test_android_upgrade.py
       - name: Sign and verify
         env:
           KEYSTORE_BASE64: ${{ secrets.GRAVELEX_KEYSTORE_BASE64 }}

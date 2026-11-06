@@ -1,5 +1,6 @@
 package coredevices.pebble.ui
 
+import CommonRoutes
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Launch
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.HealthAndSafety
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -83,6 +86,7 @@ import coredevices.pebble.services.AppstoreService
 import coredevices.pebble.services.PEBBLE_FEED_URL
 import coredevices.pebble.services.SettingsPageState
 import coredevices.pebble.services.isPebbleFeed
+import coredevices.pebble.services.pluginMetadata
 import coredevices.ui.ConfirmDialog
 import coredevices.ui.PebbleElevatedButton
 import io.ktor.http.URLProtocol
@@ -90,11 +94,12 @@ import io.ktor.http.parseUrl
 import io.rebble.libpebblecommon.connection.ConnectedPebbleDevice
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.connection.PebbleIdentifier
-import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import io.rebble.libpebblecommon.locker.AppCapability
+import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import io.rebble.libpebblecommon.locker.AppType
 import io.rebble.libpebblecommon.locker.orderIndexForInsert
 import io.rebble.libpebblecommon.metadata.WatchType
+import io.rebble.libpebblecommon.permissions.InstallReview
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.TimeoutCancellationException
@@ -218,6 +223,8 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
         val platform: Platform = koinInject()
         val urlLauncher = LocalUriHandler.current
         val nativeLockerAddUtil: NativeLockerAddUtil = koinInject()
+        var adding by remember { mutableStateOf(false) }
+        var storeReview by remember { mutableStateOf<InstallReview?>(null) }
 
         fun reloadFromStore(useCache: Boolean) {
             if (storeId != null && storeSource != null) {
@@ -243,6 +250,10 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                         title = "Remove ${entry.title}?",
                         text = "Are you sure you want to remove this app from your Pebble?",
                         onConfirm = {
+                            // Store apps stay here to show the store listing; nothing to show otherwise
+                            if (viewModel.selectedStoreEntry == null) {
+                                navBarNav.goBack()
+                            }
                             // Don't use local scope: that will die because we moved back
                             GlobalScope.launch {
                                 logger.d { "removing app ${entry.uuid}" }
@@ -296,7 +307,8 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                                     AsyncImage(
                                         model = entry.listImageUrl,
                                         contentDescription = null,
-                                        modifier = Modifier.size(28.dp)
+                                        modifier = Modifier.size(28.dp),
+                                        colorFilter = entry.listImageColorFilter(),
                                     )
                                     Spacer(modifier = Modifier.width(5.dp))
                                 }
@@ -410,7 +422,9 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                             }
                             Spacer(Modifier.height(5.dp))
                             val watchName = lastConnectedWatch?.displayName() ?: ""
-                            val onWatchText = if (entry.isCompatible && entry.isSynced()) {
+                            val onWatchText = if (entry.type == AppType.Plugin) {
+                                null // Plugins run on the phone; they're never on the watch.
+                            } else if (entry.isCompatible && entry.isSynced()) {
                                 if (appIsRunning) {
                                     "Running On Watch $watchName"
                                 } else {
@@ -439,7 +453,7 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                     val connectedIdentifier = lastConnectedWatch?.identifier
                     val showStartApp =
                         entry.isCompatible && entry.commonAppType.canStartApp() && !appIsRunning
-                                && !viewModel.addedToLocker
+                                && !viewModel.addedToLocker && entry.type != AppType.Plugin
                     if (showStartApp) {
                         val text = if (entry.type == AppType.Watchapp) {
                             "Start App"
@@ -469,29 +483,6 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                             modifier = Modifier.padding(5.dp),
                         )
                     }
-                    // Fork: phone-side permission surface. For an installed (locker) app,
-                    // show the real per-app controls (internet + location tri-state). For a
-                    // store listing not yet installed, show what it declares plus an honest
-                    // note that phone-side JS means internet access; the appstore capability
-                    // vocabulary can't express "network", so upstream never disclosed it.
-                    when (entry.commonAppType) {
-                        is CommonAppType.Locker -> {
-                            WatchappPermissionControls(
-                                uuid = entry.uuid,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                            )
-                        }
-
-                        is CommonAppType.Store -> {
-                            StoreCapabilityDisclosure(
-                                capabilities = storeEntry?.capabilities.orEmpty(),
-                                entry = entry,
-                                topBarParams = topBarParams,
-                            )
-                        }
-
-                        is CommonAppType.System -> Unit
-                    }
                     if (entry.commonAppType is CommonAppType.Store && !viewModel.addedToLocker) {
 //                    val hasUuidConflict = remember(viewModel.storeEntries) { // One store has multiple entries with same uuid
 //                        viewModel.storeEntries?.let {
@@ -503,32 +494,50 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                             Modifier.padding(5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            PebbleElevatedButton(
-                                text = "Add To Watch",
-                                onClick = {
-                                    // Global scope because it could take a second to download/sync/load app
-                                    GlobalScope.launch {
-                                        val watch = lastConnectedWatch as? ConnectedPebbleDevice
-                                        viewModel.addedToLocker = true
-                                        val addResult = nativeLockerAddUtil.addAppToLocker(
-                                            entry.commonAppType,
-                                            entry.commonAppType.storeSource
+                            val storeApp = entry.commonAppType
+                            fun addToWatch(granted: Map<String, Boolean?>) {
+                                // Global scope because it could take a second to download/sync/load app
+                                GlobalScope.launch {
+                                    val watch = lastConnectedWatch as? ConnectedPebbleDevice
+                                    viewModel.addedToLocker = true
+                                    val addResult = nativeLockerAddUtil.addAppToLocker(
+                                        storeApp,
+                                        storeApp.storeSource,
+                                        granted,
+                                    )
+                                    if (!addResult) {
+                                        topBarParams.showSnackbar("Failed to add app")
+                                        return@launch
+                                    }
+                                    // A plugin-only app runs on the phone: nothing to sync or open on the watch.
+                                    if (watch != null && entry.type != AppType.Plugin) {
+                                        libPebble.launchApp(
+                                            entry = entry,
+                                            snackbarDisplay = topBarParams,
+                                            connectedIdentifier = watch.identifier,
                                         )
-                                        if (!addResult) {
-                                            topBarParams.showSnackbar("Failed to add app")
-                                            return@launch
-                                        }
-                                        if (watch != null) {
-                                            libPebble.launchApp(
-                                                entry = entry,
-                                                snackbarDisplay = topBarParams,
-                                                connectedIdentifier = watch.identifier,
-                                            )
-                                        }
+                                    }
+                                }
+                            }
+                            storeReview?.let { review ->
+                                InstallReviewDialog(review) { granted ->
+                                    storeReview = null
+                                    if (granted != null) addToWatch(granted) else adding = false
+                                }
+                            }
+                            val addText = if (entry.type == AppType.Plugin) "Add" else "Add To Watch"
+                            PebbleElevatedButton(
+                                text = addText,
+                                onClick = {
+                                    adding = true
+                                    scope.launch {
+                                        val review = nativeLockerAddUtil.review(storeApp)
+                                        if (review == null) addToWatch(emptyMap()) else storeReview = review
                                     }
                                 },
+                                enabled = !adding,
                                 icon = Icons.Default.Add,
-                                contentDescription = "Add To Watch",
+                                contentDescription = addText,
                                 primaryColor = true,
                                 modifier = Modifier.padding(end = 8.dp),
                             )
@@ -654,6 +663,28 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                             }
                         }
                     }
+                    if (entry.commonAppType is CommonAppType.Locker) {
+                        WatchappPermissionControls(entry.uuid, Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+                    }
+                    val pluginsEnabled = libPebble.config.collectAsState().value.watchConfig.enablePlugins
+                    val storeApp = (entry.commonAppType as? CommonAppType.Store)?.storeApp
+                    if (entry.commonAppType is CommonAppType.Locker) {
+                        AppPermissionsSection(entry.uuid)
+                    } else if (pluginsEnabled && storeApp != null) {
+                        StorePermissionsSection(storeApp.requestedPermissions())
+                    } else if (storeEntry?.capabilities?.isNotEmpty() == true) {
+                        FlowRow(modifier = Modifier.padding(5.dp)) {
+                            storeEntry.capabilities.forEach { permission ->
+                                PermissionItem(permission, topBarParams)
+                            }
+                        }
+                    }
+                    val pluginMetadata = remember(pluginsEnabled, entry, storeApp) {
+                        if (!pluginsEnabled) null
+                        else libPebble.getAllPlugins().firstOrNull { it.pluginUuid == entry.uuid }
+                            ?: storeApp?.pluginMetadata()
+                    }
+                    pluginMetadata?.let { PluginCapabilitiesSection(it) }
                     Spacer(Modifier.height(5.dp))
                     // Shared minimum width for the name column — grows to fit the widest label.
                     var propertyNameWidthPx by remember { mutableIntStateOf(0) }
@@ -726,6 +757,22 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                             value = "$version$sideloadedText$updatedDateText"
                         )
                     }
+                    commonAppStore?.storeApp?.batteryImpact?.takeIf { it.isNotEmpty() }?.let { impacts ->
+                        val connected = sharedViewModel.watchType.value.codename
+                        val platform = if (connected in impacts) connected else impacts.keys.first()
+                        var showDetails by remember { mutableStateOf(false) }
+                        val otherWatchText = if (platform != connected) " (${batteryImpactWatchName(platform, short = true)})" else ""
+                        PropertyRow(
+                            name = "BATTERY IMPACT",
+                            nameModifier = propertyNameModifier,
+                            value = impacts.getValue(platform).level.capitalized() + otherWatchText,
+                            onClick = { showDetails = true },
+                            onClickIcon = Icons.Outlined.Info,
+                        )
+                        if (showDetails) {
+                            BatteryImpactDialog(impacts, initialPlatform = platform, onDismiss = { showDetails = false })
+                        }
+                    }
                     (viewModel.selectedStoreEntry?.sourceLink ?: entry.sourceLink)?.let { sourceLink ->
                         if (sourceLink.isNotEmpty()) {
                             PropertyRow(
@@ -733,6 +780,28 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                                 nameModifier = propertyNameModifier,
                                 value = "External Link",
                                 onClick = { urlLauncher.open(sourceLink) }
+                            )
+                        }
+                    }
+                    pluginMetadata?.scriptPath?.let { script ->
+                        val installed = entry.commonAppType is CommonAppType.Locker
+                        val pbwUrl = storeApp?.latestRelease?.pbwFile
+                        if (installed || pbwUrl != null) {
+                            PropertyRow(
+                                name = "PLUGIN CODE",
+                                nameModifier = propertyNameModifier,
+                                value = "View Source",
+                                onClick = {
+                                    navBarNav.navigateTo(
+                                        PebbleNavBarRoutes.PluginSourceRoute(
+                                            uuid = entry.uuid.toString().takeIf { installed },
+                                            pbwUrl = pbwUrl,
+                                            script = script,
+                                            title = entry.title,
+                                        )
+                                    )
+                                },
+                                onClickIcon = Icons.AutoMirrored.Default.ArrowForward,
                             )
                         }
                     }
@@ -903,74 +972,36 @@ private fun PropertyRow(
 }
 
 @Composable
-fun PermissionItem(permission: AppCapability, entry: CommonApp, topBarParams: TopBarParams) {
-    if (entry.commonAppType is CommonAppType.Locker) {
-        // Unreachable from current call sites: PermissionItem is only rendered for
-        // store listings (via StoreCapabilityDisclosure); installed apps get
-        // WatchappPermissionControls on their detail page instead. The branch is
-        // kept so the function keeps its upstream shape for cheap merges.
-    } else {
-        AssistChip(
-            onClick = {
-                topBarParams.showSnackbar(permission.description())
-            },
-            label = { Text(permission.name()) },
-            leadingIcon = { Icon(permission.icon(), null) },
-            modifier = Modifier.padding(horizontal = 6.dp)
-        )
-    }
-}
-
-/**
- * Fork: honest capability disclosure for a store listing that isn't installed yet.
- * Shows the capabilities the listing declares (location/health/timeline) and, crucially,
- * states plainly that apps can also reach the internet through phone-side code (a fact the
- * appstore metadata cannot express and upstream never surfaced), and points to where that
- * can be controlled once installed.
- */
-@Composable
-fun StoreCapabilityDisclosure(
-    capabilities: List<AppCapability>,
-    entry: CommonApp,
-    topBarParams: TopBarParams,
-) {
-    Column(modifier = Modifier.padding(horizontal = 5.dp)) {
-        if (capabilities.isNotEmpty()) {
-            FlowRow(modifier = Modifier.padding(5.dp)) {
-                capabilities.forEach { permission ->
-                    PermissionItem(permission, entry, topBarParams)
-                }
-            }
-        }
-        Text(
-            "Apps can also use the internet through code that runs inside Gravel (for example " +
-                "to fetch weather). After installing, control internet and location for this app " +
-                "in Settings > Apps > Watch App Permissions.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-        )
-    }
+fun PermissionItem(permission: AppCapability, topBarParams: TopBarParams) {
+    AssistChip(
+        onClick = {
+            topBarParams.showSnackbar(permission.description())
+        },
+        label = { Text(permission.name()) },
+        leadingIcon = { Icon(permission.icon(), null) },
+        modifier = Modifier.padding(horizontal = 6.dp)
+    )
 }
 
 fun AppCapability.icon(): ImageVector = when (this) {
     AppCapability.Health -> Icons.Default.HealthAndSafety
     AppCapability.Location -> Icons.Default.LocationSearching
     AppCapability.Timeline -> Icons.Default.LocationOn
+    AppCapability.WebSignIn -> Icons.Default.AccountCircle
 }
 
 fun AppCapability.name(): String = when (this) {
     AppCapability.Health -> "Health"
     AppCapability.Location -> "Location"
     AppCapability.Timeline -> "Timeline"
+    AppCapability.WebSignIn -> "Web sign-in"
 }
 
 fun AppCapability.description(): String = when (this) {
     AppCapability.Health -> "Can access health data"
-    // Fork: state the real flow. A watchface asking for location almost always feeds it
-    // to a phone-side network call (e.g. weather), so "access location" understates it.
-    AppCapability.Location -> "Can read your phone's location, and may send it to outside servers over the internet"
+    AppCapability.Location -> "Can access location"
     AppCapability.Timeline -> "Can create timeline pins"
+    AppCapability.WebSignIn -> "Can ask you to sign in to web accounts"
 }
 
 suspend fun LibPebble.launchApp(
@@ -981,7 +1012,8 @@ suspend fun LibPebble.launchApp(
     logger.d { "launchApp: ${entry.uuid} - ${entry.title}" }
     val typeText = when (entry.type) {
         AppType.Watchface -> "Watchface"
-        AppType.Watchapp -> "WatchApp"
+        AppType.Watchapp -> "Watchapp"
+        AppType.Plugin -> "Plugin"
     }
     if (!entry.isSynced()) {
         try {
@@ -1034,17 +1066,21 @@ suspend fun CommonApp.showSettings(
 ) {
     when (commonAppType) {
         is CommonAppType.Locker -> {
-            // Fork: the developer settings page URL is built by the app's own PKJS and
-            // loaded in a WebView, so opening it is an app-controlled network request to
-            // a developer-chosen server, and the app can pack anything it has gathered
-            // (location included) into that URL. If the user has denied this app's
-            // internet access, honour that here rather than loading the page; otherwise
-            // the config page would be a hole exactly the size of the thing we closed.
             if (!libPebble.isWatchappPermissionGranted(uuid, LockerAppPermissionType.Network)) {
-                logger.d { "Config page blocked for $uuid: network denied" }
-                topBarParams.showSnackbar(
-                    "This app's settings page needs internet, which is turned off for it. " +
-                        "Enable it in Settings > Apps > Watch App Permissions."
+                topBarParams.showSnackbar("This app's settings page needs internet, which is turned off for it. " +
+                    "Enable it in Settings > Apps > Watch App Permissions.")
+                return
+            }
+
+            if (type == AppType.Plugin) {
+                // A plugin's config page is phone-side; no watch or PKJS session to launch.
+                val url = libPebble.appConfigPageUrl(uuid) ?: run {
+                    topBarParams.showSnackbar("$title has no settings")
+                    return
+                }
+                WatchappSettingsUrlCache.put(uuid.toString(), url)
+                navBarNav.navigateTo(
+                    CommonRoutes.WatchappSettingsRoute(uuid = uuid.toString(), title = title)
                 )
                 return
             }
@@ -1068,17 +1104,17 @@ suspend fun CommonApp.showSettings(
                 topBarParams.showSnackbar("$title settings failed to open")
             } else {
                 logger.d { "Opening app settings for $uuid" }
-                val url = session.requestConfigurationUrl()
+                val url = libPebble.appConfigPageUrl(uuid) ?: session.requestConfigurationUrl()
                 url ?: run {
                     logger.e("No configuration URL returned for app $uuid")
                     topBarParams.showSnackbar("$title settings failed to open")
                     return
                 }
                 logger.d { "Got app settings URL" }
-                WatchappSettingsUrlCache.put(watch.identifier.asString, url)
+                WatchappSettingsUrlCache.put(uuid.toString(), url)
                 navBarNav.navigateTo(
-                    PebbleRoutes.WatchappSettingsRoute(
-                        watchIdentifier = watch.identifier.asString,
+                    CommonRoutes.WatchappSettingsRoute(
+                        uuid = uuid.toString(),
                         title = title,
                     )
                 )

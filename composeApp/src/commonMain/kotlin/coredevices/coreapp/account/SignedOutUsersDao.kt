@@ -40,5 +40,9 @@ object SignedOutUsersDao : UsersDao {
 
     override suspend fun updateEncryptionInfo(info: EncryptionInfo) {}
 
+    override suspend fun updateRingBatteryVoltage(serial: String, voltageMilliV: Int) {}
+
+    override suspend fun signOut() {}
+
     override fun init() {}
 }

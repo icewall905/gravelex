@@ -33,6 +33,7 @@ class CoreDeepLinkHandler {
         private val logger = Logger.withTag("CoreDeepLinkHandler")
         private const val SCHEME = "pebblecore"
         private const val HOST = "deep-link"
+        private const val ID_PARAM = "id"
         private const val VIEW_BUG_REPORT_PATH = "view-bug-report"
         private const val CONVERSATION_ID_QUERY_PARAM = "conversationId"
 

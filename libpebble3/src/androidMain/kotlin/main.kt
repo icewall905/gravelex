@@ -1,5 +1,6 @@
 package io.rebble.libpebblecommon
 
+import io.rebble.libpebblecommon.pebblekit.two.PebbleKitProvider
 import io.rebble.libpebblecommon.di.LibPebbleKoinComponent
 import io.rebble.libpebblecommon.packets.PhoneAppVersion
 import io.rebble.libpebblecommon.pebblekit.PebbleKitComponentState

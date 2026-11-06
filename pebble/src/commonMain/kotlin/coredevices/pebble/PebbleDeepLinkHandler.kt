@@ -1,5 +1,7 @@
 package coredevices.pebble
 
+import io.rebble.libpebblecommon.connection.PebbleIdentifier
+import io.rebble.libpebblecommon.locker.AppType
 import co.touchlab.kermit.Logger
 import com.eygraber.uri.Uri
 import coredevices.analytics.CoreAnalytics
@@ -29,6 +31,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlin.time.Duration.Companion.seconds
+import kotlin.uuid.Uuid
 
 expect fun readNameFromContentUri(appContext: AppContext, uri: Uri): String?
 
@@ -47,6 +50,15 @@ interface PebbleDeepLinkHandler {
     val requestIndexCompanion: StateFlow<Boolean>
 
     val pendingFirmwareSideload: StateFlow<PendingFirmwareSideload?>
+
+    val pendingAppSideload: StateFlow<Path?>
+    fun consumePendingAppSideload()
+
+    /** Tab the locker should select when it next shows; consumed by the locker screen. */
+    val pendingLockerTab: StateFlow<AppType?>
+    fun consumePendingLockerTab()
+    fun navigateToLockerTab(type: AppType)
+
     fun consumeRequestIndexCompanion()
     fun confirmPendingFirmwareSideload()
     fun dismissPendingFirmwareSideload()
@@ -80,6 +92,25 @@ class RealPebbleDeepLinkHandler(
     override val pendingFirmwareSideload: StateFlow<PendingFirmwareSideload?> =
         _pendingFirmwareSideload.asStateFlow()
     private var reservedSideloadCount = 0
+    private val _pendingAppSideload = MutableStateFlow<Path?>(null)
+    override val pendingAppSideload: StateFlow<Path?> = _pendingAppSideload.asStateFlow()
+
+    override fun consumePendingAppSideload() {
+        _pendingAppSideload.value = null
+    }
+
+    private val _pendingLockerTab = MutableStateFlow<AppType?>(null)
+    override val pendingLockerTab: StateFlow<AppType?> = _pendingLockerTab.asStateFlow()
+
+    override fun consumePendingLockerTab() {
+        _pendingLockerTab.value = null
+    }
+
+    override fun navigateToLockerTab(type: AppType) {
+        _pendingLockerTab.value = type
+        navigateToTab(PebbleNavBarRoutes.WatchfacesRoute)
+    }
+
 
     override fun consumeRequestIndexCompanion() {
         _requestIndexCompanion.value = false
@@ -108,6 +139,7 @@ class RealPebbleDeepLinkHandler(
                     NAVBAR_URL -> handleNavbar(uri.path)
                     REGISTER_INDEX_COMPANION_HOST -> handleRegisterIndexCompanion()
                     SHOW_WATCHES_HOST -> handleShowWatches()
+                    PERMISSION_REQUESTS_HOST -> handlePermissionRequests(uri.path)
 //                    UPDATE_WATCH_NOW_HOST -> handleShowWatches(uri.path)
                     else -> false
                 }
@@ -269,9 +301,16 @@ class RealPebbleDeepLinkHandler(
             logger.w { "handleApp: couldn't write file" }
             return false
         }
-        GlobalScope.launch {
-            libPebble.sideloadApp(file)
-        }
+        _pendingAppSideload.value = file
+        navigateToTab(PebbleNavBarRoutes.WatchfacesRoute)
+        return true
+    }
+
+    private fun handlePermissionRequests(path: String?): Boolean {
+        val appUuid = path?.trim('/')?.let { Uuid.parseOrNull(it) } ?: return false
+        _navigateToPebbleDeepLink.value = PebbleDeepLink(
+            PebbleNavBarRoutes.LockerAppRoute(uuid = appUuid.toString(), storedId = null, storeSource = null)
+        )
         return true
     }
 
@@ -374,6 +413,8 @@ class RealPebbleDeepLinkHandler(
         private const val ADD_STORE_FEED_HOST: String = "add-store-feed"
         private const val NAVBAR_URL: String = "navbar"
         private val SHOW_WATCHES_HOST = "show-watches"
+        private const val PERMISSION_REQUESTS_HOST = "permission-requests"
+        fun permissionRequestsUri(appUuid: Uuid) = "pebble://$PERMISSION_REQUESTS_HOST/$appUuid"
 //        private val UPDATE_WATCH_NOW_HOST = "update-watch-now"
         private val REGISTER_INDEX_COMPANION_HOST = IndexPlatformBluetoothAssociations.REQUEST_URI_HOST
         val NOTIFICATION_INTENT_URI_SHOW_WATCHES = Uri.parse("pebble://${SHOW_WATCHES_HOST}")

@@ -1,8 +1,8 @@
 package io.rebble.libpebblecommon.locker
 
 import io.rebble.libpebblecommon.LibPebbleConfigFlow
-import io.rebble.libpebblecommon.database.dao.LockerAppPermissionDao
-import io.rebble.libpebblecommon.database.entity.LockerAppPermission
+import io.rebble.libpebblecommon.database.dao.ForkAppPermissionDao
+import io.rebble.libpebblecommon.database.entity.ForkAppPermission
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -60,7 +60,7 @@ interface WatchappPermissions {
 }
 
 class WatchappPermissionResolver(
-    private val permissionDao: LockerAppPermissionDao,
+    private val permissionDao: ForkAppPermissionDao,
     private val configFlow: LibPebbleConfigFlow,
 ) : WatchappPermissions {
 
@@ -102,14 +102,14 @@ class WatchappPermissionResolver(
             PermissionSetting.FollowGlobal ->
                 permissionDao.deleteByAppUuidAndPermission(uuid, type)
             PermissionSetting.Allow ->
-                permissionDao.insertOrReplace(LockerAppPermission(uuid, type, granted = true))
+                permissionDao.insertOrReplace(ForkAppPermission(uuid, type, granted = true))
             PermissionSetting.Deny ->
-                permissionDao.insertOrReplace(LockerAppPermission(uuid, type, granted = false))
+                permissionDao.insertOrReplace(ForkAppPermission(uuid, type, granted = false))
         }
     }
 }
 
-private fun LockerAppPermission?.toSetting(): PermissionSetting = when {
+private fun ForkAppPermission?.toSetting(): PermissionSetting = when {
     this == null -> PermissionSetting.FollowGlobal
     granted -> PermissionSetting.Allow
     else -> PermissionSetting.Deny

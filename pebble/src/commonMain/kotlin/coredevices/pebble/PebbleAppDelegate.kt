@@ -1,5 +1,8 @@
 package coredevices.pebble
 
+import coredevices.pebble.weather.WeatherPlugin
+import coredevices.pebble.plugin.PreferencesPlugin
+import coredevices.pebble.permissions.PermissionRequestNotifier
 import co.touchlab.kermit.Logger
 import com.russhwolf.settings.Settings
 import coredevices.analytics.CoreAnalytics
@@ -11,6 +14,7 @@ import coredevices.firestore.UsersDao
 import coredevices.pebble.firmware.BatteryChargedNotifier
 import coredevices.pebble.firmware.FirmwareUpdateUiTracker
 import coredevices.pebble.services.AppstoreSourceInitializer
+import coredevices.pebble.services.BundledAppMigration
 import coredevices.pebble.services.AnalyticsHeartbeatQueue
 import coredevices.pebble.services.PebbleWebServices
 import coredevices.pebble.weather.WeatherFetcher
@@ -23,24 +27,31 @@ import io.rebble.libpebblecommon.connection.ConnectedPebble
 import io.rebble.libpebblecommon.connection.ConnectedPebbleDevice
 import io.rebble.libpebblecommon.connection.ConnectedPebbleDeviceInRecovery
 import io.rebble.libpebblecommon.connection.ConnectingPebbleDevice
-import io.rebble.libpebblecommon.connection.FirmwareUpdateCheckResult
 import io.rebble.libpebblecommon.connection.KnownPebbleDevice
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.connection.PebbleDevice
-import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdater
+import io.rebble.libpebblecommon.connection.Plugins
 import io.rebble.libpebblecommon.metadata.WatchHardwarePlatform
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.io.files.Path
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
 
 class PebbleAppDelegate(
+    private val plugins: Plugins,
+    private val weatherPlugin: WeatherPlugin,
+    private val preferencesPlugin: PreferencesPlugin,
+    private val permissionRequestNotifier: PermissionRequestNotifier,
+    private val bundledAppMigration: BundledAppMigration,
     private val libPebble: LibPebble,
     private val firmwareUpdateUiTracker: FirmwareUpdateUiTracker,
     private val permissionsRequester: PermissionRequester,
@@ -61,6 +72,8 @@ class PebbleAppDelegate(
     private val logger = Logger.withTag("PebbleAppDelegate")
 
     fun init() {
+        plugins.registerPlugin(weatherPlugin)
+        plugins.registerPlugin(preferencesPlugin)
         logger.d { "init()" }
         analyticsHeartbeatQueue.startProcessing(GlobalScope)
         permissionsRequester.init()
@@ -81,6 +94,8 @@ class PebbleAppDelegate(
             if (platform == Platform.IOS) {
                 libPebble.init()
             }
+            permissionRequestNotifier.init()
+            bundledAppMigration.init()
             if (platform == Platform.Android) {
                 // Onboarding on Android grants BT permissions, which may have been missing when
                 // libPebble.init() ran synchronously above. Kick off post-permission work now.
@@ -106,21 +121,8 @@ class PebbleAppDelegate(
             GlobalScope.launch {
                 libPebble.watches.collect { watches ->
                     watches.forEach { watch ->
-                        if (watch is ConnectedPebble.Firmware) {
-                            watch.firmwareUpdateAvailable.result?.let { fwup ->
-                                if (fwup is FirmwareUpdateCheckResult.FoundUpdate) {
-                                    firmwareUpdateUiTracker.maybeNotifyFirmwareUpdate(
-                                        fwup,
-                                        watch.identifier,
-                                        watch.name,
-                                    )
-                                }
-                            }
-                        }
-                        if (watch is ConnectedPebble.Firmware && watch.firmwareUpdateState is FirmwareUpdater.FirmwareUpdateStatus.InProgress) {
-                            firmwareUpdateUiTracker.firmwareUpdateIsInProgress(watch.identifier)
-                        }
                         if (watch is CommonConnectedDevice) {
+                            firmwareUpdateUiTracker.onConnectedWatch(watch)
                             usersDao.updateLastConnectedWatch(watch.serial)
                             batteryChargedNotifier.onBatteryLevel(
                                 watch.identifier,

@@ -169,6 +169,7 @@ class SelfHostedTranscriptionService(
         contentContext: String?,
         encoding: AudioEncoding,
         initialTimeout: Duration?,
+        totalTimeout: Duration?,
     ): Flow<TranscriptionSessionStatus> = flow {
         emit(TranscriptionSessionStatus.Open)
         val url = configuredUrl() ?: throw TranscriptionException.TranscriptionServiceUnavailable(MODEL)

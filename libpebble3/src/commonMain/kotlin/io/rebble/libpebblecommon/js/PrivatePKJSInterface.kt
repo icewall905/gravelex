@@ -1,5 +1,14 @@
 package io.rebble.libpebblecommon.js
 
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.permissions.isLegacy
+import io.rebble.libpebblecommon.permissions.queryState
+import io.rebble.libpebblecommon.plugin.PluginClient
+import io.rebble.libpebblecommon.plugin.ActionDeclaration
+import io.rebble.libpebblecommon.plugin.ActionDispatcher
+import io.rebble.libpebblecommon.plugin.PluginRegistry
+import io.rebble.libpebblecommon.plugin.SourceDeclaration
+import io.rebble.libpebblecommon.plugin.SourceDispatcher
 import co.touchlab.kermit.Logger
 import io.rebble.cobble.shared.data.js.ActivePebbleWatchInfo
 import io.rebble.cobble.shared.data.js.fromWatchInfo
@@ -19,6 +28,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -36,7 +48,13 @@ abstract class PrivatePKJSInterface(
     private val httpInterceptorManager: HttpInterceptorManager,
     private val notificationConfigFlow: NotificationConfigFlow,
     private val watchappPermissions: WatchappPermissionResolver,
+    private val pluginRegistry: PluginRegistry,
+    private val permissions: AppPermissions,
+    pluginClient: PluginClient,
 ) {
+    private val sourceDispatcher = SourceDispatcher(pluginRegistry, jsRunner, scope, permissions, pluginClient)
+    private val actionDispatcher = ActionDispatcher(pluginRegistry, jsRunner, scope, permissions, pluginClient)
+
     companion object {
         private val logger = Logger.withTag("PrivatePKJSInterface")
         private val sensitiveTerms = setOf(
@@ -235,11 +253,62 @@ abstract class PrivatePKJSInterface(
 
     open fun insertTimelinePin(pinJson: String) {
         val uuid = Uuid.parse(jsRunner.appInfo.uuid)
-        runBlocking { remoteTimelineEmulator.insertPin(pinJson = pinJson, appUuid = uuid) }
+        runBlocking {
+            if (remoteTimelineEmulator.mayAddPins(uuid)) remoteTimelineEmulator.insertPin(pinJson = pinJson, appUuid = uuid)
+        }
     }
 
     open fun deleteTimelinePin(id: String) {
         val uuid = Uuid.parse(jsRunner.appInfo.uuid)
         runBlocking { remoteTimelineEmulator.deletePin(appUuid = uuid, pinIdentifier = id) }
     }
+
+    open fun subscribeToSource(subscriptionId: Int, requestJson: String) {
+        sourceDispatcher.subscribe(subscriptionId, requestJson)
+    }
+
+    open fun unsubscribeSource(subscriptionId: Int) {
+        sourceDispatcher.unsubscribe(subscriptionId)
+    }
+
+    open fun invokeAction(callId: Int, requestJson: String) {
+        actionDispatcher.invoke(callId, requestJson)
+    }
+
+    open fun queryPermission(callId: Int, permission: String) {
+        scope.launch {
+            val state = permissions.query(Uuid.parse(jsRunner.appInfo.uuid), permission).queryState()
+            jsRunner.eval("globalThis._signalPermissionQuery($callId, ${Json.encodeToString(String.serializer(), state)})")
+        }
+    }
+
+    /** The app's answer to a config-page message, keyed by the id the host sent. */
+    open fun configMessageReply(requestId: Int, json: String) {
+        jsRunner.onConfigReply(requestId, json)
+    }
+
+    /** The app pushing at its config page, unprompted. */
+    open fun sendConfigMessage(json: String) {
+        jsRunner.onConfigPush(json)
+    }
+
+    open fun enumeratePlugins(): String = Json.encodeToString(
+        ListSerializer(PluginSummary.serializer()),
+        if (isLegacy(jsRunner.appInfo.manifestVersion)) emptyList() else pluginRegistry.getAllPlugins().map { plugin ->
+            PluginSummary(
+                uuid = plugin.pluginUuid.toString(),
+                name = plugin.name,
+                sources = plugin.sources,
+                actions = plugin.actions,
+            )
+        },
+    )
+
+    @Serializable
+    data class PluginSummary(
+        val uuid: String,
+        val name: String,
+        val sources: List<SourceDeclaration>,
+        val actions: List<ActionDeclaration>,
+    )
 }

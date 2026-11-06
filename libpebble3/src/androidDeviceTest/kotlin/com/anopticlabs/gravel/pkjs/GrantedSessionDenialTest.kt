@@ -3,9 +3,9 @@ package com.anopticlabs.gravel.pkjs
 import androidx.test.filters.MediumTest
 import io.rebble.libpebblecommon.LibPebbleConfig
 import io.rebble.libpebblecommon.LibPebbleConfigFlow
-import io.rebble.libpebblecommon.database.dao.FakeLockerAppPermissionDao
+import io.rebble.libpebblecommon.database.dao.FakeForkAppPermissionDao
 import io.rebble.libpebblecommon.database.dao.LockerAppPermissionDao
-import io.rebble.libpebblecommon.database.entity.LockerAppPermission
+import io.rebble.libpebblecommon.database.entity.ForkAppPermission
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import io.rebble.libpebblecommon.js.PKJSRunnerTests
 import io.rebble.libpebblecommon.js.WebViewJsRunner
@@ -31,7 +31,7 @@ import kotlin.uuid.Uuid
 @MediumTest
 class GrantedSessionDenialTest : PKJSRunnerTests(::createJsRunner) {
 
-    private fun resolver(dao: LockerAppPermissionDao = FakeLockerAppPermissionDao()) =
+    private fun resolver(dao: LockerAppPermissionDao = FakeForkAppPermissionDao()) =
         WatchappPermissionResolver(dao, LibPebbleConfigFlow(MutableStateFlow(LibPebbleConfig())))
 
     // A ready granted session whose localStorage restore has completed, holding one value set by
@@ -87,11 +87,11 @@ class GrantedSessionDenialTest : PKJSRunnerTests(::createJsRunner) {
     @Test
     fun aSessionBuiltAsGrantedWhoseGrantIsAlreadyDeniedEnds() = runBlocking {
         val uuid = Uuid.random()
-        val stored = FakeLockerAppPermissionDao()
-        stored.insertOrReplace(LockerAppPermission(uuid, LockerAppPermissionType.Network, granted = false))
+        val stored = FakeForkAppPermissionDao()
+        stored.insertOrReplace(ForkAppPermission(uuid, LockerAppPermissionType.Network, granted = false))
         val grantedAtStart = object : LockerAppPermissionDao by stored {
             override suspend fun getByAppUuidAndPermission(appUuid: Uuid, permission: LockerAppPermissionType) =
-                LockerAppPermission(appUuid, permission, granted = true)
+                ForkAppPermission(appUuid, permission, granted = true)
         }
         val runner = makeRunner("", uuid, watchappPermissions = resolver(grantedAtStart)) as WebViewJsRunner
         try {

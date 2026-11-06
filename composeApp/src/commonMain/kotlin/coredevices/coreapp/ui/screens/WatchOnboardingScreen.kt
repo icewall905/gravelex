@@ -1,5 +1,7 @@
 package coredevices.coreapp.ui.screens
 
+import com.russhwolf.settings.Settings
+import coredevices.pebble.rememberLibPebble
 import CoreNav
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -66,6 +68,7 @@ import coredevices.pebble.ui.LanguageDialog
 import coredevices.pebble.ui.installStateFor
 import coredevices.pebble.ui.NativeLockerAddUtil
 import coredevices.pebble.ui.NativeWatchfaceMainContent
+import coredevices.pebble.ui.PermissionsIntroContent
 import coredevices.pebble.ui.SettingsIds.EnableActivityInsights
 import coredevices.pebble.ui.SettingsIds.EnableHealthPlatformSync
 import coredevices.pebble.ui.SettingsIds.EnableHealthTracking
@@ -80,6 +83,7 @@ import coredevices.pebble.ui.SettingsIds.HrmEnabled
 import coredevices.pebble.ui.SettingsIds.HrmMeasurementInterval
 import coredevices.pebble.ui.SettingsIds.OfflineSpeechRecognition
 import coredevices.pebble.ui.SettingsItemsState
+import coredevices.pebble.ui.Show
 import coredevices.pebble.ui.SnackbarDisplay
 import coredevices.pebble.ui.WatchOnboardingFinished
 import coredevices.pebble.ui.allCollectionUuids
@@ -88,6 +92,7 @@ import coredevices.pebble.ui.connectedWatch
 import coredevices.pebble.ui.languagePackInstalled
 import coredevices.pebble.ui.launchApp
 import coredevices.pebble.ui.rememberSettingsItemsState
+import coredevices.pebble.ui.setHasSeenPermissionsIntro
 import coredevices.ui.CoreLinearProgressIndicator
 import coredevices.ui.PebbleElevatedButton
 import io.rebble.libpebblecommon.connection.ConnectedPebbleDevice
@@ -110,6 +115,8 @@ import org.koin.compose.koinInject
 import theme.AppTheme
 import theme.onboardingScheme
 import kotlin.time.Duration.Companion.seconds
+import coredevices.pebble.ui.InstallReviewDialog
+import io.rebble.libpebblecommon.permissions.InstallReview
 
 private val logger = Logger.withTag("OnboardingScreen")
 
@@ -129,6 +136,8 @@ fun WatchOnboardingScreen(
     var haveStartedFwupSinceLastConnection by rememberSaveable { mutableStateOf(false) }
     var installRanSinceLastConnection by rememberSaveable { mutableStateOf(false) }
     val watchOnboardingFinished: WatchOnboardingFinished = koinInject()
+    val appSettings: Settings = koinInject()
+    val libPebbleConfig by rememberLibPebble().config.collectAsState()
     val snackbarDisplay =
         remember { SnackbarDisplay { scope.launch { snackbarHostState.showSnackbar(message = it) } } }
     val settings = rememberSettingsItemsState(
@@ -284,6 +293,14 @@ fun WatchOnboardingScreen(
                             return@Scaffold
                         }
 
+                        // Before the apps, since adding one can ask for permissions.
+                        if (libPebbleConfig.watchConfig.enablePlugins) {
+                            LaunchedEffect(Unit) { appSettings.setHasSeenPermissionsIntro(true) }
+                            SectionText("App permissions")
+                            Spacer(modifier = Modifier.height(15.dp))
+                            PermissionsIntroContent(settings)
+                            SectionDivider()
+                        }
                         OnboardingAppCarousel(
                             header = "Add some Watchfaces",
                             storeHome = pebbleStoreHomes[AppType.Watchface],
@@ -425,19 +442,6 @@ fun SectionDivider() {
     )
 }
 
-@Composable
-fun SettingsItemsState?.Show(id: String) {
-    if (this == null) {
-        return
-    }
-    val setting = remember(this) {
-        rawSettingsItems.find { it.id == id }
-    }
-    if (setting == null || !setting.show()) {
-        return
-    }
-    setting.Item()
-}
 
 @Composable
 fun OnboardingAppCarousel(
@@ -456,6 +460,7 @@ fun OnboardingAppCarousel(
     // Only use inital list of in-collection IDs (i.e. don't remove from list when they add from this screen)
     val initialAllCollectionUuids = remember(allCollectionUuids != null) { allCollectionUuids.orEmpty() }
     val nativeLockerAddUtil: NativeLockerAddUtil = koinInject()
+    val scope = rememberCoroutineScope()
     val watchType = watch.watchType.watchType
     val apps = remember(storeHome, watchType, initialAllCollectionUuids) {
         storeHome.result.onboarding?.forType(watchType)?.mapNotNull { appId ->
@@ -488,6 +493,7 @@ fun OnboardingAppCarousel(
     ) {
         items(apps, key = { it.uuid }) { entry ->
             var added by remember { mutableStateOf(false) }
+            var review by remember { mutableStateOf<InstallReview?>(null) }
             val commonAppStore = entry.commonAppType as? CommonAppType.Store ?: return@items
             Card(
                 modifier = Modifier.padding(3.dp)
@@ -520,25 +526,39 @@ fun OnboardingAppCarousel(
                             icon = Icons.Default.RemoveCircle,
                         )
                     } else {
+                        fun add(granted: Map<String, Boolean?>) {
+                            added = true
+                            GlobalScope.launch {
+                                val addResult = nativeLockerAddUtil.addAppToLocker(
+                                    commonAppStore,
+                                    commonAppStore.storeSource,
+                                    granted,
+                                )
+                                logger.v { "Add to locker from watch onboarding ${commonAppStore.storeApp?.title} result=$addResult" }
+                                if (!addResult) {
+                                    snackbarDisplay.showSnackbar("Failed to add app")
+                                    return@launch
+                                }
+                                libPebble.launchApp(
+                                    entry = entry,
+                                    snackbarDisplay = NoOpSnackbarDisplay,
+                                    connectedIdentifier = watch.identifier,
+                                )
+                            }
+                        }
+                        review?.let { pending ->
+                            InstallReviewDialog(pending) { granted ->
+                                review = null
+                                if (granted != null) add(granted) else added = false
+                            }
+                        }
                         PebbleElevatedButton(
                             text = "Add",
                             onClick = {
                                 added = true
-                                GlobalScope.launch {
-                                    val addResult = nativeLockerAddUtil.addAppToLocker(
-                                        commonAppStore,
-                                        commonAppStore.storeSource
-                                    )
-                                    logger.v { "Add to locker from watch onboarding ${commonAppStore.storeApp?.title} result=$addResult" }
-                                    if (!addResult) {
-                                        snackbarDisplay.showSnackbar("Failed to add app")
-                                        return@launch
-                                    }
-                                    libPebble.launchApp(
-                                        entry = entry,
-                                        snackbarDisplay = NoOpSnackbarDisplay,
-                                        connectedIdentifier = watch.identifier,
-                                    )
+                                scope.launch {
+                                    val appReview = nativeLockerAddUtil.review(commonAppStore)
+                                    if (appReview == null) add(emptyMap()) else review = appReview
                                 }
                             },
                             primaryColor = true,

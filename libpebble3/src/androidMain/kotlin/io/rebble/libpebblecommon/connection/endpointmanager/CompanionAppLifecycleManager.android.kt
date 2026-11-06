@@ -1,5 +1,6 @@
 package io.rebble.libpebblecommon.connection.endpointmanager
 
+import io.rebble.libpebblecommon.metadata.pbw.appinfo.hasPebbleKit2Companion
 import io.rebble.libpebblecommon.WatchConfigFlow
 import io.rebble.libpebblecommon.connection.CompanionApp
 import io.rebble.libpebblecommon.di.ConnectionCoroutineScope
@@ -16,6 +17,7 @@ actual fun createPlatformSpecificCompanionAppControl(
     device: CompanionAppDevice,
     appInfo: PbwAppInfo,
     pkjsRunning: Boolean,
+    legacyPebbleKitEnabled: Boolean,
     libPebbleCoroutineScope: LibPebbleCoroutineScope,
     connectionCoroutineScope: ConnectionCoroutineScope,
 ): CompanionApp? {
@@ -23,7 +25,7 @@ actual fun createPlatformSpecificCompanionAppControl(
         PebbleKitSurface.PebbleKit2 ->
             PebbleKit2(device, appInfo, pkjsRunning, libPebbleCoroutineScope, connectionCoroutineScope)
         PebbleKitSurface.Classic ->
-            PebbleKitClassic(device, appInfo, connectionCoroutineScope, libPebbleKoin().get<WatchConfigFlow>())
+            PebbleKitClassic(device, appInfo, pkjsRunning, connectionCoroutineScope, libPebbleKoin().get<WatchConfigFlow>())
     }
 }
 

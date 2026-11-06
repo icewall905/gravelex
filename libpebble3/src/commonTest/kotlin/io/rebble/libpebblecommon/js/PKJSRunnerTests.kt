@@ -8,7 +8,7 @@ import io.rebble.libpebblecommon.connection.FakeAppMessages
 import io.rebble.libpebblecommon.connection.FakeLibPebble
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.connection.fakeWatch
-import io.rebble.libpebblecommon.database.dao.FakeLockerAppPermissionDao
+import io.rebble.libpebblecommon.database.dao.FakeForkAppPermissionDao
 import io.rebble.libpebblecommon.database.entity.LockerEntry
 import io.rebble.libpebblecommon.locker.WatchappPermissionResolver
 import io.rebble.libpebblecommon.metadata.pbw.appinfo.PbwAppInfo
@@ -95,7 +95,7 @@ abstract class PKJSRunnerTests(
     // A real resolver over a fake DAO: the app has no override row, so the global
     // default alone decides its Network grant.
     private fun permissionResolver(networkGranted: Boolean) = WatchappPermissionResolver(
-        FakeLockerAppPermissionDao(),
+        FakeForkAppPermissionDao(),
         LibPebbleConfigFlow(
             MutableStateFlow(
                 LibPebbleConfig(

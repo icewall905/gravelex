@@ -1,5 +1,10 @@
 package io.rebble.libpebblecommon.js
 
+import io.rebble.libpebblecommon.plugin.PluginClient
+import io.rebble.libpebblecommon.plugin.PluginRegistry
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.permissions.NetworkGate
+import io.rebble.libpebblecommon.plugin.PluginNetworkVerdict
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.Uri
@@ -12,6 +17,7 @@ import android.view.View
 import android.webkit.GeolocationPermissions
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -46,6 +52,7 @@ import io.rebble.libpebblecommon.io.rebble.libpebblecommon.js.WebViewGeolocation
 import io.rebble.libpebblecommon.io.rebble.libpebblecommon.js.WebViewJSLocalStorageInterface
 import io.rebble.libpebblecommon.locker.WatchappPermissionResolver
 import io.rebble.libpebblecommon.metadata.pbw.appinfo.PbwAppInfo
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -55,7 +62,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -90,6 +96,9 @@ class WebViewJsRunner(
     notificationConfigFlow: NotificationConfigFlow,
     private val watchappPermissions: WatchappPermissionResolver,
     private val networkDenyEnforcement: NetworkDenyEnforcement,
+    pluginRegistry: PluginRegistry,
+    permissions: AppPermissions,
+    pluginClient: PluginClient,
 ): JsRunner(appInfo, lockerEntry, jsPath, device, urlOpenRequests), LibPebbleKoinComponent {
     private val context = appContext.context
 
@@ -117,6 +126,7 @@ class WebViewJsRunner(
         const val PRIVATE_API_NAMESPACE = "_$API_NAMESPACE"
         const val STARTUP_URL = "file:///android_asset/webview_startup.html"
         private val PAGE_LOAD_TIMEOUT = 15.seconds
+        private val LOCAL_STORAGE_PERSIST_TIMEOUT = 5.seconds
         private val FRAME_EVAL_TIMEOUT = 10.seconds
         private val PERSIST_TIMEOUT = 3.seconds
         private const val DENY_VIEW_WIDTH_PX = 320
@@ -168,8 +178,9 @@ class WebViewJsRunner(
     private val pageLoaded = CompletableDeferred<Boolean>()
     private var restoreCompleted: Boolean = false
     private val initializedLock = Object()
+    override val networkAccess = NetworkGate(permissions, appInfo.shortName, Uuid.parse(appInfo.uuid))
     private val publicJsInterface = WebViewPKJSInterface(this, device, context, libPebble, jsTokenUtil)
-    private val privateJsInterface = WebViewPrivatePKJSInterface(this, device, scope, _outgoingAppMessages, logMessages, jsTokenUtil, remoteTimelineEmulator, httpInterceptorManager, notificationConfigFlow, watchappPermissions)
+    private val privateJsInterface = WebViewPrivatePKJSInterface(this, device, scope, _outgoingAppMessages, logMessages, jsTokenUtil, remoteTimelineEmulator, httpInterceptorManager, notificationConfigFlow, watchappPermissions, pluginRegistry, permissions, pluginClient)
     private val localStorageInterface = WebViewJSLocalStorageInterface(appInfo.uuid, appContext) {
         // The frame's localStorage stand-in computes its own length.
         if (denyConstruction) return@WebViewJSLocalStorageInterface
@@ -185,8 +196,16 @@ class WebViewJsRunner(
             Pair(API_NAMESPACE, publicJsInterface),
             Pair(PRIVATE_API_NAMESPACE, privateJsInterface),
             Pair("_localStorage", localStorageInterface),
-            Pair("_PebbleGeo", geolocationInterface)
+            Pair("_PebbleGeo", geolocationInterface),
+            Pair("_PebbleNet", NetworkInterface()),
     )
+
+    /** Called from startup.js: the WebView's WebSocket can't be intercepted natively. */
+    private inner class NetworkInterface {
+        @JavascriptInterface
+        fun allowed(url: String): Boolean =
+            networkAllowed && runBlocking { networkAccess.check(url, wait = false) } is PluginNetworkVerdict.Allowed
+    }
 
     private val webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -239,6 +258,10 @@ class WebViewJsRunner(
             )
             if (plan is PkjsRequestPlan.Block) {
                 logger.d { "Blocking ${url?.scheme} request to ${url?.host ?: url?.path}: ${plan.reason}" }
+            }
+            if (plan !is PkjsRequestPlan.Block && url?.scheme in setOf("http", "https") &&
+                runBlocking { networkAccess.check(url.toString(), wait = false) } !is PluginNetworkVerdict.Allowed) {
+                return WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), null)
             }
             return plan.toWebResourceResponse(denyConstruction) {
                 context.assets.open(DENY_HOST_PAGE_ASSET)
@@ -830,6 +853,13 @@ class WebViewJsRunner(
         return true
     }
 
+    override suspend fun signalAudioStream(json: String) {
+        readyState.first { it }
+        withContext(Dispatchers.Main) {
+            webView?.evaluateJavascript("window.signalAudioStream(${Json.encodeToString(json)})", null)
+        }
+    }
+
     override suspend fun signalShowConfiguration() {
         readyState.first { it }
         withContext(Dispatchers.Main) {
@@ -840,6 +870,12 @@ class WebViewJsRunner(
     override suspend fun signalWebviewClosed(data: String?) {
         withContext(Dispatchers.Main) {
             evaluateInPage("window.signalWebviewClosedEvent(${Json.encodeToString(data)})")
+        }
+    }
+
+    override suspend fun signalConfigMessage(requestId: Int, json: String) {
+        withContext(Dispatchers.Main) {
+            webView?.evaluateJavascript("window.signalConfigMessageEvent($requestId, $json)", null)
         }
     }
 

@@ -10,6 +10,7 @@ import io.rebble.libpebblecommon.voice.TranscriptionProvider
 import io.rebble.libpebblecommon.voice.TranscriptionResult
 import io.rebble.libpebblecommon.voice.TranscriptionWord
 import io.rebble.libpebblecommon.voice.VoiceEncoderInfo
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -50,7 +51,7 @@ class VoiceSessionCoordinatorTest {
     )
     private val words = listOf(TranscriptionWord("take", 0.9f), TranscriptionWord("out", 0.9f))
 
-    private class Harness(scope: TestScope) {
+    private class Harness(scope: TestScope, streamAudio: (suspend (VoiceService.SessionSetupRequest) -> Unit)? = null) {
         val setupRequests = MutableSharedFlow<VoiceService.SessionSetupRequest>()
         val frames = mutableMapOf<UShort, MutableSharedFlow<UByteArray?>>()
         val log = mutableListOf<String>()
@@ -121,6 +122,7 @@ class VoiceSessionCoordinatorTest {
             watchAppCaptures = captureHandler,
             linkPace = pace,
             requestFastLink = { fastLinkRequests++ },
+            streamAudio = streamAudio,
         )
 
         private fun describe(result: TranscriptionResult) = when (result) {
@@ -153,6 +155,30 @@ class VoiceSessionCoordinatorTest {
         backgroundScope.launch { h.coordinator.run() }
         runCurrent()
         return h
+    }
+
+    @Test
+    fun audioStreamsUseTheirHandlerAndAreSupersededByNewSessions() = runTest {
+        val started = mutableListOf<Int>()
+        val cancelled = mutableListOf<Int>()
+        val h = Harness(this) { request ->
+            started += request.sessionId.toInt()
+            try { awaitCancellation() } finally { cancelled += request.sessionId.toInt() }
+        }
+        backgroundScope.launch { h.coordinator.run() }
+        runCurrent()
+        h.setupRequests.emit(request(1).copy(sessionType = SessionType.AudioStream))
+        runCurrent()
+        h.setupRequests.emit(request(2).copy(sessionType = SessionType.AudioStream))
+        runCurrent()
+        assertEquals(listOf(1, 2), started)
+        assertEquals(listOf(1), cancelled)
+        assertEquals(0, h.serveChecks)
+        h.setupRequests.emit(request(3))
+        runCurrent()
+        assertEquals(listOf(1, 2), cancelled)
+        assertEquals(listOf("setup:Dictation:Success:app=true"), h.log)
+        assertEquals(1, h.serveChecks)
     }
 
     @Test

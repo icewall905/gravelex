@@ -1,12 +1,16 @@
 package coredevices.coreapp
 
+import coredevices.util.R
+import coredevices.util.isDebugBuild
 import android.app.ActivityManager
 import android.app.Application
 import android.app.ApplicationExitInfo
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.os.StrictMode
@@ -138,6 +142,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory, Configurati
         // FirebaseResidueCleanup for the threat model.
         FirebaseResidueCleanup.launchInBackground(this)
         logger.i { "onCreate() version = $appVersionName ($appVersionCode) ${if (isDebuggableBuild) "debug" else "release"}" }
+        configureFileOpenAliases()
         dumpPreviousExitInfo()
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         registerReceiver(object : BroadcastReceiver() {
@@ -162,6 +167,25 @@ class MainApplication : Application(), SingletonImageLoader.Factory, Configurati
         pebbleBackgroundManager.monitorToStartBackground()
     }
 
+    private fun configureFileOpenAliases() {
+        val isSamsung = Build.MANUFACTURER.equals("samsung", ignoreCase = true)
+        setComponentEnabled("coredevices.coreapp.FileOpenActivity", !isSamsung)
+        setComponentEnabled("coredevices.coreapp.SamsungFileOpenActivity", isSamsung)
+    }
+
+    private fun setComponentEnabled(className: String, enabled: Boolean) {
+        val state = if (enabled) {
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        } else {
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        }
+        packageManager.setComponentEnabledSetting(
+            ComponentName(this, className),
+            state,
+            PackageManager.DONT_KILL_APP,
+        )
+    }
+
     // The install runs before logging exists, so its result is written here, into the log
     // that bug reports carry.
     private fun logUdpFilterResult() {
@@ -174,12 +198,13 @@ class MainApplication : Application(), SingletonImageLoader.Factory, Configurati
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val am =
                 getSystemService(ActivityManager::class.java)
-            val reasons =
-                am.getHistoricalProcessExitReasons(packageName, 0, 5)
-            reasons.firstOrNull()?.let { info ->
+            // The newest record is often an isolated child (WebView), so log them all.
+            val reasons = am.getHistoricalProcessExitReasons(packageName, 0, 0)
+            reasons.forEach { info ->
                 val time = Instant.fromEpochMilliseconds(info.timestamp)
                 logger.i {
-                    "Previous exit @ $time reason=${reasonName(info.reason)} " +
+                    "Previous exit @ $time process=${info.processName} " +
+                            "reason=${reasonName(info.reason)} " +
                             "description=${info.description} importance=${info.importance} " +
                             "pss=${info.pss} rss=${info.rss} status=${info.status}"
                 }
@@ -207,7 +232,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory, Configurati
     }
 
     private fun configureStrictMode() {
-        if (isDebuggableBuild) {
+        if (AppContext(this).isDebugBuild()) {
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
                     .detectDiskReads()

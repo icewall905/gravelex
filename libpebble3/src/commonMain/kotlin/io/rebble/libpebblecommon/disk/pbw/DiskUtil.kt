@@ -19,7 +19,7 @@ import okio.openZip
 object DiskUtil {
     private const val MANIFEST_FILENAME = "manifest.json"
     private const val APPINFO_FILENAME = "appinfo.json"
-    private val pbwJson = Json {
+    val pbwJson = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
@@ -73,6 +73,15 @@ object DiskUtil {
             openZip(pbwPath).platformSource(watchType, blobName).buffered()
         } catch (e: IOException) {
             throw IllegalStateException("Pbw does not contain binary blob $blobName for watch type $watchType")
+        }
+    }
+
+    fun getPbwTextFile(pbwPath: Path, fileName: String): String? {
+        return try {
+            openZip(pbwPath).source(fileName.toPath()).asKotlinxIoRawSource().buffered()
+                .use { it.readString() }
+        } catch (e: IOException) {
+            null
         }
     }
 

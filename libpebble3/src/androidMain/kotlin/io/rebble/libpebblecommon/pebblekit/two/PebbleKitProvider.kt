@@ -151,7 +151,7 @@ internal fun activeAppRow(watches: Watches, locker: LockerApi, serial: String): 
                   ActiveApp.TYPE to when (lockerEntry?.properties?.type) {
                      AppType.Watchface -> ActiveApp.TYPE_VALUE_WATCHFACE
                      AppType.Watchapp -> ActiveApp.TYPE_VALUE_WATCHAPP
-                     null -> ActiveApp.TYPE_VALUE_UNKNOWN
+                     AppType.Plugin, null -> ActiveApp.TYPE_VALUE_UNKNOWN
                   },
                )
             }

@@ -195,7 +195,9 @@ actual class ModelDownloadManager(
             networkRequest = buildNetworkRequest(allowMetered),
             allowMetered = allowMetered
         )
-        return jobScheduler.schedule(info) == JobScheduler.RESULT_SUCCESS
+        val scheduled = jobScheduler.schedule(info) == JobScheduler.RESULT_SUCCESS
+        if (scheduled) updateDownloadStatus(modelInfo.slug, ModelDownloadStatus.Scheduled(modelInfo.slug))
+        return scheduled
     }
 
     actual fun downloadSTTModel(modelInfo: ModelInfo, allowMetered: Boolean): Boolean =

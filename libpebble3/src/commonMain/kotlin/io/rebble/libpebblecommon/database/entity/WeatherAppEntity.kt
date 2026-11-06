@@ -139,6 +139,12 @@ private fun Double?.toCoordE2(): Short =
     this?.let { (it * 100).roundToInt().coerceIn(Short.MIN_VALUE + 1, Short.MAX_VALUE.toInt()).toShort() }
         ?: WEATHER_V4_COORD_UNKNOWN
 
+private fun serializedWeatherStringsLength(locationName: String, forecastShort: String): UShort =
+    (
+        locationName.encodeToByteArray().size + UShort.SIZE_BYTES +
+            forecastShort.encodeToByteArray().size + UShort.SIZE_BYTES
+    ).toUShort()
+
 class WeatherAppBlobRecord(
     version: UByte = 3u,
     currentTemp: Short,
@@ -163,12 +169,7 @@ class WeatherAppBlobRecord(
     val tomorrowLowTemp = SShort(m, tomorrowLowTemp, endianness = Endian.Little)
     val lastUpdateTimeUtc = SUInt(m, lastUpdateTimeUtc, endianness = Endian.Little)
     val isCurrentLocation = SBoolean(m, isCurrentLocation)
-    // UTF-8 byte counts, not String.length: SLongString writes UTF-8 bytes on the wire.
-    val allStringsLength = SUShort(
-        m,
-        (locationName.encodeToByteArray().size + 2 + forecastShort.encodeToByteArray().size + 2).toUShort(),
-        endianness = Endian.Little,
-    )
+    val allStringsLength = SUShort(m, serializedWeatherStringsLength(locationName, forecastShort), endianness = Endian.Little)
     val locationName = SLongString(m, locationName, endianness = Endian.Little)
     val forecastShort = SLongString(m, forecastShort, endianness = Endian.Little)
 }
@@ -361,12 +362,7 @@ class WeatherAppBlobRecordV4(
     val tomorrowHourlyTemp = SBytes(m, WEATHER_DB_HOURLY_COUNT, tomorrowHourlyTemp.toUByteArray(), endianness = Endian.Unspecified)
 
     // --- variable-length trailing strings (MUST stay last) ---
-    // UTF-8 byte counts, not String.length: SLongString writes UTF-8 bytes on the wire.
-    val allStringsLength = SUShort(
-        m,
-        (locationName.encodeToByteArray().size + 2 + forecastShort.encodeToByteArray().size + 2).toUShort(),
-        endianness = Endian.Little,
-    )
+    val allStringsLength = SUShort(m, serializedWeatherStringsLength(locationName, forecastShort), endianness = Endian.Little)
     val locationName = SLongString(m, locationName, endianness = Endian.Little)
     val forecastShort = SLongString(m, forecastShort, endianness = Endian.Little)
 }

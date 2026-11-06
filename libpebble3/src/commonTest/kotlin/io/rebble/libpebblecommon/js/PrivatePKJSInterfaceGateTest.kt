@@ -1,12 +1,14 @@
 package io.rebble.libpebblecommon.js
 
+import com.anopticlabs.gravel.testing.TestPluginBridge
+
 import io.rebble.libpebblecommon.LibPebbleConfig
 import io.rebble.libpebblecommon.LibPebbleConfigFlow
 import io.rebble.libpebblecommon.NotificationConfigFlow
 import io.rebble.libpebblecommon.WatchConfig
 import io.rebble.libpebblecommon.WatchConfigFlow
 import io.rebble.libpebblecommon.connection.TokenProvider
-import io.rebble.libpebblecommon.database.dao.FakeLockerAppPermissionDao
+import io.rebble.libpebblecommon.database.dao.FakeForkAppPermissionDao
 import io.rebble.libpebblecommon.database.dao.FakeLockerEntryDao
 import io.rebble.libpebblecommon.database.dao.FakeTimelinePinRealDao
 import io.rebble.libpebblecommon.database.dao.FakeTimelineReminderRealDao
@@ -63,7 +65,7 @@ class PrivatePKJSInterfaceGateTest {
             ),
         )
         val resolver = WatchappPermissionResolver(
-            FakeLockerAppPermissionDao(),
+            FakeForkAppPermissionDao(),
             LibPebbleConfigFlow(configFlow),
         )
         val watchConfigFlow = WatchConfigFlow(configFlow)
@@ -72,11 +74,13 @@ class PrivatePKJSInterfaceGateTest {
         // The emulator's DAOs are never touched here (nothing routes to the timeline
         // emulator in these tests); it exists only because HttpInterceptorManager
         // requires the concrete type.
+        val plugins = TestPluginBridge(uuid, watchConfigFlow, scope)
         val emulator = RemoteTimelineEmulator(
             watchConfigFlow,
             Json,
             FakeTimelinePinRealDao(),
             FakeTimelineReminderRealDao(),
+            permissions = plugins.permissions,
         )
         val bridge = object : PrivatePKJSInterface(
             runner,
@@ -90,11 +94,13 @@ class PrivatePKJSInterfaceGateTest {
                 },
                 FakeLockerEntryDao(),
                 watchConfigFlow,
+                plugins.permissions,
             ),
             emulator,
             HttpInterceptorManager(emulator, InjectedPKJSHttpInterceptors(listOf(interceptor))),
             NotificationConfigFlow(configFlow),
             resolver,
+            plugins.registry, plugins.permissions, plugins.client,
         ) {}
         return Fixture(bridge, runner, interceptor, resolver)
     }

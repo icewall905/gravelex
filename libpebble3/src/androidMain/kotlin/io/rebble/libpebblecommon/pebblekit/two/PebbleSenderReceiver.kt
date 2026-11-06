@@ -14,13 +14,19 @@ import io.rebble.libpebblecommon.di.LibPebbleKoinComponent
 import io.rebble.libpebblecommon.disk.pbw.PbwApp
 import io.rebble.libpebblecommon.js.RemoteTimelineEmulator
 import io.rebble.libpebblecommon.js.TimelineLayoutJson
+import io.rebble.libpebblecommon.js.TimelineReminderJson
 import io.rebble.libpebblecommon.js.TimelinePinJson
 import io.rebble.libpebblecommon.locker.Locker
 import io.rebble.libpebblecommon.locker.LockerPBWCache
+import io.rebble.libpebblecommon.metadata.pbw.appinfo.pebbleKit2Packages
+import io.rebble.libpebblecommon.permissions.AppPermissions
+import io.rebble.libpebblecommon.permissions.PermissionDecision
+import io.rebble.libpebblecommon.permissions.pebbleKit2Key
 import io.rebble.libpebblecommon.services.appmessage.AppMessageResult
 import io.rebble.pebblekit2.common.SendDataCallback
 import io.rebble.pebblekit2.common.UniversalRequestResponse
 import io.rebble.pebblekit2.common.model.PebbleDictionary
+import io.rebble.pebblekit2.common.model.TimelineLayout
 import io.rebble.pebblekit2.common.model.TimelinePin
 import io.rebble.pebblekit2.common.model.TimelineResult
 import io.rebble.pebblekit2.common.model.TransmissionResult
@@ -63,6 +69,7 @@ class PebbleSenderReceiver : BasePebbleSenderReceiver(), LibPebbleKoinComponent 
     private val companionRegistry: PebbleKitCompanionRegistry = getKoin().get()
     private val watchIdentity: PebbleKitWatchIdentity = getKoin().get()
     private val watchConfig: WatchConfigFlow = getKoin().get()
+    private val permissions: AppPermissions = getKoin().get()
     override val coroutineScope: LibPebbleCoroutineScope = getKoin().get()
 
     private val pebbleKit2Enabled: Boolean get() = watchConfig.value.pebbleKit2Enabled
@@ -225,7 +232,9 @@ class PebbleSenderReceiver : BasePebbleSenderReceiver(), LibPebbleKoinComponent 
         watchappUUID: UUID,
         timelinePin: TimelinePin
     ): TimelineResult {
-        if (!isAllowedToCommunicate(callingPackage, watchappUUID)) {
+        if (!isAllowedToCommunicate(callingPackage, watchappUUID) ||
+            !remoteTimelineEmulator.mayAddPins(watchappUUID.toKotlinUuid())
+        ) {
             return TimelineResult.FailedNoPermissions
         }
 
@@ -294,7 +303,8 @@ class PebbleSenderReceiver : BasePebbleSenderReceiver(), LibPebbleKoinComponent 
             )
         )
 
-        return pbwInfo.info.companionApp?.android?.apps.orEmpty().any { it.pkg == pkg }
+        return pkg in pbwInfo.info.pebbleKit2Packages() &&
+            permissions.request(uuid.toKotlinUuid(), pebbleKit2Key(pkg)) == PermissionDecision.Granted
     }
 }
 
@@ -351,23 +361,33 @@ internal fun pseudonymiseTransmissionKeys(
 
 private fun TimelinePin.toPinJson(): TimelinePinJson {
     return TimelinePinJson(
-        id,
-        startTime,
-        duration?.inWholeMinutes?.toInt(),
-        layout = TimelineLayoutJson(
-            type  = layout.type.code,
-            title = layout.title,
-            subtitle = layout.subtitle,
-            body = layout.body,
-            tinyIcon = layout.tinyIcon,
-            smallIcon = layout.smallIcon,
-            largeIcon = layout.largeIcon,
-            primaryColor = layout.primaryColor,
-            secondaryColor = layout.secondaryColor,
-            backgroundColor = layout.backgroundColor,
-            headings = layout.headings,
-            paragraphs = layout.paragraphs,
-            lastUpdated = layout.lastUpdated,
-        )
+        id = id,
+        time = startTime,
+        durationMinutes = duration?.inWholeMinutes?.toInt(),
+        layout = layout.toLayoutJson(),
+        reminders = reminders.map { reminder ->
+            TimelineReminderJson(
+                time = reminder.time,
+                layout = reminder.layout.toLayoutJson(),
+            )
+        },
+    )
+}
+
+private fun TimelineLayout.toLayoutJson(): TimelineLayoutJson {
+    return TimelineLayoutJson(
+        type = type.code,
+        title = title,
+        subtitle = subtitle,
+        body = body,
+        tinyIcon = tinyIcon,
+        smallIcon = smallIcon,
+        largeIcon = largeIcon,
+        primaryColor = primaryColor,
+        secondaryColor = secondaryColor,
+        backgroundColor = backgroundColor,
+        headings = headings,
+        paragraphs = paragraphs,
+        lastUpdated = lastUpdated,
     )
 }

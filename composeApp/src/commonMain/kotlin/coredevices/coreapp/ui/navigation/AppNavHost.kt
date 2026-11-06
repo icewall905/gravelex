@@ -16,11 +16,11 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavUri
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.dialog
 import androidx.navigation.toRoute
 import co.touchlab.kermit.Logger
-import coredevices.EnableExperimentalDevices
-import coredevices.ExperimentalDevices
 import coredevices.ring.ui.navigation.RingRoute
+import coredevices.coreapp.ui.SpeechModelDownloadDialog
 import coredevices.coreapp.ui.screens.BugReportScreen
 import coredevices.coreapp.ui.screens.BugReportsListScreen
 import coredevices.coreapp.ui.screens.OnboardingScreen
@@ -29,7 +29,9 @@ import coredevices.coreapp.ui.screens.WatchOnboardingScreen
 import coredevices.pebble.PebbleDeepLinkHandler
 import coredevices.pebble.ui.PebbleRoutes
 import coredevices.pebble.ui.addPebbleRoutes
+import coredevices.pebble.ui.toNavBarRoute
 import coredevices.ui.GenericWebViewScreen
+import coredevices.util.BugReportContext
 import coredevices.util.CommonBuildKonfig
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -84,6 +86,14 @@ fun AppNavHost(navController: NavHostController, startDestination: Any) {
     val coreNav = remember {
         object : CoreNav {
             override fun navigateTo(route: CoreRoute) {
+                if (route is CommonRoutes.LockerAppRoute) {
+                    pebbleDeepLinks.navigateToTab(route.toNavBarRoute())
+                    return
+                }
+                if (route is CommonRoutes.LockerTabRoute) {
+                    pebbleDeepLinks.navigateToLockerTab(route.initialTab)
+                    return
+                }
                 if (route == PebbleRoutes.WatchHomeRoute) {
                     navController.popBackStack(CommonRoutes.OnboardingRoute, true)
                 }
@@ -106,15 +116,13 @@ fun AppNavHost(navController: NavHostController, startDestination: Any) {
             }
         }
     }
-    val experimentalDevices: ExperimentalDevices = koinInject()
+    val experimentalDevices: coredevices.ExperimentalDevices = koinInject()
     NavHost(navController, startDestination = startDestination) {
         experimentalDevices.addExperimentalRoutes(this, coreNav)
         addPebbleRoutes(
             coreNav,
             indexScreen = { topBarParams, navBarNav, scopedCoreNav ->
-                // Use the inner-scoped CoreNav so detail navigations
-                // (RecordingDetails, ObjectDetails, FullFeed, ...) stay
-                // inside the bottom-nav chrome.
+                // Use the inner-scoped CoreNav so inner navigations stay inside the bottom-nav.
                 experimentalDevices.IndexScreen(scopedCoreNav, topBarParams)
             },
             addExperimentalRoutes = { scopedCoreNav ->
@@ -122,10 +130,13 @@ fun AppNavHost(navController: NavHostController, startDestination: Any) {
             },
             isInnerScopedRoute = { it is RingRoute },
         )
+        dialog<CommonRoutes.SpeechModelDownloadDialog> {
+            SpeechModelDownloadDialog(onDismiss = { coreNav.goBack() })
+        }
         if (CommonBuildKonfig.QA) {
             composable<CommonRoutes.BugReport>(
                 deepLinks = listOf(
-                    NavDeepLink("pebblecore://deep-link/bug-report?pebble={pebble}")
+                    NavDeepLink("pebblecore://deep-link/bug-report?pebble={pebble}&context={context}&text={text}")
                 )
             ) {
                 val route: CommonRoutes.BugReport = it.toRoute()
@@ -134,6 +145,8 @@ fun AppNavHost(navController: NavHostController, startDestination: Any) {
                     pebble = route.pebble,
                     recordingPath = route.recordingPath,
                     screenshotPath = route.screenshotPath,
+                    screenContext = BugReportContext.decodeBugReportContext(route.context),
+                    initialText = route.text,
                 )
             }
             composable<CommonRoutes.AlphaTestInstructionsRoute> {
@@ -198,11 +211,4 @@ fun AppNavHost(navController: NavHostController, startDestination: Any) {
             // item is hidden. Navigating here anyway would crash the nav host.
         }
     }
-}
-
-@Composable
-fun experimentsEnabled(): Boolean {
-    val enableExperimentalDevices: EnableExperimentalDevices = koinInject()
-    val enableExperiments by enableExperimentalDevices.enabled.collectAsState()
-    return enableExperiments
 }

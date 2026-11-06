@@ -17,6 +17,7 @@ import io.rebble.libpebblecommon.database.dao.ContactDao
 import io.rebble.libpebblecommon.database.dao.HealthDao
 import io.rebble.libpebblecommon.database.dao.HealthSettingsEntryRealDao
 import io.rebble.libpebblecommon.database.dao.KnownWatchDao
+import io.rebble.libpebblecommon.database.dao.ForkAppPermissionDao
 import io.rebble.libpebblecommon.database.dao.LockerAppPermissionDao
 import io.rebble.libpebblecommon.database.dao.LockerEntryRealDao
 import io.rebble.libpebblecommon.database.dao.NotificationAppRealDao
@@ -40,6 +41,7 @@ import io.rebble.libpebblecommon.database.entity.HealthStatDao
 import io.rebble.libpebblecommon.database.entity.HealthStatEntity
 import io.rebble.libpebblecommon.database.entity.HealthStatSyncEntity
 import io.rebble.libpebblecommon.database.entity.KnownWatchItem
+import io.rebble.libpebblecommon.database.entity.ForkAppPermission
 import io.rebble.libpebblecommon.database.entity.LockerAppPermission
 import io.rebble.libpebblecommon.database.entity.LockerEntryEntity
 import io.rebble.libpebblecommon.database.entity.LockerEntrySyncEntity
@@ -81,6 +83,7 @@ internal const val DATABASE_FILENAME = "libpebble3.db"
         HealthSettingsEntryEntity::class,
         HealthSettingsEntrySyncEntity::class,
         LockerAppPermission::class,
+        ForkAppPermission::class,
         NotificationEntity::class,
         ContactEntity::class,
         VibePatternEntity::class,
@@ -96,7 +99,7 @@ internal const val DATABASE_FILENAME = "libpebble3.db"
         AppPrefsEntrySyncEntity::class,
         NotificationRuleEntity::class,
     ],
-    version = 46,
+    version = 51,
     autoMigrations = [
         AutoMigration(from = 10, to = 11),
         AutoMigration(from = 11, to = 12),
@@ -134,6 +137,8 @@ internal const val DATABASE_FILENAME = "libpebble3.db"
         AutoMigration(from = 43, to = 44),
         AutoMigration(from = 44, to = 45),
         AutoMigration(from = 45, to = 46),
+        // The fork keeps its existing grants and SpO2 columns when adding plugin permissions.
+        AutoMigration(from = 46, to = 51),
     ],
     exportSchema = true,
 )
@@ -148,6 +153,8 @@ abstract class Database : RoomDatabase() {
     abstract fun calendarDao(): CalendarDao
     abstract fun timelineReminderDao(): TimelineReminderRealDao
     abstract fun healthSettingsDao(): HealthSettingsEntryRealDao
+    abstract fun forkAppPermissionDao(): ForkAppPermissionDao
+
     abstract fun lockerAppPermissionDao(): LockerAppPermissionDao
     abstract fun notificationsDao(): NotificationDao
     abstract fun contactDao(): ContactDao
@@ -163,7 +170,6 @@ abstract class Database : RoomDatabase() {
 @DeleteTable(tableName = "WatchSettingsEntity")
 @DeleteTable(tableName = "WatchSettingsSyncEntity")
 class AutoMigration30 : AutoMigrationSpec
-
 
 @Suppress("NO_ACTUAL_FOR_EXPECT")
 expect object DatabaseConstructor : RoomDatabaseConstructor<Database> {
