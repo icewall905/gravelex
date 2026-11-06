@@ -9,3 +9,5 @@ GravelEx 0.5.0 integrates the official Pebble Android updates through November 5
 - Preserves existing network/location choices, health history, SpO2, battery observations, direct server exports, and the source-built Whisper/llama engines.
 
 Update GravelEx.apk over your existing installation through Obtainium. Package tdgs.gravel and the permanent signing key remain unchanged. Google services remain unnecessary; Ring/Index and Core-account cloud services remain outside this fork's supported features.
+
+Validated with 4,933 Android/JVM test executions (four skipped), three database-upgrade checks, release lint, and minified APK assembly. APK inspection found no Firebase/GMS/Play SDK references. Physical phone/watch behavior has not been tested for this release because no device was attached.
