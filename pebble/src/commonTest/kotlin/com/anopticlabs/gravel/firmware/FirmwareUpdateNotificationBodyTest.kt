@@ -12,6 +12,7 @@ class FirmwareUpdateNotificationBodyTest {
         version = testFwVersion("v4.38.1"),
         url = "https://github.com/coredevices/PebbleOS/releases/download/v4.38.1/normal_obelix_pvt_v4.38.1.pbz",
         notes = notes,
+        installsDirectly = false,
     )
 
     @Test

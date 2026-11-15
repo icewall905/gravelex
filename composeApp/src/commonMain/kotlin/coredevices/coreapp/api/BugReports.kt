@@ -3,6 +3,7 @@ package coredevices.coreapp.api
 import PlatformContext
 import co.touchlab.kermit.Logger
 import coredevices.util.emailOrNull
+import coredevices.util.WatchNotifier
 import dev.gitlive.firebase.Firebase
 import dev.gitlive.firebase.auth.auth
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,7 @@ import kotlinx.coroutines.withContext
 class BugReports(
     private val platformContext: PlatformContext,
     private val bugReportsService: BugReportsService,
+    private val watchNotifier: WatchNotifier,
 ) {
     private val logger = Logger.withTag("BugReports")
     private val _ticketDetails = MutableStateFlow<BugReportsListResponse?>(null)

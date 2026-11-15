@@ -78,7 +78,11 @@ class PebbleService: Service(), KoinComponent {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        pebbleBackgroundManager.onServiceStarted()
+        if (!pebbleBackgroundManager.onServiceStarted()) {
+            logger.i { "Service started but shouldn't be running; stopping" }
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         // Gravel: the ring is synced while this service runs, as upstream's ring sync was.
         ringSyncRunner.start(ringScope)
         return START_STICKY

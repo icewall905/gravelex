@@ -27,6 +27,7 @@ import coredevices.util.models.WhisperModelCatalog
 import coredevices.util.CoreConfig
 import coredevices.util.CoreConfigHolder
 import coredevices.util.DoneInitialOnboarding
+import coredevices.util.WatchNotifier
 import coredevices.util.emailOrNull
 import coredevices.util.models.CactusSTTMode
 import coredevices.util.models.ModelManager
@@ -49,6 +50,7 @@ import kotlin.time.Instant
 internal const val STT_UPDATE_NOTIFIED_VERSION_KEY = "stt_update_notified_version"
 internal const val STT_MODE_BEFORE_UPDATE_KEY = "stt_mode_before_update"
 internal val STT_UPDATE_NOTIFICATION_ID = "stt_update_notif".hashCode()
+internal const val STT_UPDATE_WATCH_KEY = "stt_update_notif"
 
 private val sttMigrationLogger = Logger.withTag("SttModelMigration")
 

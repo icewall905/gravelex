@@ -1,5 +1,8 @@
 package io.rebble.libpebblecommon.database.dao
 
+import io.rebble.libpebblecommon.database.entity.TimelineNotification
+import io.rebble.libpebblecommon.database.entity.TimelineNotificationEntity
+import io.rebble.libpebblecommon.database.entity.TimelineNotificationSyncEntity
 import io.rebble.libpebblecommon.database.entity.TimelinePin
 import io.rebble.libpebblecommon.database.entity.TimelinePinEntity
 import io.rebble.libpebblecommon.database.entity.TimelinePinSyncEntity
@@ -97,4 +100,36 @@ class FakeTimelineReminderRealDao : TimelineReminderRealDao {
     override suspend fun markForDeletionByParentId(parentId: Uuid): Unit = TODO("not faked")
 
     override suspend fun markForDeletionByParentIds(parentIds: List<Uuid>): Unit = TODO("not faked")
+}
+
+class FakeTimelineNotificationRealDao : TimelineNotificationRealDao {
+    override fun dirtyRecordsForWatchInsert(
+        identifier: String,
+        timestampMs: Long,
+        insertOnlyAfterMs: Long,
+    ): Flow<List<TimelineNotificationEntity>> = TODO("not faked")
+
+    override suspend fun deleteStaleRecords(timestampMs: Long): Unit = TODO("not faked")
+
+    override suspend fun markSyncedToWatch(syncRecord: TimelineNotificationSyncEntity): Unit = TODO("not faked")
+
+    override suspend fun markDeletedFromWatch(syncRecord: TimelineNotificationSyncEntity): Unit = TODO("not faked")
+
+    override fun existsOnWatch(identifier: String, primaryKey: Uuid): Flow<Boolean> = TODO("not faked")
+
+    override suspend fun insertOrReplace(item: TimelineNotificationEntity): Unit = TODO("not faked")
+
+    override suspend fun insertOrReplaceAll(items: List<TimelineNotificationEntity>): Unit = TODO("not faked")
+
+    override suspend fun markForDeletion(itemId: Uuid): Unit = TODO("not faked")
+
+    override suspend fun markAllForDeletion(itemIds: List<Uuid>): Unit = TODO("not faked")
+
+    override suspend fun markAllDeletedFromWatch(identifier: String): Unit = TODO("not faked")
+
+    override suspend fun deleteSyncRecordsForDevicesWhichDontExist(): Unit = TODO("not faked")
+
+    override suspend fun getEntry(itemId: Uuid): TimelineNotification? = TODO("not faked")
+
+    override fun getEntryFlow(itemId: Uuid): Flow<TimelineNotification?> = TODO("not faked")
 }

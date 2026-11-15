@@ -11,6 +11,7 @@ import io.rebble.libpebblecommon.connection.TokenProvider
 import io.rebble.libpebblecommon.database.dao.FakeForkAppPermissionDao
 import io.rebble.libpebblecommon.database.dao.FakeLockerEntryDao
 import io.rebble.libpebblecommon.database.dao.FakeTimelinePinRealDao
+import io.rebble.libpebblecommon.database.dao.FakeTimelineNotificationRealDao
 import io.rebble.libpebblecommon.database.dao.FakeTimelineReminderRealDao
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
 import io.rebble.libpebblecommon.locker.PermissionSetting
@@ -80,6 +81,7 @@ class PrivatePKJSInterfaceGateTest {
             Json,
             FakeTimelinePinRealDao(),
             FakeTimelineReminderRealDao(),
+            FakeTimelineNotificationRealDao(),
             permissions = plugins.permissions,
         )
         val bridge = object : PrivatePKJSInterface(

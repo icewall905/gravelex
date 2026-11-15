@@ -1,5 +1,6 @@
 package coredevices.coreapp.ui
 
+import coredevices.util.WatchNotifier
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material3.Icon
@@ -49,6 +50,7 @@ internal fun sttConfigAfterUpdateDownload(stt: STTConfig, stashed: CactusSTTMode
 fun SttModelUpdatePrompt() {
     val modelProvider: CactusModelPathProvider = koinInject()
     val modelManager: ModelManager = koinInject()
+    val watchNotifier: WatchNotifier = koinInject()
     val configHolder: CoreConfigHolder = koinInject()
     val settings: Settings = koinInject()
     val platformContext: PlatformContext = koinInject()

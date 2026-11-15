@@ -35,7 +35,9 @@ import coredevices.util.auth.GoogleAuthUtil
 import coredevices.util.Permission
 import coredevices.util.PermissionRequester
 import coredevices.util.Platform
+import coredevices.util.NoOpWatchNotifier
 import coredevices.util.RequiredPermissions
+import coredevices.util.WatchNotifier
 import coredevices.util.auth.GitHubAuthUtil
 import coredevices.util.auth.NoOpSilentSignIn
 import coredevices.util.auth.SilentSignIn
@@ -85,6 +87,7 @@ val androidDefaultModule = module {
     single { CoreAppVersion(get<Context>().appVersionName) }
     singleOf(::PlatformContext)
     singleOf(::AndroidPermissionRequester) bind PermissionRequester::class
+    singleOf(::NoOpWatchNotifier) bind WatchNotifier::class
     singleOf(::AndroidCompanionDevice) bind CompanionDevice::class
     singleOf(::AndroidUnmeteredWifi) bind UnmeteredWifi::class
     single<SelfHostedClientFactory> { AndroidSelfHostedClientFactory(get<AndroidUnmeteredWifi>()::binding) }

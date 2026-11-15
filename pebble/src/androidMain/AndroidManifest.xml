@@ -4,14 +4,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application>
         <receiver android:name=".ui.TestActionReceiver" android:exported="false" />
-        <receiver
-            android:name="coredevices.pebble.firmware.FirmwareSideloadReceiver"
-            android:exported="true"
-            android:permission="android.permission.DUMP">
-            <intent-filter>
-                <action android:name="coredevices.pebble.SIDELOAD_FIRMWARE" />
-            </intent-filter>
-        </receiver>
+        <receiver android:name="coredevices.pebble.permissions.PermissionRequestReceiver" android:exported="false" />
 
         <!-- Derived from the installing app's id so the fork does not squat upstream's
              authority. The basalt alias below is a PebbleKit ecosystem contract shared

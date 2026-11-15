@@ -4,6 +4,7 @@ import io.rebble.libpebblecommon.plugin.PluginClient
 import io.rebble.libpebblecommon.plugin.PluginRegistry
 import io.rebble.libpebblecommon.permissions.AppPermissions
 import io.rebble.libpebblecommon.permissions.NetworkGate
+import io.rebble.libpebblecommon.permissions.NetworkAccess
 import io.rebble.libpebblecommon.plugin.PluginNetworkVerdict
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
@@ -17,7 +18,6 @@ import android.view.View
 import android.webkit.GeolocationPermissions
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
-import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -46,6 +46,8 @@ import io.rebble.libpebblecommon.NotificationConfigFlow
 import io.rebble.libpebblecommon.connection.AppContext
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.database.entity.LockerAppPermissionType
+import io.ktor.client.HttpClient
+import io.rebble.libpebblecommon.js.JsEngine.Companion.proxyJs
 import io.rebble.libpebblecommon.database.entity.LockerEntry
 import io.rebble.libpebblecommon.di.LibPebbleKoinComponent
 import io.rebble.libpebblecommon.io.rebble.libpebblecommon.js.WebViewGeolocationInterface
@@ -62,6 +64,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -99,6 +102,7 @@ class WebViewJsRunner(
     pluginRegistry: PluginRegistry,
     permissions: AppPermissions,
     pluginClient: PluginClient,
+    httpClient: HttpClient,
 ): JsRunner(appInfo, lockerEntry, jsPath, device, urlOpenRequests), LibPebbleKoinComponent {
     private val context = appContext.context
 
@@ -179,7 +183,7 @@ class WebViewJsRunner(
     private var restoreCompleted: Boolean = false
     private val initializedLock = Object()
     override val networkAccess = NetworkGate(permissions, appInfo.shortName, Uuid.parse(appInfo.uuid))
-    private val publicJsInterface = WebViewPKJSInterface(this, device, context, libPebble, jsTokenUtil)
+    private val publicJsInterface = WebViewPKJSInterface(this, device, context, remoteTimelineEmulator, jsTokenUtil)
     private val privateJsInterface = WebViewPrivatePKJSInterface(this, device, scope, _outgoingAppMessages, logMessages, jsTokenUtil, remoteTimelineEmulator, httpInterceptorManager, notificationConfigFlow, watchappPermissions, pluginRegistry, permissions, pluginClient)
     private val localStorageInterface = WebViewJSLocalStorageInterface(appInfo.uuid, appContext) {
         // The frame's localStorage stand-in computes its own length.
@@ -192,20 +196,27 @@ class WebViewJsRunner(
         }
     }
     private val geolocationInterface = WebViewGeolocationInterface(scope, this)
+    // The startup page's CSP blocks the WebView's own WebSocket in every frame: this one is gated natively.
+    private val webSocketEvals = Channel<String>(Channel.UNLIMITED)
+    // These sockets egress through Ktor, outside the WebView proxy override (layer 3), and the
+    // dispatcher is a JS interface every frame sees, the denied-session frame included; so they
+    // also need this session's grant.
+    private val webSocketAccess = NetworkAccess { url, wait ->
+        if (!networkAllowed || denyConstruction) {
+            PluginNetworkVerdict.Denied("Network access denied for this watchapp")
+        } else {
+            networkAccess.check(url, wait)
+        }
+    }
+    private val webSockets = WebSocketManager(scope, { webSocketEvals.trySend(it) }, httpClient, Uuid.parse(appInfo.uuid), webSocketAccess)
+    private var webSocketEvalJob: Job? = null
     private val interfaces = setOf(
             Pair(API_NAMESPACE, publicJsInterface),
             Pair(PRIVATE_API_NAMESPACE, privateJsInterface),
             Pair("_localStorage", localStorageInterface),
             Pair("_PebbleGeo", geolocationInterface),
-            Pair("_PebbleNet", NetworkInterface()),
+            Pair(JsEngine.DISPATCH_NAMESPACE, JsEngine.Dispatcher(listOf(webSockets))),
     )
-
-    /** Called from startup.js: the WebView's WebSocket can't be intercepted natively. */
-    private inner class NetworkInterface {
-        @JavascriptInterface
-        fun allowed(url: String): Boolean =
-            networkAllowed && runBlocking { networkAccess.check(url, wait = false) } is PluginNetworkVerdict.Allowed
-    }
 
     private val webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -292,6 +303,7 @@ class WebViewJsRunner(
     // Main thread only. The dead state: not ready, no WebView, until the lifecycle stops the session.
     private fun endSession(view: WebView) {
         _readyState.value = false
+        webSockets.close()
         geolocationInterface.endWatches()
         releasePersistWait()
         view.destroy()
@@ -545,6 +557,9 @@ class WebViewJsRunner(
                 }
         }
 
+        webSocketEvalJob = scope.launch(Dispatchers.Main) {
+            for (js in webSocketEvals) webView?.evaluateJavascript(js, null)
+        }
         loadApp(jsPath.toString())
         if (withTimeoutOrNull(PAGE_LOAD_TIMEOUT) { pageLoaded.await() } != true) {
             error("PKJS startup page failed to load for ${appInfo.longName}")
@@ -642,6 +657,8 @@ class WebViewJsRunner(
     override suspend fun stop() {
         //TODO: Close config screens
         _readyState.value = false
+        webSocketEvalJob?.cancel()
+        webSockets.close()
         // Run teardown as NonCancellable. stop() is frequently invoked from an already-cancelled
         // connection scope — e.g. on watch disconnect.
         withContext(NonCancellable + Dispatchers.Main) {
@@ -778,6 +795,8 @@ class WebViewJsRunner(
 
         withContext(Dispatchers.Main) {
             val view = webView?.takeIf { !ending } ?: return@withContext
+            // The WebView's own defaults to 'blob', which apps written against it expect.
+            view.evaluateJavascript(webSockets.proxyJs() + WEBSOCKET_JS + "WebSocket._defaultBinaryType = 'blob';", null)
             view.evaluateJavascript(
                     """
                         (() => {

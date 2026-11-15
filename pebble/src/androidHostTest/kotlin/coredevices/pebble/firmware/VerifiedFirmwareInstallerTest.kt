@@ -13,6 +13,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.writeFully
 import io.rebble.libpebblecommon.connection.FirmwareUpdateCheckResult
 import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdateErrorStarting
+import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdateTrigger
 import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdater.FirmwareUpdateStatus
 import io.rebble.libpebblecommon.metadata.WatchHardwarePlatform
 import io.rebble.libpebblecommon.util.Crc32Calculator
@@ -176,6 +177,7 @@ class VerifiedFirmwareInstallerTest {
         version = testFwVersion(tag),
         url = url,
         notes = "",
+        installsDirectly = false,
     )
 
     private suspend fun record(pbz: ByteArray, tag: String = "v4.31.1", sha256: String = sha256Hex(pbz), size: Long? = pbz.size.toLong()) {
@@ -190,7 +192,7 @@ class VerifiedFirmwareInstallerTest {
 
     private fun handoffSucceeds() {
         onSideload = {
-            watchStates.value = FirmwareUpdateStatus.WaitingForReboot(update())
+            watchStates.value = FirmwareUpdateStatus.WaitingForReboot(update(), FirmwareUpdateTrigger.Ui)
         }
     }
 
@@ -238,7 +240,7 @@ class VerifiedFirmwareInstallerTest {
         val installer = installer(backgroundScope, serving(pbz))
         installer.runInstall(
             target(),
-            FirmwareUpdateCheckResult.FoundUpdate(testFwVersion("v4.31.1"), httpUrl, ""),
+            FirmwareUpdateCheckResult.FoundUpdate(testFwVersion("v4.31.1"), httpUrl, "", installsDirectly = false),
         )
         val state = assertIs<ForkFirmwareInstallState.Failed>(installer.stateValueFor("watch1"))
         assertContains(state.reason, "non-https")
@@ -251,7 +253,7 @@ class VerifiedFirmwareInstallerTest {
         record(pbz)
         // The gate reads the live per-watch state flow, so an update that
         // started after the device snapshot was taken still blocks.
-        watchStates.value = FirmwareUpdateStatus.WaitingToStart(update())
+        watchStates.value = FirmwareUpdateStatus.WaitingToStart(update(), FirmwareUpdateTrigger.Ui)
         val installer = installer(backgroundScope, serving(pbz))
         installer.runInstall(target(), update())
         val state = assertIs<ForkFirmwareInstallState.Failed>(installer.stateValueFor("watch1"))
@@ -521,6 +523,7 @@ class VerifiedFirmwareInstallerTest {
         onSideload = {
             watchStates.value = FirmwareUpdateStatus.NotInProgress.ErrorStarting(
                 FirmwareUpdateErrorStarting.ErrorParsingPbz,
+                FirmwareUpdateTrigger.Ui,
             )
         }
         val installer = installer(backgroundScope, serving(pbz))
@@ -589,6 +592,7 @@ class VerifiedFirmwareInstallerTest {
         record(pbz)
         watchStates.value = FirmwareUpdateStatus.NotInProgress.ErrorStarting(
             FirmwareUpdateErrorStarting.ErrorParsingPbz,
+            FirmwareUpdateTrigger.Ui,
         )
         val sideloadStarted = CompletableDeferred<Unit>()
         onSideload = { sideloadStarted.complete(Unit) } // upstream parse still running
@@ -601,8 +605,8 @@ class VerifiedFirmwareInstallerTest {
         assertEquals(1, forkFilesLeft().size, "file must survive while the sideload parse runs")
         assertEquals(ForkFirmwareInstallState.HandedOff, installer.stateValueFor("watch1"))
         // The retry's parse succeeds and the transfer runs to completion.
-        watchStates.value = FirmwareUpdateStatus.WaitingToStart(update())
-        watchStates.value = FirmwareUpdateStatus.WaitingForReboot(update())
+        watchStates.value = FirmwareUpdateStatus.WaitingToStart(update(), FirmwareUpdateTrigger.Ui)
+        watchStates.value = FirmwareUpdateStatus.WaitingForReboot(update(), FirmwareUpdateTrigger.Ui)
         install.join()
         assertEquals(ForkFirmwareInstallState.Idle, installer.stateValueFor("watch1"))
         assertTrue(forkFilesLeft().isEmpty())
@@ -618,6 +622,7 @@ class VerifiedFirmwareInstallerTest {
         record(pbz)
         watchStates.value = FirmwareUpdateStatus.NotInProgress.ErrorStarting(
             FirmwareUpdateErrorStarting.ErrorParsingPbz,
+            FirmwareUpdateTrigger.Ui,
         )
         onSideload = {} // upstream re-fails identically: no state change at all
         val installer = installer(backgroundScope, serving(pbz))
@@ -636,7 +641,7 @@ class VerifiedFirmwareInstallerTest {
         // file in the next process instead.
         val pbz = singleSlotPbz()
         record(pbz)
-        onSideload = { watchStates.value = FirmwareUpdateStatus.WaitingToStart(update()) }
+        onSideload = { watchStates.value = FirmwareUpdateStatus.WaitingToStart(update(), FirmwareUpdateTrigger.Ui) }
         val installer = installer(backgroundScope, serving(pbz))
         installer.runInstall(target(), update())
         assertEquals(1, forkFilesLeft().size, "file must outlive a transfer that is still running")
