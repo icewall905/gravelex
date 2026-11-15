@@ -28,6 +28,7 @@ import io.rebble.libpebblecommon.packets.WatchVersion.WatchVersionResponse
 import io.rebble.libpebblecommon.structmapper.SInt
 import io.rebble.libpebblecommon.structmapper.StructMapper
 import io.rebble.libpebblecommon.util.DataBuffer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
@@ -37,7 +38,6 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.offsetAt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.time.Clock
-import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -56,8 +56,9 @@ class SystemService(
     private val logger = Logger.withTag("SystemService")
     private val lastSentTimezoneId: AtomicReference<String> = AtomicReference(TimeZone.currentSystemDefault().id)
 
-    // The watch RTC crystal drifts; re-sync periodically while connected.
-    private val timeSyncInterval = 1.hours
+    // The watch RTC crystal drifts; re-sync periodically while connected (see TimeSyncPolicy).
+    private val lastTimeSync: AtomicReference<Instant?> = AtomicReference(null)
+    private var watchTimeCallback: CompletableDeferred<TimeMessage.GetTimeResponse>? = null
 
     private val _appVersionRequest = CompletableDeferred<PhoneAppVersion.AppVersionRequest>()
     val appVersionRequest: Deferred<PhoneAppVersion.AppVersionRequest> = _appVersionRequest
@@ -178,9 +179,21 @@ class SystemService(
 
     fun init() {
         scope.launch {
+            var tick = 0
             while (true) {
-                delay(timeSyncInterval)
-                updateTime()
+                delay(TimeSyncPolicy.CHECK_INTERVAL)
+                tick++
+                try {
+                    if (TimeSyncPolicy.isDue(lastTimeSync.load(), Clock.System.now())) {
+                        updateTime()
+                    } else if (tick % TimeSyncPolicy.DRIFT_CHECK_EVERY_TICKS == 0) {
+                        resyncIfDrifted()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.w(e) { "Periodic time sync failed" }
+                }
             }
         }
         scope.launch {
@@ -223,6 +236,11 @@ class SystemService(
                     is TimeMessage.GetTimeUtcRequest-> {
                         updateTime()
                     }
+
+                    is TimeMessage.GetTimeResponse -> {
+                        watchTimeCallback?.complete(packet)
+                        watchTimeCallback = null
+                    }
                 }
             }
         }
@@ -233,6 +251,7 @@ class SystemService(
         val time = Clock.System.now()
         val timeZone = TimeZone.currentSystemDefault()
         lastSentTimezoneId.store(timeZone.id)
+        lastTimeSync.store(time)
         // SetUTC only carries whole seconds and the watch RTC is whole-second, so
         // round to nearest rather than truncating: floor() alone biases the watch
         // ~0.5s slow, compounded by BLE/apply latency. Rounding removes the
@@ -255,12 +274,39 @@ class SystemService(
         if (currentTz != previousTz) {
             logger.d("Timezone changed while backgrounded: $previousTz -> $currentTz")
             updateTime()
+        } else if (TimeSyncPolicy.isDue(lastTimeSync.load(), Clock.System.now())) {
+            logger.d("Time sync overdue; syncing")
+            updateTime()
+        }
+    }
+
+    /**
+     * Asks the watch for its clock and re-sends the phone's when they differ by
+     * [TimeSyncPolicy.MAX_DRIFT] or more. Firmware that does not answer is left to the hourly sync.
+     */
+    private suspend fun resyncIfDrifted() {
+        val callback = CompletableDeferred<TimeMessage.GetTimeResponse>()
+        watchTimeCallback = callback
+        protocolHandler.send(TimeMessage.GetTimeRequest())
+        val response = withTimeoutOrNull(WATCH_TIME_TIMEOUT) { callback.await() }
+        if (response == null) {
+            watchTimeCallback = null
+            logger.d("Watch did not answer a time request")
+            return
+        }
+        val drift = TimeSyncPolicy.drift(response.time.get().toLong(), Clock.System.now())
+        if (TimeSyncPolicy.needsResync(drift)) {
+            logger.i("Watch clock off by $drift; re-syncing")
+            updateTime()
+        } else {
+            logger.v("Watch clock drift $drift")
         }
     }
 
 }
 
 private val FIRMWARE_UPDATE_STATUS_TIMEOUT = 15.seconds
+private val WATCH_TIME_TIMEOUT = 5.seconds
 
 private val FIRMWARE_VERSION_REGEX = Regex("v?([0-9]+)\\.([0-9]+)(?:\\.([0-9]+))?(?:-(.*))?")
 
