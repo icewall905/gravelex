@@ -136,6 +136,7 @@ import com.anopticlabs.gravel.ui.phoneCalendarRefusalText
 import com.anopticlabs.gravel.ui.rememberNotebookTab
 import com.anopticlabs.gravel.ui.rememberTextModels
 import com.anopticlabs.gravel.ui.textModelsSummary
+import com.anopticlabs.gravel.weather.WeatherConsentDialog
 import com.anopticlabs.gravel.ui.notebookWatchAppSettings
 import com.russhwolf.settings.Settings
 import com.russhwolf.settings.set
@@ -161,6 +162,8 @@ import coredevices.pebble.ui.SettingsIds.EnableSleepInsights
 import coredevices.pebble.ui.SettingsIds.OfflineSpeechRecognition
 import coredevices.pebble.weather.WeatherFetcher
 import coredevices.pebble.weather.WeatherPlugin
+import coredevices.util.weatherOn
+import coredevices.util.withWeatherOff
 import coredevices.ui.ConfirmDialog
 import coredevices.ui.CoreLinearProgressIndicator
 import coredevices.ui.M3Dialog
@@ -320,7 +323,8 @@ internal fun serverOnMobileDataNote(mode: CactusSTTMode, phoneHasModel: Boolean)
         mode != CactusSTTMode.RemoteFirst && mode != CactusSTTMode.LocalFirst -> null
         !phoneHasModel -> "$lead Otherwise, watch dictation doesn't work until this phone has a speech model, and Notebook recordings wait for Wi-Fi."
         mode == CactusSTTMode.RemoteFirst ->
-            "$lead Otherwise, watch dictation and Notebook recordings of 30 seconds or less are transcribed on this phone, and longer recordings wait for Wi-Fi."
+            "$lead Otherwise, watch dictation, Notebook recordings of 30 seconds or less and recordings from the ring are " +
+                "transcribed on this phone, and longer recordings wait for Wi-Fi."
         else -> "$lead Otherwise, watch dictation is transcribed on this phone, and Notebook recordings the phone can't transcribe wait for Wi-Fi."
     }
 }
@@ -335,7 +339,7 @@ internal fun showsFlakyNetworkMode(mode: CactusSTTMode, phoneHasModel: Boolean):
 internal const val FLAKY_NETWORK_MODE_NOTE =
     "Turn this on if watch dictation fails because of your connection. The watch gives up if the " +
         "words don't come back within 15 seconds, so with this on, watch dictation is transcribed " +
-        "on this phone instead of your server."
+        "on this phone instead of your server, and so are Notebook recordings from the watch and the ring."
 
 object SettingsIds {
     const val PermissionPolicy = "PermissionPolicy"
@@ -710,6 +714,22 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
     val healthSettingsNullable by libPebble.healthSettings.collectAsState(null)
     val healthSettings = healthSettingsNullable ?: return null
     val weatherFetcher: WeatherFetcher = koinInject()
+    // Gravel: switching weather on asks first (CoreConfig.weatherAgreed).
+    var showWeatherConsent by remember { mutableStateOf(false) }
+    if (showWeatherConsent) {
+        WeatherConsentDialog(
+            title = "Share your location for weather?",
+            interval = coreConfig.weatherSyncInterval,
+            confirmLabel = "Share and turn on",
+            dismissLabel = "Cancel",
+            onConfirm = {
+                coreConfigHolder.agreeToWeather()
+                showWeatherConsent = false
+                GlobalScope.launch { weatherFetcher.fetchWeather(this) }
+            },
+            onDismiss = { showWeatherConsent = false },
+        )
+    }
     val watches by libPebble.watches.collectAsState(null)
     val watchesCastable = watches ?: return null
     val anyWatchSupportsSettingsSync = remember(watchesCastable) {
@@ -919,6 +939,15 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                         action = { nav.navigateTo(FirmwarePickerRoute()) },
                     )
                 },
+                // Gravel: the credit CC BY 4.0 asks for, for the built-in town list.
+                basicSettingsActionItem(
+                    title = "Town list",
+                    description = "Town names and positions adapted from GeoNames (geonames.org), under CC BY 4.0. Tap for the license.",
+                    topLevelType = TopLevelType.Phone,
+                    section = Section.About,
+                    action = { uriHandler.openUri("https://creativecommons.org/licenses/by/4.0/") },
+                    actionIcon = Icons.AutoMirrored.Default.Launch,
+                ),
                 // Fork: external browser, keeping the Intercom-backed help centre out
                 // of the app's own network traffic.
                 basicSettingsActionItem(
@@ -1978,17 +2007,17 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                 ),
                 basicSettingsToggleItem(
                     title = "Enable Weather",
-                    description = "Fetch weather for the current location, for the Weather App (requires location permission)",
+                    description = "Forecasts for your weather locations from Core Devices' weather server",
                     topLevelType = TopLevelType.Phone,
                     section = Section.Weather,
-                    checked = coreConfig.fetchWeather,
+                    checked = coreConfig.weatherOn,
                     onCheckChanged = {
-                        coreConfigHolder.update(
-                            coreConfig.copy(
-                                fetchWeather = it,
-                            )
-                        )
-                        GlobalScope.launch { weatherFetcher.fetchWeather(this) }
+                        if (it) {
+                            showWeatherConsent = true
+                        } else {
+                            coreConfigHolder.update(coreConfigHolder.config.value.withWeatherOff())
+                            GlobalScope.launch { weatherFetcher.fetchWeather(this) }
+                        }
                     },
                 ),
                 run {
@@ -2026,7 +2055,7 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                     itemText = {
                         it.displayName
                     },
-                    show = { coreConfig.fetchWeather }
+                    show = { coreConfig.weatherOn }
                 ),
                 basicSettingsToggleItem(
                     title = "Weather Pins",
@@ -2042,7 +2071,7 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                         )
                         GlobalScope.launch { weatherFetcher.fetchWeather(this) }
                     },
-                    show = { coreConfig.fetchWeather }
+                    show = { coreConfig.weatherOn }
                 ),
                 navBarNav?.let { nav -> basicSettingsActionItem(
                     title = "Locations",
@@ -2052,7 +2081,8 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                     action = {
                         nav.navigateTo(PebbleNavBarRoutes.WeatherRoute)
                     },
-                    show = { coreConfig.fetchWeather }
+                    // Gravel: viewable while weather is off, so the places it would send can be checked first.
+                    show = { true }
                 ) },
                 basicSettingsToggleItem(
                     title = "Use LAN developer connection",
@@ -2304,7 +2334,7 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                 basicSettingsToggleItem(
                     title = "Flaky Network Mode",
                     description = FLAKY_NETWORK_MODE_NOTE,
-                    keywords = "server self-hosted flaky network connection watch dictation phone",
+                    keywords = "server self-hosted flaky network connection watch dictation phone notebook ring",
                     topLevelType = TopLevelType.Phone,
                     section = Section.Speech,
                     checked = coreConfig.sttConfig.flakyNetworkMode,

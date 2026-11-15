@@ -91,5 +91,6 @@ fun manualWeatherLocation(
     latitude = latitude,
     longitude = longitude,
     currentLocation = false,
+    manual = true,
     orderIndex = orderIndex,
 )

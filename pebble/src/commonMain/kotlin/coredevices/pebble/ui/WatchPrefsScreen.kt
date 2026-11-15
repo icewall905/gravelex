@@ -23,7 +23,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coredevices.pebble.rememberLibPebble
 import coredevices.pebble.weather.WeatherFetcher
+import coredevices.util.weatherOn
 import coredevices.ui.ConfirmDialog
+import coredevices.util.CoreConfig
 import coredevices.util.CoreConfigHolder
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -111,7 +113,7 @@ fun watchPrefs(): List<SettingsItem> {
         settings.inLayoutOrder()
             .hidePresetManagedBacklightPrefs()
             .groupQuietTimeScheduleHours()
-            .hideUnusedBacklightColorPrefs(coreConfig.backlightColorAutoSunriseSunset)
+            .hideUnusedBacklightColorPrefs(!backlightTimeControls(coreConfig).pickers)
             .flatMap { item ->
                 val setting = when (val pref = item.pref) {
                     is BoolWatchPref -> booleanPref(pref.castParent(item), libPebble)
@@ -119,11 +121,12 @@ fun watchPrefs(): List<SettingsItem> {
                     is QuicklaunchWatchPref -> quicklaunchPref(pref.castParent(item), libPebble, quickLaunchOptions)
                     is ColorWatchPref -> colorPref(pref.castParent(item), libPebble)
                     is RgbColorWatchPref -> rgbColorPref(pref.castParent(item), libPebble)
-                    is NumberWatchPref -> numberPref(pref.castParent(item), libPebble)
+                    is NumberWatchPref -> numberPref(pref.castParent(item), libPebble, coreConfigHolder)
                     is ScheduleWatchPref -> schedulePref(pref.castParent(item), libPebble)
                 }
                 // Automatic sun times are a phone setting, shown with the night colour they serve.
-                if (item.pref == RgbColorWatchPref.BacklightColorNight) {
+                // Gravel: the automatic option needs weather, so it is hidden while weather is off.
+                if (item.pref == RgbColorWatchPref.BacklightColorNight && backlightTimeControls(coreConfig).automaticToggle) {
                     listOf(setting, autoSunTimesItem(coreConfigHolder, weatherFetcher))
                 } else {
                     listOf(setting)
@@ -258,7 +261,11 @@ fun WatchPref<*>.topLevelType(): TopLevelType = when (this) {
     else -> TopLevelType.Watch
 }
 
-private fun numberPref(item: WatchPreference<Long>, libPebble: LibPebble): SettingsItem {
+private fun numberPref(
+    item: WatchPreference<Long>,
+    libPebble: LibPebble,
+    coreConfigHolder: CoreConfigHolder,
+): SettingsItem {
     val pref = item.pref as NumberWatchPref
     return when (pref) {
         NumberWatchPref.BacklightTimeoutMs -> {
@@ -280,7 +287,7 @@ private fun numberPref(item: WatchPreference<Long>, libPebble: LibPebble): Setti
                 steps = NOTIFICATION_TIMEOUT_STEP_COUNT,
             )
         }
-        NumberWatchPref.BacklightColorSunriseMinute, NumberWatchPref.BacklightColorSunsetMinute -> timeOfDayPref(item, libPebble)
+        NumberWatchPref.BacklightColorSunriseMinute, NumberWatchPref.BacklightColorSunsetMinute -> timeOfDayPref(item, libPebble, coreConfigHolder)
         else -> basicSettingsNumberItem(
             id = pref.id,
             title = pref.settingsTitle(),
@@ -547,7 +554,11 @@ private fun autoSunTimesItem(coreConfigHolder: CoreConfigHolder, weatherFetcher:
     )
 }
 
-private fun timeOfDayPref(item: WatchPreference<Long>, libPebble: LibPebble): SettingsItem {
+private fun timeOfDayPref(
+    item: WatchPreference<Long>,
+    libPebble: LibPebble,
+    coreConfigHolder: CoreConfigHolder,
+): SettingsItem {
     val pref = item.pref
     return SettingsItem(
         id = pref.id,
@@ -557,11 +568,28 @@ private fun timeOfDayPref(item: WatchPreference<Long>, libPebble: LibPebble): Se
         group = pref.settingsGroup(),
         item = {
             SelectTimeOfDay(pref.settingsTitle(), item.valueOrDefault()) {
+                coreConfigHolder.setBacklightTimeByHand()
                 libPebble.setWatchPref(item.copy(value = it))
             }
         },
         isDebugSetting = pref.isDebugSetting,
     )
+}
+
+internal data class BacklightTimeControls(val automaticToggle: Boolean, val pickers: Boolean)
+
+// Gravel: the automatic times come from a weather fetch, so with weather off the option is hidden
+// and the times are set by hand.
+internal fun backlightTimeControls(config: CoreConfig) = BacklightTimeControls(
+    automaticToggle = config.weatherOn,
+    pickers = !config.backlightColorAutoSunriseSunset || !config.weatherOn,
+)
+
+// Gravel: a time set by hand turns the automatic option off, hidden or not, so turning weather on
+// later does not overwrite it.
+internal fun CoreConfigHolder.setBacklightTimeByHand() {
+    val current = config.value
+    if (current.backlightColorAutoSunriseSunset) update(current.copy(backlightColorAutoSunriseSunset = false))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

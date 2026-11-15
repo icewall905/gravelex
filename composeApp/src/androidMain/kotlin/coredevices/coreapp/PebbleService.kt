@@ -12,7 +12,11 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import co.touchlab.kermit.Logger
+import com.anopticlabs.gravel.app.RingSyncRunner
 import coredevices.util.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
@@ -28,6 +32,8 @@ class PebbleService: Service(), KoinComponent {
         NotificationManagerCompat.from(this)
     }
     private val pebbleBackgroundManager: PebbleBackgroundManager by inject()
+    private val ringSyncRunner: RingSyncRunner by inject()
+    private val ringScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         logger.v { "onStartCommand()" }
@@ -73,10 +79,13 @@ class PebbleService: Service(), KoinComponent {
             return START_NOT_STICKY
         }
         pebbleBackgroundManager.onServiceStarted()
+        // Gravel: the ring is synced while this service runs, as upstream's ring sync was.
+        ringSyncRunner.start(ringScope)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        ringSyncRunner.stop()
         pebbleBackgroundManager.onServiceStopped()
         notificationManagerCompat.cancel(1)
         super.onDestroy()

@@ -58,20 +58,23 @@ hierarchy types its error kind against an `index-ai` enum
 (`api(project(":index-ai"))` in `util/build.gradle.kts`). Their runtime
 is dead:
 
-- a no-op `LibIndex` is bound at the Koin seam;
+- the `LibIndex` bound at the Koin seam is Gravel's ring client (below),
+  never upstream's `RealLibIndex`, so `libindex`'s own scanner, pairing
+  and Room database are never constructed (`RingUnplugTest` checks that
+  Gravel's ring modules bind its client);
 - Gravel's stubs in `composeApp` replace the `experimental` types the app
   wiring touches, under the same fully-qualified names, so re-plugging
   the `experimental` module trips duplicate-class errors;
 - `CoreConfig.enableIndex` has no reachable set-point in a release build
-  (debug builds' adb-driven settings receiver can write it, and a flag
-  flipped that way reaches only the empty stubs).
+  (debug builds' adb-driven settings receiver can write it).
 
 The Ring satellite library `libindex` compiles against
 (`io.github.coredevices.haversine`, a prebuilt AAR with no public source
 that bundles two native libraries per ABI) is replaced by Gravel's module
 `:haversine-stubs`: inert same-FQN stand-ins for the eight symbols
 `libindex` references, whose satellite classes have private constructors
-and no factory, so no ring object can exist anywhere in the app
+and no factory, so none of haversine's ring objects can exist anywhere in
+the app (Gravel's ring client below does not use them)
 (`HaversineStubShapeTest` pins that shape, `HaversineStubTest` the
 static entry points). The wiring is a `dependencySubstitution` rule in
 `settings.gradle.kts`, applied to every project, rather than an edited
@@ -87,6 +90,171 @@ no `libhaversinesatellitelibrary.so` / `libppcommon.so`. This was the
 last dependency whose native code had no public source, and the last
 tree-level F-Droid inclusion blocker (the F-Droid section below records
 what the tree guarantees).
+
+### Gravel's ring client
+
+`:ring` is Gravel's own client for the Index 01 ring, separate from the
+upstream ring code above, which stays unplugged. It is written from the
+protocol description posted on
+[issue #23](https://github.com/david-cant-code/pebble-app-degoogled/issues/23)
+(2026-09-22, with a capture of pairing and a firmware update added
+2026-10-30). That description's author states they derived it from the
+haversine library's binaries and checked it against Bluetooth captures of
+Core's app; Gravel's code was written from the description alone, without
+the library's code or decompiled output, and takes its constants, byte
+layouts and decoding algorithm, not its text.
+
+Its protocol package (`com.anopticlabs.gravel.ring.protocol`) holds the
+pure parts: advertisement, reply and collection parsing, the audio
+decoder, and the grouping of collections into recordings. The requests it builds
+are reads of the stored range, a collection and the advertisement, and a
+write of the ring's clock; it has no erase or firmware request, and
+firmware updates are not implemented.
+
+Where the description leaves a choice open, the client reads it this way:
+
+- Its sync rule resumes inside the range excluding the end, while its
+  state diagram treats a position at the end as nothing new;
+  `RingRange.resumeAt` follows the diagram.
+- A write's reply counts the bytes written (the firmware-update capture),
+  so a write is done on its reply.
+- A collection is refused whole when it does not match the description
+  where the parser checks it, including: a header other than the one seen
+  on hardware, a missing audio or part record, a repeated record the
+  parser uses, a bitstream that ends inside a code, a sample rate outside
+  1 to 192,000 Hz. 16-bit PCM is moved to the unsigned scale the
+  compressed audio decodes to.
+- An escaped audio value is read most significant bit first.
+- A recording's parts are taken as consecutive collections sharing a
+  start index; a group the next collection does not continue (parts left
+  from before the ring restarted its indexes, for example) is rejected as
+  incomplete. A recording whose earlier parts are gone is kept from where
+  it starts. Sample rates within 1% of the first
+  part's are joined at that rate, and the first part dates the recording.
+
+The decoder's tests use hand-built vectors and round trips through a test
+encoder written from the same description, not recordings from a ring, so
+a misreading shared by both would pass them.
+
+A sync (`RingSession`, in `com.anopticlabs.gravel.ring.sync`) runs over
+one connection. It sets the ring's clock when the ring asks, then in each
+round reads the advertisement, the stored range and every collection from
+the saved position to the range's end, and repeats while the advertisement
+says the ring is recording. The advertisement is read before the range so
+that, as long as the ring counts a collection once it is in the stored
+range, the count stored when a sync ends is one the sync has read up to;
+the next advertisement's count is compared with it to decide whether to
+connect. The count is 8 bits, so when a multiple of 256 collections
+arrives between syncs, the sync waits for the next change or the
+runner's 6-hourly sync (below).
+
+The saved position moves past a recording only once the Notebook side has
+stored it, and past groups the assembly rejects and collections the parser
+refuses. A collection the ring refuses is passed with the recording it
+belongs to, and the session ends there. An unfinished recording keeps the
+position at its first part and is read again next time, since the ring
+keeps its collections; the session holds ring audio in memory only. The
+resume rule is the description's: a range that no longer holds the saved
+position restarts at its start, and a ring that was erased and has
+refilled past the saved position is read from that position.
+
+Core's Index 01 FAQ (help.repebble.com, "Index 01 - FAQ and Tips", updated
+2026-09-14) gives a recording at most 2 minutes, so an unfinished group
+past the Notebook's 5-minute limit, or past that limit's samples at 16 kHz
+whatever rate the ring claims, is dropped as a broken ring's, together
+with its later parts in the same session. A later session that starts
+inside such a recording keeps its remaining parts as a recording.
+
+The Notebook side (`NotebookRingSink` and `RingSyncFiles` in `composeApp`)
+takes what a sync reads. The sink drops recordings under a second as
+taps, resamples the rest to 16 kHz with `:resampler`, and ingests them as
+WAV marked as from the ring, dated by the ring's clock unless the ring
+gives no time, one before 2025 (a clock the phone never set) or one ahead
+of the phone's, in the phone's time zone at the sync. As for a watch
+recording, Pause all does not hold a ring recording and it never counts as
+long, whatever its length, so it does not wait for the charger; the
+Notebook's settings texts and paused lines name the exception. While the
+Notebook does not take recordings, 50 ring recordings are queued or kept,
+or 60 were stored in the past hour, the sink stores nothing and the session
+stops without moving the position, so the recordings stay on the ring for
+a later sync. A stored recording and the position past it are saved in one
+step that a canceled sync still finishes; what is left open is in
+`KNOWN_ISSUES.md`. The position is kept per ring under its Bluetooth
+address in the no-backup directory, so pairing the same ring again resumes
+where its last sync ended; a saved position that does not read back stops
+the sync rather than importing the ring again, until the user confirms
+Import again on the ring's Devices entry, which forgets the position so
+the next sync imports everything still on the ring, duplicates included.
+
+The Bluetooth link (`withRingConnection`, androidMain) uses Kable. It
+refuses a device that is not bonded before connecting, finds the three
+characteristics by UUID, subscribes the control channel and then the data
+channel before sending anything, and watches the connection state so a
+lost link ends the session at once with the status Android reported
+(`runRingLink`). It hangs up by subscribing to the system-input channel,
+which the description gives as the ring's disconnect signal, before the
+other subscriptions end.
+
+Whether the link is encrypted is up to Android and the ring.
+`btm_ble_connection_established` (android16-release,
+packages/modules/Bluetooth, `system/stack/btm/btm_ble_sec.cc`) encrypts a
+bonded LE link on connection, behind the flag `le_enc_on_reconnect`
+(`flags/pairing.aconfig`); android15-release has no such step. A
+peripheral's security request is answered by encrypting with the bond's
+key (`smp_proc_sec_req` in `system/stack/smp/smp_act.cc` and
+`btm_ble_link_sec_check`, same branch), and the description does not say
+whether the ring sends one. `BluetoothDevice.isEncrypted` is a system API
+(`@SystemApi`, same branch,
+`framework/java/android/bluetooth/BluetoothDevice.java`), so Gravel cannot
+check the link's encryption itself.
+
+In the app, `RingClientLibIndex` (`composeApp`) is bound as upstream's
+`LibIndex`, so upstream's Devices tab lists and pairs rings. Its "Add
+Index 01" item, removed while rings were unsupported, is back as upstream
+has it: a 30-second search for the ring's service, then Pair, which
+registers the ring with the companion device manager (upstream's step)
+and bonds with it, in the client's own scope so leaving the screen does
+not cancel it. Pair is offered for a ring in its normal image only, and
+nothing is erased on the ring. A bond attempt ends on Android's final
+state, and its unbond reason is read as upstream reads it, so a ring
+bonded to another phone gets upstream's reset instructions. Only a ring
+paired with that button is synced; unlike upstream, a ring bonded in
+Android's settings is not adopted. The paired ring's address is kept in
+the no-backup directory, since a bond stays on its phone, and is dropped
+when a read of Android's bonds finds none: after Android reports a bond
+change (the entry's menu sends the user to Android's Bluetooth settings
+to remove it, as upstream's does), at start, when the Bluetooth
+permission is granted, and when Bluetooth turns on.
+The client never presents upstream's interviewed ring type, whose arrival
+turns on upstream's Index feature, and `enableIndex` stays off;
+onboarding's Index 01 and Both choices take the watch's steps to the
+Devices tab. Two upstream behaviors that serve its ring feature are off:
+`PebbleBackgroundManager` does not keep the service up for a failsafe
+ring a search heard (Gravel has no ring recovery), and the `pebble://`
+companion request, which only upstream's own notification issues, is
+refused.
+
+`RingSyncRunner` runs while the background service does, which
+`PebbleBackgroundManager` keeps up while a ring is paired and Bluetooth
+is on (upstream's rule). It searches for the paired ring's advertisements
+continuously, as upstream does, starting again 3 seconds after a search
+that heard the ring and doubling that up to 5 minutes while searches end
+without hearing it; it syncs in a separate coroutine, so a failing search
+does not cut a sync short. It connects when `shouldSyncRing` calls for
+it, on first hearing the ring after the service starts, and 6 hours after
+the last sync while the ring is heard, never to a ring in its failsafe or
+factory-test image. It asks the sink first, within 10 seconds, so it does
+not connect while the Notebook is off or a limit is reached. A connection
+failing with status 133 is tried up to 5 times in all, a lost bond or
+failed authentication asks for pairing again, a session ends after 15
+minutes (one that imported something counts as a sync and is followed by
+the next at once),
+and any other unsuccessful end holds syncing off for 30 seconds, doubling
+up to 15 minutes; a sync is followed by 30 seconds without one. These
+holds run on `SystemClock.elapsedRealtimeNanos` (`ElapsedRealtime` in
+`RingClientLibIndex.kt`). A damaged saved position, found by a sync or when the
+runner starts, stops syncing until Import again. The ring's Devices entry
+shows where syncing stands in place of upstream's "Ready".
 
 ## Firebase
 
@@ -1576,9 +1744,10 @@ in the app's device suite:
   The note list and the recordings list are rebuilt (both also at each
   process start) from what remains: each recording that opens gets
   the name `recovered`, its file's time (now when that is unusable), no
-  zone, no attempts, no flag and no watch mark (so a watch recording is
-  handled as a phone recording, for example under Pause all and in the
-  limit on held watch recordings); what the rebuild processes again is in
+  zone, no attempts, no flag and no watch or ring mark (so a watch or ring
+  recording is handled as a phone recording, for example under Pause all and
+  in the limits on held watch and ring recordings); what the rebuild
+  processes again is in
   `KNOWN_ISSUES.md` (a capture published twice). For any other damaged part the card offers
   Restore and Start fresh side by side, or Start fresh alone for the parked
   completions, which backups do not hold. Start fresh sets the damaged
@@ -1648,12 +1817,13 @@ in the app's device suite:
   one capture at a time, one drain at a time (`CaptureDrain`), on the I/O
   dispatcher. Before each capture it reads the queue again and takes the
   first of `processingOrder`: short captures before long ones (long is
-  over 30 seconds or of unknown length, and never from the watch), each
-  group oldest first, under the user's pauses and settings
+  over 30 seconds or of unknown length, and never from the watch or the
+  ring), each group oldest first, under the user's pauses and settings
   (`ProcessingControls`). Pause all holds every capture but those from the
-  watch, Pause long recordings holds the long ones, and a pause stays
-  until Resume, across restarts, in a no-backup file. A pause, and a short
-  capture queued while a long one that may start again is still
+  watch or the ring, Pause long recordings holds the long ones, and a
+  pause stays until Resume, across restarts, in a no-backup file. A
+  pause, and a short capture queued while a long one that may start again
+  is still
   transcribing (Settings > Notebook, on by default), stops the matching
   capture through `CaptureDrain.interrupt`, even one picked but not yet
   started: it stays queued with its attempt given back and starts over
@@ -1755,8 +1925,8 @@ in the app's device suite:
   mode routes to the phone and the screen shows a notice
   (`CaptureSpeech.notice`) with Try again. Try again on the failed list
   resets the server tries. In both fallback modes with a phone model,
-  Flaky Network Mode sends captures made on the watch
-  (`QueuedCapture.fromWatch`) to the phone alone. A capture goes to the
+  Flaky Network Mode sends captures made on the watch or the ring
+  (`QueuedCapture.fromWearable`) to the phone alone. A capture goes to the
   server as one WAV built in
   memory (`SelfHostedTranscriptionService.transcribeRecording`), on a
   client of its own whose read timeout is 10 minutes, under dictation's
@@ -1919,9 +2089,8 @@ in the app's device suite:
   When that is short it frees the text model and compares again, and a
   second shortfall holds the drain, or, for a capture another route passed
   to the phone (Server (with Local Fallback), or Flaky Network Mode for
-  one made on the watch), makes only that capture wait; otherwise the text
-  model stays
-  loaded.
+  one made on the watch or the ring), makes only that capture wait;
+  otherwise the text model stays loaded.
   Host tests pin the order and the need; the estimates are measurements to
   repeat when the engine or the long-form limits change.
 - `CaptureCoordinator` runs the drain on a scope of its own, so no screen's
@@ -2310,6 +2479,14 @@ WebView routes (`RoadmapChangelogRoute`, `PebbleOsChangelogRoute`,
 `TroubleshootingRoute`) stay registered in `AppNavHost` but are
 unreachable, keeping the upstream cherry-pick surface small.
 
+Upstream's manifest also claims `https://cloud.repebble.com/githubAuth`,
+the return link of its GitHub sign-in, as an auto-verified App Link,
+which has the phone check that host when the app is installed or
+updated (sources in `AppLinkVerificationTest`). GitHub sign-in is off
+in Gravel, so the intent filter is gone, and that test fails if an
+auto-verified claim comes back in a tracked manifest.
+`PebbleDeepLinkHandler.handleGithubAuth` stays as upstream has it.
+
 ## App store search
 
 Both app store feeds (Core Devices and Rebble) keep their search index on
@@ -2344,6 +2521,164 @@ What remains is inherent to the feature: the submitted query text and
 the phone's IP reach Algolia's servers, which keep request logs of their
 own. The app listing (the fastlane description and the F-Droid recipe's
 NonFreeNet note) names Algolia for that reason.
+
+## Built-in town list
+
+Upstream finds places with compass's `geocoder-mobile` and
+`autocomplete-mobile`, which wrap Android's geocoder (compass 3.2.0,
+`AndroidPlatformGeocoder`); what that geocoder does is in
+`PlatformGeocoderSentinelTest`. Gravel answers the same compass calls
+from a town list in the APK: `BuiltInPlaces` in `:pebble` implements
+compass's `PlatformGeocoder` and `AutocompleteService`, and
+`watchModule` binds it where `MobileGeocoder` was. Three upstream call
+sites (the Weather Locations search, `OpenWeather25Interceptor`,
+`YahooWeatherInterceptor`) keep their code
+apart from the search screen (injection, wording, a trimmed query, and
+a "No town found" line with coordinate entry), and the Yahoo
+location cache, which is capped at 64 entries because every lookup now
+succeeds. The two `-mobile` artifacts are dropped, and
+`PlatformGeocoderSentinelTest` fails if a tracked source or the version
+catalog brings them, another compass artifact, or Android's geocoder
+back.
+
+The list is GeoNames' `cities1000` (its readme: places of more than
+1,000 people, or seats of administrative divisions down to the third
+order), minus historical, abandoned and destroyed places, trimmed by
+`tools/place-table/make_place_table.py` to four text files under
+`pebble/src/commonMain/composeResources/files/places/`: towns (name,
+position to three decimals, country and region codes, population in
+thousands, and for places of 100,000 or more their Latin-script
+alternate names, leaving out all-lowercase ones, ones with a digit,
+ones over 40 characters, all-capital ones of three characters or fewer
+and ones that, lowercased and without accents, equal the name or an
+alternate already kept), region names, country names, and a folding table
+for case- and accent-blind search. It is committed as text because
+GeoNames' data changes daily (its readme lists daily modification
+files) and its download directory held no dated copies of the dump
+files when checked on 2026-11-01, so a build-time download could not be
+checksum-pinned, and F-Droid's scanner rejects compressed archives in
+the tree. Each file's header names the
+download time and the source file's SHA-256; a refresh is a new
+download and a new run of the script, committed with the files it
+writes.
+
+What changes for users and watchapps, compared with the platform
+geocoder:
+
+- Names are GeoNames' primary names ("Munich", "Köln"), not localized to
+  the phone's language, and a place has no county
+  (`subAdministrativeArea`), so the Yahoo responses' `locality1` is the
+  country.
+- Watchapp position lookups are named after the nearest listed town,
+  however far away it is; the Current Location row is a listed town near
+  the phone (see Weather asks first).
+- Search ignores case, accents and punctuation. The town is always the
+  first comma part: its exact name or alternate name, or that of its
+  leading words when every other word that is not a number names the
+  place's region or country, alone or in a phrase
+  ("Portland OR", "Halifax Nova Scotia", "Portland 97201"). A region or
+  country is named by its GeoNames code, a code or name the generator
+  adds (ISO alpha-3, "UK", "UAE", common English and former country
+  names such as "Holland" and "Burma", Canadian and Australian postal
+  abbreviations), or its name or the start of it from three letters. A
+  run of single letters reads as one word, in those words and in area
+  names alike ("B.C." as "BC"). Later comma parts only rank the results
+  ("Portland, OR"), and numbers do not rank. Watchapp lookups
+  (`forward`, whose first result is used) return exact matches only, so
+  with none they return nothing. The search screen lists the other
+  places with a word starting with the same words after the exact
+  matches, and with no exact match it offers places with a word starting
+  with the first part, then the exact matches of the longest leading
+  words that have any. Each list ranks exact matches first, then the
+  places whose area the other words name most strongly, summed over
+  words and phrases: region code or name 4, country code or name 3,
+  start of the region's name 2, start of the country's name 1; a word
+  that names the country scores 3 even where the region has the same
+  name (the state of México). Among equals, an exact match on another
+  town's alternate name ranks below a town's own name unless that town
+  is 100 times bigger (GeoNames lists "Victoria" for Hong Kong and
+  "Cologne" for Köln). Five results, as upstream asked for, and a query
+  is read only to 100 characters, 4 parts and 8 words a part.
+- Short all-capital abbreviations such as "NYC" do not find the place
+  they abbreviate: no all-capital alternate of three characters or fewer
+  is kept.
+
+`PlaceTable` holds the list in parallel arrays and one search-key string,
+read on first use and kept for the life of the process. Nearest-town
+lookups search 1-degree cells inside a bounding box of a growing radius
+until the nearest hit lies within the radius; `BuiltInPlacesTest`
+checks them against a brute-force scan of the committed list. The full
+credit (creator, license link, modification) is in Settings > About
+("Town list") and the README; the town search and the store listing
+name GeoNames and the license.
+
+## Weather asks first
+
+Upstream has weather on by default and sends the position of each
+weather location, for Current Location the phone's own, to Core
+Devices' weather server at the refresh interval; with no current
+position it sends the last one stored. Gravel adds
+`CoreConfig.weatherAgreed`: `WeatherFetcher.fetchWeather` fetches only
+while `fetchWeather` and the agreement are both set (`weatherOn`), and
+a config stored before the field reads it as false, so weather is off
+after the update. Setup's Privacy step has a share switch, off on a
+new install and showing the stored choice on a re-run, that records the
+choice with the watchapp defaults (`applyWeatherChoice`), so a new
+install is not offered the popup; its Confirm then starts a fetch, as
+the Settings switch does.
+`WeatherOfferDialog` (`:composeApp`) asks once after the update, once
+What's New has been closed, while weather is on but not agreed to; its
+switch also starts off, so Done alone leaves weather off, and Done
+ignores taps for a second, as the popup can open under the finger that
+closed What's New. The
+Settings switch asks the same before turning weather on, and turning it
+off clears the agreement. The Locations list stays reachable with
+weather off, so the places the agreement covers can be checked first.
+
+`currentLocationAsTown` (the fourth call site, which now reads the
+town list directly) keeps the Current Location row at a listed town's
+position and name: the most populous listed place within 10 km of the
+phone, else the nearest (`currentLocationTown`; KNOWN_ISSUES has what
+this costs in accuracy). Populations are in thousands, so ties are
+common among villages; a tie goes to the first in the list's order,
+which does not depend on where the phone is among the tied places.
+With no position from the phone, a stored town is kept, as picking
+again from a town's own position can move to a bigger one, and any
+other stored position (an earlier build's) is snapped the same way, so
+it is not sent as it was.
+Without location access (`LocationAccess`: location permission and the
+phone's location switch on; bound on Android only) the row drops its
+position and town name. A fetch with weather off, which `init`, setup's
+Confirm and the Settings switch each start, clears the watch's weather
+and the row's
+position without a network call. A row with no position is
+left out of the weather sent to the watch, so the watch drops its entry,
+and the timeline pins come from the first place that has one. A fetch
+already running checks `weatherOn` again before each request and before
+writing to the watch, and every `WeatherFetcher` instance shares one
+lock, so the clearing fetch runs after it. libpebble applies each watch
+write in a coroutine of its own (`WeatherManager.updateWeatherData`), so
+a write made just before the switch and the clear after it can still
+land in either order. `CoreConfigHolder`
+serializes its writes, and `update` cannot switch weather on or set the
+agreement (only `agreeToWeather` can), so a write from an older copy of
+the config cannot turn a declined or withdrawn weather back on; it can
+still switch weather off. With weather off, the backlight's automatic
+sunrise and sunset option is hidden, and a time set by hand turns it
+off so a later fetch does not overwrite it. With weather on but no
+Current Location weather, the automatic times are not updated. Watchapp weather requests that
+Gravel answers through Core's server (`OpenWeather25Interceptor`,
+`YahooWeatherInterceptor`) are outside the agreement: they need the
+watchapp's internet permission (`PrivatePKJSInterface.onIntercepted`)
+and the intercept setting.
+`WeatherAgreementTest` runs `fetchWeather` against fakes for the
+agreement, the town sent and kept for Current Location, forgetting it
+without location access, the clear with weather off, the row left out
+and the re-check during a fetch; `WeatherScreensTest` covers which
+backlight controls show and the time set by hand, and
+`PrivatePKJSInterfaceGateTest` the watchapp permission gate. The
+sunrise and sunset schedule, the shared lock, the pins rule, the
+intercept setting and setup's binding of its fetch have no test.
 
 ## PebbleOS changelog list
 

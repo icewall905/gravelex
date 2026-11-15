@@ -13,11 +13,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.EditLocation
+import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Refresh
@@ -44,18 +43,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import co.touchlab.kermit.Logger
 import coredevices.database.WeatherLocationDao
 import coredevices.database.WeatherLocationEntity
 import coredevices.pebble.weather.WeatherFetcher
+import coredevices.pebble.weather.manualWeatherLocation
+import coredevices.pebble.weather.parseLatitude
+import coredevices.pebble.weather.parseLongitude
 import coredevices.pebble.weather.usefulName
 import coredevices.ui.M3Dialog
 import dev.jordond.compass.Place
 import dev.jordond.compass.autocomplete.Autocomplete
-import dev.jordond.compass.autocomplete.mobile
-import dev.jordond.compass.geocoder.Geocoder
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -111,7 +110,9 @@ fun WeatherScreen(navBarNav: NavBarNav, topBarParams: TopBarParams) {
                 }
             },
             allowCurrentLocation = !locations.any { it.currentLocation },
-            orderIndex = locations.size,
+            // max+1, not size: delete doesn't compact indices, so size can collide
+            // with a surviving row and make the ORDER BY tie-break unspecified.
+            orderIndex = (locations.maxOfOrNull { it.orderIndex } ?: -1) + 1,
         )
     }
 
@@ -200,40 +201,25 @@ private fun AddWeatherLocationDialog(
     allowCurrentLocation: Boolean,
     orderIndex: Int,
 ) {
-    val geocoder: Geocoder = koinInject()
-    val searchAvailable = remember { geocoder.isAvailable() }
-    var mode by remember {
-        mutableStateOf(if (allowCurrentLocation || searchAvailable) AddLocationMode.Choose else AddLocationMode.Manual)
-    }
+    var mode by remember { mutableStateOf(AddLocationMode.Choose) }
     var addressQuery by remember { mutableStateOf("") }
-    val autoComplete = remember { Autocomplete.mobile() }
+    // Gravel: searches the built-in town list on the phone.
+    val autoComplete: Autocomplete<Place> = koinInject()
     var suggestions by remember { mutableStateOf<List<Place>>(emptyList()) }
     var searchFailed by remember { mutableStateOf(false) }
-    var manualName by remember { mutableStateOf("") }
-    var manualLatitude by remember { mutableStateOf("") }
-    var manualLongitude by remember { mutableStateOf("") }
-    val parsedLatitude = parseCoordinate(manualLatitude, 90.0)
-    val parsedLongitude = parseCoordinate(manualLongitude, 180.0)
-
-    fun addLocation(name: String, latitude: Double?, longitude: Double?, currentLocation: Boolean = false, manual: Boolean = false) {
-        onAddLocation(
-            WeatherLocationEntity(
-                key = Uuid.random(),
-                name = name,
-                latitude = latitude,
-                longitude = longitude,
-                currentLocation = currentLocation,
-                manual = manual,
-                orderIndex = orderIndex,
-            )
-        )
-        onDismiss()
-    }
+    var searchedFor by remember { mutableStateOf<String?>(null) }
+    var latitudeText by remember { mutableStateOf("") }
+    var longitudeText by remember { mutableStateOf("") }
+    var nameText by remember { mutableStateOf("") }
+    val latitude = parseLatitude(latitudeText)
+    val longitude = parseLongitude(longitudeText)
 
     LaunchedEffect(addressQuery) {
-        if (addressQuery.length >= 3) {
+        val typed = addressQuery
+        val query = typed.trim()
+        if (query.length >= 3) {
             delay(300)
-            val result = autoComplete.search(addressQuery)
+            val result = autoComplete.search(query)
             if (result.isError) {
                 logger.e { "Error searching for places: ${result.errorOrNull()}" }
                 searchFailed = true
@@ -242,9 +228,11 @@ private fun AddWeatherLocationDialog(
                 searchFailed = false
                 suggestions = result.getOrNull() ?: emptyList()
             }
+            searchedFor = typed
         } else {
             searchFailed = false
             suggestions = emptyList()
+            searchedFor = null
         }
     }
 
@@ -254,18 +242,23 @@ private fun AddWeatherLocationDialog(
             Text(
                 when (mode) {
                     AddLocationMode.Choose -> "Add Weather Location"
-                    AddLocationMode.Search -> "Search Location"
+                    AddLocationMode.Search -> "Search Towns"
                     AddLocationMode.Manual -> "Enter Coordinates"
                 }
             )
         },
+        scrollableContent = mode == AddLocationMode.Manual,
         buttons = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
             if (mode == AddLocationMode.Manual) {
                 Spacer(Modifier.width(8.dp))
                 TextButton(
-                    onClick = { addLocation(manualName.trim(), parsedLatitude, parsedLongitude, manual = true) },
-                    enabled = manualName.isNotBlank() && parsedLatitude != null && parsedLongitude != null,
+                    enabled = latitude != null && longitude != null,
+                    onClick = {
+                        if (latitude == null || longitude == null) return@TextButton
+                        onAddLocation(manualWeatherLocation(latitude, longitude, nameText, orderIndex))
+                        onDismiss()
+                    },
                 ) { Text("Add") }
             }
         },
@@ -273,57 +266,35 @@ private fun AddWeatherLocationDialog(
         when (mode) {
             AddLocationMode.Choose -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (allowCurrentLocation) {
-                    AddLocationOption(
+                    AddLocationChoice(
                         icon = Icons.Default.MyLocation,
                         title = "Current Location",
-                        description = "Uses your device's location",
-                        onClick = { addLocation("Current Location", null, null, currentLocation = true) },
-                    )
+                        subtitle = "Uses a town near your phone, not its exact position",
+                    ) {
+                        val location = WeatherLocationEntity(
+                            key = Uuid.random(),
+                            name = "Current Location",
+                            latitude = null,
+                            longitude = null,
+                            currentLocation = true,
+                            orderIndex = orderIndex,
+                        )
+                        onAddLocation(location)
+                        onDismiss()
+                    }
                 }
-                if (searchAvailable) {
-                    AddLocationOption(
-                        icon = Icons.Default.LocationOn,
-                        title = "Fixed Location",
-                        description = "Search for a specific address",
-                        onClick = { mode = AddLocationMode.Search },
-                    )
-                }
-                AddLocationOption(
-                    icon = Icons.Default.EditLocation,
-                    title = "Manual Coordinates",
-                    description = "Enter latitude and longitude",
-                    onClick = { mode = AddLocationMode.Manual },
-                )
-            }
 
-            AddLocationMode.Manual -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = manualName,
-                    onValueChange = { manualName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Name") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = manualLatitude,
-                    onValueChange = { manualLatitude = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Latitude") },
-                    placeholder = { Text("e.g. 51.5074") },
-                    isError = manualLatitude.isNotBlank() && parsedLatitude == null,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-                OutlinedTextField(
-                    value = manualLongitude,
-                    onValueChange = { manualLongitude = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Longitude") },
-                    placeholder = { Text("e.g. -0.1278") },
-                    isError = manualLongitude.isNotBlank() && parsedLongitude == null,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
+                AddLocationChoice(
+                    icon = Icons.Default.LocationOn,
+                    title = "Fixed Location",
+                    subtitle = "Search for a town or city",
+                ) { mode = AddLocationMode.Search }
+
+                AddLocationChoice(
+                    icon = Icons.Default.EditLocationAlt,
+                    title = "Coordinates",
+                    subtitle = "Enter latitude and longitude",
+                ) { mode = AddLocationMode.Manual }
             }
 
             AddLocationMode.Search -> Column {
@@ -331,14 +302,15 @@ private fun AddWeatherLocationDialog(
                     value = addressQuery,
                     onValueChange = { addressQuery = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Address") },
-                    placeholder = { Text("Enter city or address") },
+                    label = { Text("Town or city") },
+                    placeholder = { Text("e.g. Portland") },
                     leadingIcon = {
                         Icon(Icons.Default.Search, contentDescription = null)
                     },
                     singleLine = true,
                 )
 
+                val notice = townSearchNotice(suggestions.isNotEmpty(), searchFailed, searchedFor, addressQuery)
                 if (suggestions.isNotEmpty()) {
                     Column(
                         modifier = Modifier
@@ -351,11 +323,17 @@ private fun AddWeatherLocationDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        addLocation(
-                                            place.usefulName() ?: displayName,
-                                            place.coordinates.latitude,
-                                            place.coordinates.longitude,
+                                        val locationName = place.usefulName() ?: displayName
+                                        val location = WeatherLocationEntity(
+                                            key = Uuid.random(),
+                                            name = locationName,
+                                            latitude = place.coordinates.latitude,
+                                            longitude = place.coordinates.longitude,
+                                            currentLocation = false,
+                                            orderIndex = orderIndex,
                                         )
+                                        onAddLocation(location)
+                                        onDismiss()
                                     }
                                     .padding(vertical = 10.dp, horizontal = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -373,34 +351,83 @@ private fun AddWeatherLocationDialog(
                             }
                         }
                     }
-                } else if (searchFailed) {
+                } else if (notice == TownSearchNotice.ListUnreadable) {
                     Text(
-                        "Couldn't search for locations. Check your connection and try again.",
+                        "Couldn't open the built-in town list.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = 12.dp),
                     )
-                } else if (addressQuery.length >= 3) {
+                    TextButton(
+                        onClick = { mode = AddLocationMode.Manual },
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) { Text("Enter coordinates instead") }
+                } else if (notice == TownSearchNotice.NoTownFound) {
                     Text(
-                        "Type to search for locations...",
+                        "No town found. Try the town's name alone, or enter its coordinates.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 12.dp),
                     )
+                    TextButton(
+                        onClick = { mode = AddLocationMode.Manual },
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) { Text("Enter coordinates instead") }
                 }
+                // Gravel: GeoNames credit where the town names are shown.
+                Text(
+                    "Towns from GeoNames (CC BY 4.0)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+
+            // Plain text keyboard on these fields: some IMEs' decimal layouts
+            // have no minus key, which southern/western coordinates need.
+            AddLocationMode.Manual -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = latitudeText,
+                    onValueChange = { latitudeText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Latitude") },
+                    placeholder = { Text("e.g. 51.5074") },
+                    singleLine = true,
+                    isError = latitudeText.isNotBlank() && latitude == null,
+                    supportingText = if (latitudeText.isNotBlank() && latitude == null) {
+                        { Text("Number between -90 and 90") }
+                    } else null,
+                )
+                OutlinedTextField(
+                    value = longitudeText,
+                    onValueChange = { longitudeText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Longitude") },
+                    placeholder = { Text("e.g. -0.1278") },
+                    singleLine = true,
+                    isError = longitudeText.isNotBlank() && longitude == null,
+                    supportingText = if (longitudeText.isNotBlank() && longitude == null) {
+                        { Text("Number between -180 and 180") }
+                    } else null,
+                )
+                OutlinedTextField(
+                    value = nameText,
+                    onValueChange = { nameText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Name (optional)") },
+                    placeholder = { Text("Defaults to the coordinates") },
+                    singleLine = true,
+                )
             }
         }
     }
 }
 
-internal fun parseCoordinate(text: String, limit: Double): Double? =
-    text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it in -limit..limit }
-
 @Composable
-private fun AddLocationOption(
+private fun AddLocationChoice(
     icon: ImageVector,
     title: String,
-    description: String,
+    subtitle: String,
     onClick: () -> Unit,
 ) {
     Row(
@@ -410,12 +437,16 @@ private fun AddLocationOption(
             .padding(vertical = 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(
-                description,
+                subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -446,3 +477,15 @@ private fun DeleteLocationConfirmDialog(
         Text("Are you sure you want to remove \"$locationName\"?")
     }
 }
+
+/** Gravel: the line under the town search field when there is nothing to list. */
+internal enum class TownSearchNotice { None, ListUnreadable, NoTownFound }
+
+/** "No town found" only once the search for exactly what is typed has finished. */
+internal fun townSearchNotice(hasResults: Boolean, searchFailed: Boolean, searchedFor: String?, typed: String): TownSearchNotice =
+    when {
+        hasResults -> TownSearchNotice.None
+        searchFailed -> TownSearchNotice.ListUnreadable
+        searchedFor == typed -> TownSearchNotice.NoTownFound
+        else -> TownSearchNotice.None
+    }
