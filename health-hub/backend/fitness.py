@@ -19,6 +19,7 @@ import training_ledger
 import readiness_history
 import monitor_observations
 import stock_estimates
+import daytime_stress
 import motion_quality
 import workout_edits
 import uuid
@@ -498,6 +499,8 @@ def summary(days=42):
         battery = watch_battery(db, now)
         receipt = db.execute("SELECT MAX(received) FROM reports").fetchone()[0]
         minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? ORDER BY ts", (since,))]
+        stress_minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts", (min(since, now-60*86400), now))]
+        stress_sleep = [dict(r) for r in db.execute("SELECT * FROM sleep_sessions WHERE start+seconds>=?", (min(since, now-60*86400)-86400,))]
         workouts = workout_edits.effective_rows(db)
         training_minutes = {}
         for workout in workouts:
@@ -561,10 +564,12 @@ def summary(days=42):
                          acute=finished.get('acute'),chronic=finished.get('chronic'),form=finished.get('form'))
     load['history']=[r for r in load['history'] if r['date']>=str(start_day)]
     load['workouts']=[w for w in load['workouts'] if w['start']>=since]
+    stress_workouts = workouts
     workouts=load['workouts'];history=load['history']
     recovery=hrv_analytics.analyze_history(hrv_rows, now=now)
     nightly=recovery_model.build([(r['ts'],hrv_analytics.analyze_session(r['payload'])) for r in hrv_rows if r['ts']>=now-70*86400],
                                  sleep_rows,snapshot_sleep,full_history,now,seed=seed)
+    daytime = daytime_stress.build(stress_minutes, stress_sleep, stress_workouts, now, TZ)
     monitors=monitor_observations.build(hrv_rows,now,TZ)
     stock = stock_estimates.build(hrv_rows, [], nightly['sleep'],
         recovery_model.training_state(full_history, today=datetime.fromtimestamp(now,TZ).date()), now, TZ)
@@ -588,7 +593,7 @@ def summary(days=42):
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},
-      "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
+      "daytime_stress":daytime, "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
       "fitness": physiology.fitness(json.loads(body_row['value']) if body_row else None,
                                     (weight or {}).get('latest',{}).get('trend_kg'), config.get('hr_max'),
                                     fit_minutes, active_today, TZ, datetime.fromtimestamp(now,TZ).date()),

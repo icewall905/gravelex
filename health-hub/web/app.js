@@ -245,7 +245,7 @@ function xLabels(items, W, x0, bw, H) {
   idx.forEach(i => {
     const it = items[i];
     const daily = items.length <= 7 && !it.week;
-    const label = daily ? fmtDay(it.label, { weekday: 'short' }) : fmtDayShort(it.label);
+    const label = isNum(it.ts) ? fmtClock(it.ts) : daily ? fmtDay(it.label, { weekday: 'short' }) : fmtDayShort(it.label);
     const anchor = items.length <= 7 ? 'middle' : i === 0 ? 'start' : i === items.length - 1 ? 'end' : 'middle';
     const x = anchor === 'start' ? x0 + i * bw : anchor === 'end' ? x0 + (i + 1) * bw : x0 + (i + .5) * bw;
     g.push(s('text', { x, y: H - 4, 'text-anchor': anchor }, label));
@@ -253,7 +253,7 @@ function xLabels(items, W, x0, bw, H) {
   return g;
 }
 function tipLabel(it) {
-  return it.week ? `Week of ${fmtDayShort(it.key)}` : fmtDay(it.key);
+  return isNum(it.ts) ? fmtDateTime(it.ts) : it.week ? `Week of ${fmtDayShort(it.key)}` : fmtDay(it.key);
 }
 
 /* Bar chart. items: [{key,label,v,cls,lo?}] */
@@ -875,6 +875,30 @@ function calendarGrid(days, hist, compact) {
 /* ================================================================== *
  * Today hero — the watch
  * ================================================================== */
+function daytimeStressNow() {
+  const st = D().daytime_stress || {};
+  const fresh = isNum(st.measured_at) && nowSec() >= st.measured_at && nowSec()-st.measured_at <= 3600 && isoOf(new Date(st.measured_at*1000)) === todayISO();
+  return {...st, score: fresh ? st.score : null};
+}
+function daytimeStressDetail() {
+  const st = daytimeStressNow(), days = new Map((st.daily || []).map(d=>[d.date,d]));
+  const points = new Map((st.points || []).map(p=>[p.ts,p.score]));
+  const start = new Date(); start.setHours(0,0,0,0);
+  const end = new Date(start); end.setDate(end.getDate()+1);
+  const items = [];
+  for (let ts=start.getTime()/1000; ts<Math.min(end.getTime()/1000,nowSec()+1); ts+=300) items.push({key:ts,ts,label:fmtClock(ts),v:points.get(ts) ?? null});
+  const latestDay=days.get(todayISO());
+  return card('stress','Stress · quiet pulse estimate',{chip:chip('Estimated'),cls:'wide'},
+    isNum(st.score) ? [big(fmt(st.score),'of 100'),h('meter',{min:0,max:100,low:25,high:75,optimum:0,value:st.score,'aria-label':'Estimated stress',style:{width:'100%',height:'24px'}},`${st.score} of 100`)] : pending('No current estimate','Needs quiet waking pulse and three earlier days with at least 30 quiet minutes each. Readings expire after one hour.'),
+    h('p',{class:'foot'},st.measured_at ? `Last scored reading ${fmtDateTime(st.measured_at)} · ${latestDay?.quiet_minutes ?? 0} quiet minutes today.` : 'No scored readings yet.'),
+    lineChart({items,W:chartW(),H:180,range:[0,100],unit:'of 100',label:'Estimated stress today; gaps indicate unscored periods'}),
+    h('h3',null,'Daily average'),
+    lineChart({items:dateSpan(S.range).map(d=>({key:d,label:d,v:days.get(d)?.score ?? null})),W:chartW(),H:180,range:[0,100],unit:'of 100',label:'Daily quiet pulse estimate'}),
+    info('How this estimate works','Ten consecutive minutes with zero recorded steps and no active flag are required. Recorded sleep, workouts and the following 15 minutes are excluded; only 06:00–23:00 is considered. Missing movement data is excluded.',
+      'Five-minute pulse medians use at least three eligible samples. Baseline is the median of daily quiet-pulse medians from the preceding 28 days, requiring three days with at least 30 eligible minutes. Score = 25 + 2.5 × pulse elevation in bpm, capped at 0–100. These are custom heuristic units, not validated stress thresholds.',
+      'Garmin uses heart rate and beat-to-beat HRV. This estimate uses pulse and movement only. Illness, caffeine, posture, missed sleep and sensor errors can also raise it; it cannot identify emotional stress. Unverified Pebble pulse intervals never feed this score. Daily averages describe scored quiet periods, not the whole day.'),
+    h('a',{href:'https://www.garmin.com/en-CA/garmin-technology/health-science/stress-tracking/',target:'_blank',rel:'noopener'},'Garmin: how stress tracking works'));
+}
 function watchHero() {
   const r = readinessNow(), sl = rec().sleep || {}, hs = rec().hrv_status || {}, n = lastNight();
   const d = D(), activity = d.current_activity || {}, battery = d.watch_battery || {};
@@ -883,8 +907,7 @@ function watchHero() {
   const training = d.training || {}, trainingLatest = training.latest || {};
   const intensity = (d.fitness || {}).intensity || {};
   const sleepByNight = byNight(rec().sleep_nights, 'night');
-  const debtNights = dateSpan(7).map(day=>sleepByNight.get(day)).filter(n=>n && isNum(n.sleep_s) && n.sleep_s>=0);
-  const debtSeconds = isNum(sl.need_s) && sl.need_s>0 && debtNights.length ? debtNights.reduce((sum,n)=>sum+Math.max(0,sl.need_s-n.sleep_s),0) : null;
+  const stress = daytimeStressNow();
   const latestHr = todayObs().filter(o => isNum(o.hr)).at(-1);
   const hr = new Date().getHours();
   const greet = hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
@@ -908,7 +931,7 @@ function watchHero() {
   const spark = {
     ready: sparkline({ items: week.map(day => ({ key: day, label: day, v: (readinessHist.get(day) || {}).readiness?.score ?? null })), unit: 'of 100', label: 'Readiness, last 7 days' }),
     sleep: sparkline({ items: week.map(day => { const n = sleepByNight.get(day); return { key: day, label: day, v: isNum(n?.sleep_s) ? n.sleep_s / 3600 : null }; }), unit: 'h', fmtV: v => fmt(v, 1), label: 'Sleep per night, last 7 nights' }),
-    debt: isNum(sl.need_s) ? sparkline({ bars: true, items: week.map(day => { const n = sleepByNight.get(day); return { key: day, label: day, v: isNum(n?.sleep_s) ? Math.max(0, (sl.need_s - n.sleep_s) / 3600) : null }; }), unit: 'h short', fmtV: v => fmt(v, 1), label: 'Nightly sleep shortfall, last 7 nights' }) : null,
+    stress: sparkline({items:week.map(day=>({key:day,label:day,v:(stress.daily || []).find(d=>d.date===day)?.score ?? null})),unit:'of 100',label:'Estimated stress, last 7 days'}),
     steps: sparkline({ bars: true, zeroBase: true, items: hourlySteps(todayObs()), unit: 'steps', fmtTip: it => `${it.t}:00`, label: 'Steps per hour today' }),
     hr: sparkline({ zeroBase: false, items: todayObs().filter(o => isNum(o.hr)).map(o => ({ key: o.ts, label: o.ts, v: o.hr, ts: o.ts })), unit: 'bpm', fmtTip: it => fmtClock(it.ts), label: 'Heart rate today' }),
     pulse: sparkline({ zeroBase: false, items: week.map(day => { const n = pulseByNight.get(day); return { key: day, label: day, v: isNum(n?.pulse) ? n.pulse : null }; }), unit: 'bpm', label: 'Overnight pulse, last 7 nights' }),
@@ -926,7 +949,7 @@ function watchHero() {
     h('div', { class: 'watch-metrics' },
       watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready', spark.ready),
       watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep', spark.sleep),
-      watchMetric('sleep', 'Sleep debt', isNum(debtSeconds) ? fmtDur(debtSeconds,true) : null, isNum(debtSeconds) ? `7-night shortfall · ${debtNights.length}/7 recorded · target ${fmtDur(sl.need_s,true)}/night${debtNights.length<7 ? ' · missing nights excluded' : ''}` : 'Needs recorded sleep and a target', 'sleep', spark.debt),
+      watchMetric('stress', 'Stress', isNum(stress.score) ? `${fmt(stress.score)} / 100` : null, isNum(stress.score) ? `estimated · ${fmtClock(stress.measured_at)}` : 'Quiet pulse estimate · no current reading', 'stress', spark.stress),
       watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps', spark.steps),
       watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart', spark.hr),
       watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr', spark.pulse),
@@ -1220,16 +1243,17 @@ const DETAIL = {
   },
 
   stress: {
-    title: 'Stress', m: 'stress', noRange: true,
+    title: 'Stress', m: 'stress',
     render() {
       const st = D().stress || {}, model=stockStrain();
-      if (stock().mode==='stock_firmware_estimates') return [card('stress','Estimated overnight strain',{chip:chip('Estimated'),cls:'wide'},
+      if (stock().mode==='stock_firmware_estimates') return [daytimeStressDetail(),card('stress','Estimated overnight strain',{chip:chip('Estimated'),cls:'wide'},
         stockStrainFresh(model) ? [big(fmt(model.score),'of 100'),h('p',{class:'lede'},model.measured_at?`Measured ${fmtDateTime(model.measured_at)}.`:'')] : pending('Estimated overnight strain unavailable',model.reason || 'A fresh estimate is needed.'),
         h('p',{class:'foot'},`${model.baseline_days ?? 0} of ${model.required_days ?? 3} baseline nights · Estimated overnight strain, not mental stress.`),
         info('About this estimate','This custom heuristic uses stock-firmware overnight pulse data and remains separate from the older HRV stress detail.'))];
       const pts = ((D().hrv || {}).analysis || {}).points || [];
       const bp = ((D().hrv || {}).analysis || {}).baseline_progress || {};
       return [
+        daytimeStressDetail(),
         card('stress', 'Arousal score', { chip: expChip(), cls: 'wide' },
           st.context==='manual' && isNum(st.experimental_score) ? [big(fmt(st.experimental_score), 'of 100'), h('p', { class: 'lede' }, stressWord(st.experimental_score))]
             : pending('Daytime recording status',monitorExplanation('stress')),
@@ -1900,7 +1924,9 @@ async function regenerateBriefing(btn) {
 
 function briefPanel(page, opts = {}) {
   const b = D().briefing, p = b && b.pages && b.pages[page];
-  if (!p || !(p.headline || p.summary)) return null;
+  if (!p || !(p.headline || p.summary)) return opts.regenerate ? card('sleep', 'AI sleep analysis', {cls:'wide'},
+    h('p',null,'Analyze sleep timing, recorded gaps, recent workouts and recovery data.'),
+    h('button',{class:'btn small',type:'button',onclick:e=>regenerateBriefing(e.currentTarget)},'Generate analysis')) : null;
   if (b.requires_refresh) return card('device','Briefing needs refresh',{cls:'wide'},
     h('p',null,'The saved briefing uses older collection or quality rules. Generate a new briefing before using it as current guidance.'),
     opts.regenerate ? h('button',{class:'btn small',type:'button',onclick:e=>regenerateBriefing(e.currentTarget)},'Regenerate') : h('a',{href:'#more'},'Refresh from More'));
@@ -1908,7 +1934,7 @@ function briefPanel(page, opts = {}) {
   const when = stale ? fmtDateTime(b.created) : fmtClock(b.created);
   const btn = opts.regenerate ? h('button', { class: 'btn small', type: 'button', onclick: e => regenerateBriefing(e.currentTarget) }, 'Regenerate') : null;
   return h('article', { class: 'card wide brief', 'data-m': 'ready' },
-    h('div', { class: 'card-head' }, swatch(), h('h2', null, 'Briefing'), chip(stale ? 'Out of date' : 'AI', stale ? '' : 'exp', 'Written by a language model from your computed numbers')),
+    h('div', { class: 'card-head' }, swatch(), h('h2', null, page === 'sleep' ? 'AI sleep analysis' : 'Briefing'), chip(stale ? 'Out of date' : 'AI', stale ? '' : 'exp', 'Written by a language model from your computed numbers')),
     p.headline ? h('p', { class: 'brief-head' }, p.headline) : null,
     p.summary ? h('p', { class: 'lede' }, p.summary) : null,
     (p.highlights || []).length ? h('ul', { class: 'brief-list' }, p.highlights.map(x => h('li', { class: `tone-${x.tone}` }, h('i', { 'aria-hidden': 'true' }), x.text))) : null,
@@ -1926,7 +1952,7 @@ const PAGES = {
       section('Body & device', CARDS.weight(), CARDS.device())];
   },
   sleep() {
-    return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep'), DETAIL.sleep.render())];
+    return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep', { regenerate: true }), DETAIL.sleep.render())];
   },
   recovery() {
     return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress())];
