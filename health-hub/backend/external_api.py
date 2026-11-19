@@ -280,6 +280,26 @@ def _daily_metrics(now):
     return result
 
 
+def _lean_dashboard(summary: dict[str, Any]) -> dict[str, Any]:
+    """The dashboard model without the bulk only the web diagnostics pages need.
+
+    Minute observations are cut to the last 36 hours (``/intraday`` serves full
+    days), raw HRV analysis and readiness snapshots are dropped.
+    """
+    out = dict(summary)
+    now = summary.get("now") or int(time.time())
+    out["observations"] = [o for o in summary.get("observations") or [] if isinstance(o, dict) and o.get("ts", 0) >= now - 36 * 3600]
+    hrv = summary.get("hrv")
+    if isinstance(hrv, dict):
+        out["hrv"] = {k: v for k, v in hrv.items() if k not in ("diagnostic", "quality", "analysis")}
+    recovery = summary.get("recovery")
+    if isinstance(recovery, dict):
+        out["recovery"] = {k: v for k, v in recovery.items() if k != "readiness_history"}
+    for key in ("monitor_observations", "training_ledger", "collector_history"):
+        out.pop(key, None)
+    return out
+
+
 def factory(summary_provider):
     """Return a Flask blueprint using an injected summary/history provider."""
     bp = Blueprint("external_api", __name__, url_prefix="/api/v1")
@@ -318,7 +338,7 @@ def factory(summary_provider):
         summary = summary_provider(days) if callable(summary_provider) else fitness.summary(days)
         if isinstance(summary, tuple):
             return jsonify(summary[0]), summary[1]
-        return jsonify(summary)
+        return jsonify(_lean_dashboard(summary))
 
     @bp.get("/daily")
     def daily_route():
