@@ -10,7 +10,7 @@ function extract(name) {
  return source.slice(start,end);
 }
 const context={Date,isNum:n=>typeof n==='number'&&Number.isFinite(n),rec:()=>context.record,
- isoOf:d=>d.toISOString().slice(0,10)};
+ isoOf:d=>d.toISOString().slice(0,10), serverToday:()=>new Date().toISOString().slice(0,10)};
 vm.createContext(context); vm.runInContext(extract('stockStrainFresh')+'\n'+extract('readinessNow'),context);
 const observed=1700000000, model={score:70,measured_at:observed,age_seconds:1};
 assert.equal(context.stockStrainFresh(model,observed+30*3600),true);

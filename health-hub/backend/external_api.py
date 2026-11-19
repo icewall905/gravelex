@@ -290,6 +290,8 @@ def factory(summary_provider):
         if denied is not None:
             return denied
         summary = summary_provider() if callable(summary_provider) else summary_provider.summary()
+        if isinstance(summary, tuple):  # dashboard_summary's (error, status) failure form
+            return jsonify(summary[0]), summary[1]
         now = summary.get("now", int(time.time())) if isinstance(summary, dict) else int(time.time())
         metrics=_metrics(summary)
         user=accounts.current()
@@ -298,6 +300,57 @@ def factory(summary_provider):
         identity={key:user[key] for key in ('id','username','display_name')} if user else None
         return jsonify({"api_version": "1", "generated_at": now,
                         "account":identity,"timezone": str(fitness.TZ), "metrics": metrics})
+
+    @bp.get("/dashboard")
+    def dashboard_route():
+        """The full dashboard model, for first-party clients such as the Android app."""
+        denied = _auth("summary:read")
+        if denied is not None:
+            return denied
+        try:
+            days = int(request.args.get("days", "42"))
+        except ValueError:
+            return jsonify(error="invalid days"), 400
+        if not 7 <= days <= 365:
+            return jsonify(error="invalid days"), 400
+        if fitness is None:
+            return jsonify(error="unavailable"), 503
+        summary = summary_provider(days) if callable(summary_provider) else fitness.summary(days)
+        if isinstance(summary, tuple):
+            return jsonify(summary[0]), summary[1]
+        return jsonify(summary)
+
+    @bp.get("/daily")
+    def daily_route():
+        denied = _auth("history:read")
+        if denied is not None:
+            return denied
+        import daily
+        try:
+            today = datetime.now(fitness.TZ).date()
+            last = date.fromisoformat(request.args["to"]) if request.args.get("to") else today
+            first = date.fromisoformat(request.args["from"]) if request.args.get("from") else last.fromordinal(last.toordinal() - 29)
+            if first > last or (last - first).days > 730:
+                raise ValueError
+        except ValueError:
+            return jsonify(error="invalid date range"), 400
+        with fitness.connect() as db:
+            items = daily.rollup(db, first, last, fitness.TZ, int(time.time()))
+        return jsonify({"api_version": "1", "generated_at": int(time.time()), "timezone": str(fitness.TZ), "items": items})
+
+    @bp.get("/intraday")
+    def intraday_route():
+        denied = _auth("history:read")
+        if denied is not None:
+            return denied
+        import daily
+        try:
+            day = date.fromisoformat(request.args["date"]) if request.args.get("date") else datetime.now(fitness.TZ).date()
+        except ValueError:
+            return jsonify(error="invalid date"), 400
+        with fitness.connect() as db:
+            result = daily.intraday(db, day, fitness.TZ, int(time.time()))
+        return jsonify(dict(result, api_version="1", generated_at=int(time.time()), timezone=str(fitness.TZ)))
 
     @bp.get("/<resource>")
     def history_route(resource):

@@ -73,6 +73,14 @@ function isoOf(date) {
 }
 const fmtDay = (iso, opts = { weekday: 'short', day: 'numeric', month: 'short' }) => parseISO(iso).toLocaleDateString(LOCALE, opts);
 const fmtDayShort = iso => parseISO(iso).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
+// Day keys follow the server's PEBBLE_TZ, so a browser in another zone agrees
+// with server-built nights, readiness and daily rollups.
+function isoInTz(date) {
+  const tz = (S.data && S.data.tz) || undefined;
+  try { return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); }
+  catch (e) { return isoOf(date); }
+}
+const serverToday = () => isoInTz(new Date());
 function addDays(iso, n) { const d = parseISO(iso); d.setDate(d.getDate() + n); return isoOf(d); }
 function ago(sec) {
   if (!isNum(sec)) return 'never';
@@ -516,7 +524,7 @@ function stockStrainFresh(model, now=Date.now()/1000) {
 }
 function readinessNow() {
   const r=rec().readiness || {};
-  if (r.formula_version==='readiness-stock-v1' && rec().today!==isoOf(new Date()))
+  if (r.formula_version==='readiness-stock-v1' && rec().today!==serverToday())
     return {...r,score:null,sleep_based_score:null,status:'stale',reason:'This is a cached earlier day. Refresh for today’s readiness.'};
   return r;
 }
@@ -576,14 +584,15 @@ function obsByLocalDay() {
   const out = new Map();
   (D().observations || []).forEach(o => {
     if (!o || !isNum(o.ts)) return;
-    const d = isoOf(new Date(o.ts * 1000));
+    const d = isoInTz(new Date(o.ts * 1000));
     if (!out.has(d)) out.set(d, []);
     out.get(d).push(o);
   });
   return out;
 }
+const dailyMap = () => new Map((D().daily || []).map(r => [r.date, r]));
 function todayObs() {
-  const today = isoOf(new Date());
+  const today = serverToday();
   return (obsByLocalDay().get(today) || []).slice().sort((a, b) => a.ts - b.ts);
 }
 const hourOfTs = ts => { const d = new Date(ts * 1000); return d.getHours() + d.getMinutes() / 60; };
@@ -1269,8 +1278,8 @@ const DETAIL = {
   steps: {
     title: 'Steps and activity', m: 'steps',
     render() {
-      const byDay = obsByLocalDay(), span = dateSpan(S.range, isoOf(new Date()));
-      const items = bucket(span, d => { const o = byDay.get(d); const v = o ? sum(o.filter(x => !x.snapshot).map(x => x.steps)) : null; return { v }; }, 'avg');
+      const byDay = dailyMap(), span = dateSpan(S.range, serverToday());
+      const items = bucket(span, d => ({ v: (byDay.get(d) || {}).steps ?? null }), 'avg');
       return [CARDS.steps(), card('steps', 'Steps from synced minutes', { cls: 'wide' },
         items.some(i => isNum(i.v)) ? [barChart({ items, W: chartW(), H: 180, unit: 'steps', label: 'Steps per day from minute records' }),
           h('p', { class: 'lede', style: { fontSize: '13.5px' } }, 'Totals add up minute records that reached the server. Days with gaps in the export will read low.')]
@@ -1281,10 +1290,10 @@ const DETAIL = {
   heart: {
     title: 'Heart rate', m: 'heart',
     render() {
-      const byDay = obsByLocalDay(), span = dateSpan(S.range, isoOf(new Date()));
+      const byDay = dailyMap(), span = dateSpan(S.range, serverToday());
       const items = bucket(span, d => {
-        const v = (byDay.get(d) || []).map(o => o.hr).filter(isNum);
-        return v.length ? { v: avg(v), lo: Math.min(...v), hi: Math.max(...v) } : { v: null };
+        const r = byDay.get(d);
+        return r && isNum(r.hr_avg) ? { v: r.hr_avg, lo: r.hr_min, hi: r.hr_max } : { v: null };
       }, 'avg');
       return [CARDS.heart(), card('heart', 'Daily range', { cls: 'wide' },
         items.some(i => isNum(i.v)) ? [lineChart({ items, W: chartW(), H: 180, unit: 'bpm', label: 'Daily heart rate range and average' }), legend([['line', 'Average'], ['soft', 'Lowest to highest']])]

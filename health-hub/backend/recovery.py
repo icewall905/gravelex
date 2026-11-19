@@ -212,7 +212,9 @@ def nightly_sleep(sessions: list[dict[str, Any]], snapshot_totals: dict[str, tup
     """
     intervals: dict[date, dict[str, list[tuple[float, float]]]] = {}
     for s in sessions:
-        night = _night_of(s["start"])
+        # Midpoint, so a session starting just before 18:00 joins the night it
+        # mostly belongs to, together with its restful sub-sessions.
+        night = _night_of(s["start"] + s["seconds"] / 2)
         if night is None or s["kind"] not in ("sleep", "restful_sleep"):
             continue
         intervals.setdefault(night, {"sleep": [], "restful_sleep": []})[s["kind"]].append((s["start"], s["start"] + s["seconds"]))
