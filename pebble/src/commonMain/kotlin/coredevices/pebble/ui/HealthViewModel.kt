@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coredevices.util.formatHourOfDay
 import coredevices.util.formatTimeOfDay
 import coredevices.util.AppResumed
 import io.rebble.libpebblecommon.connection.KnownPebbleDevice
@@ -235,7 +236,7 @@ class HealthViewModel(
             totalDistanceM = (aggregates?.distanceCm ?: 0) / 100,
             totalActiveMinutes = aggregates?.activeMinutes ?: 0,
             barValues = hourlySteps.toList(),
-            barLabels = (0..23).map { "$it" },
+            barLabels = (0..23).map { formatHourOfDay(it) },
             typicalSteps = typicalSteps,
             typicalTotal = if (typicalSteps.isNotEmpty()) typicalSteps.sum() else 0,
             activitySessions = sessionUis,
