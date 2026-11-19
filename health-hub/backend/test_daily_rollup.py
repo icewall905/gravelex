@@ -111,3 +111,24 @@ def test_naps_do_not_join_nights_and_evening_start_uses_midpoint(monkeypatch):
     nights = recovery.nightly_sleep(sessions, {})
     assert [n["night"] for n in nights] == ["2026-11-19"]
     assert nights[0]["sleep_s"] == 5100 + 6 * 3600
+
+
+def test_estimates_missing_nights_from_still_minutes(monkeypatch):
+    monkeypatch.setattr(recovery, "TZ", CPH)
+    night = date(2026, 11, 12)
+    rows = []
+    for m in range(18 * 60):  # 18:00 previous evening .. 12:00
+        ts = at(date(2026, 11, 11), 18) + m * 60
+        local = datetime.fromtimestamp(ts, CPH)
+        asleep = local.hour >= 23 or local.hour < 5 or (local.hour == 5 and local.minute < 30)
+        stir = local.hour == 2 and local.minute < 10  # brief stirring is bridged
+        sofa = 20 <= local.hour < 23 and local.minute % 3 == 0  # still but not asleep
+        rows.append((ts, 0 if asleep or sofa else 30, 0 if asleep and not stir else 900))
+    out = recovery.estimate_sleep_from_minutes(rows, set(), at(night, 13))
+    assert len(out) == 1 and out[0]["night"] == "2026-11-12" and out[0]["source"] == "estimated_minutes"
+    assert abs(out[0]["onset"] - at(date(2026, 11, 11), 23)) <= 60 and out[0]["wake"] == at(night, 5, 30)
+    assert out[0]["sleep_s"] == (6 * 60 + 30 - 10) * 60 and out[0]["restful_s"] is None
+    assert out[0]["onset"] >= at(date(2026, 11, 11), 23)
+    assert recovery.estimate_sleep_from_minutes(rows, {"2026-11-12"}, at(night, 13)) == []
+    # A block still in progress this morning is not reported yet.
+    assert recovery.estimate_sleep_from_minutes(rows, set(), at(night, 5, 45)) == []

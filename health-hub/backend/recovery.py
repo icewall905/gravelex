@@ -241,6 +241,84 @@ def nightly_sleep(sessions: list[dict[str, Any]], snapshot_totals: dict[str, tup
     return out
 
 
+# Fallback when the watch exported no (or only a fragment of a) sleep session for
+# a night. Raw watch intensity units: during exported sleep ~92% of minutes read
+# below 50, while a still evening on the sofa still reads above it ~65% of the time.
+# A minute counts as asleep when most of the 30 minutes around it are that quiet.
+QUIET_INTENSITY = 50
+QUIET_FRACTION = 0.8
+QUIET_WINDOW_S = 15 * 60
+STILL_BRIDGE_S = 45 * 60      # stirrings (which also fail the density window around them) or missing minutes
+MIN_ESTIMATED_SLEEP_S = 3 * 3600
+PARTIAL_SESSION_S = 4 * 3600  # exported nights shorter than this may be fragments
+
+
+def estimate_sleep_from_minutes(minutes: list[tuple[int, int | None, float | None]], skip: set[str],
+                                now: float) -> list[dict[str, Any]]:
+    """Main sleep block per night (20:00-12:00 local) from (ts, steps, intensity) minutes.
+
+    Only for nights not in ``skip``; labelled ``estimated_minutes`` with no restful
+    split, because the watch's restful classification is not reproducible here.
+    """
+    by_night: dict[date, list[tuple[int, bool]]] = {}
+    for ts, steps, intensity in minutes:
+        local = datetime.fromtimestamp(ts, TZ)
+        if local.hour >= 20:
+            night = local.date() + timedelta(days=1)
+        elif local.hour < 12:
+            night = local.date()
+        else:
+            continue
+        quiet = (steps or 0) == 0 and isinstance(intensity, (int, float)) and intensity < QUIET_INTENSITY
+        by_night.setdefault(night, []).append((ts, quiet))
+    out = []
+    for night, rows in sorted(by_night.items()):
+        if night.isoformat() in skip:
+            continue
+        rows.sort()
+        stamps = [ts for ts, _ in rows]
+        prefix = [0]
+        for _, quiet in rows:
+            prefix.append(prefix[-1] + quiet)
+        blocks: list[list[int]] = []
+        last = None
+        lo = hi = 0
+        for i, (ts, quiet) in enumerate(rows):
+            while stamps[lo] < ts - QUIET_WINDOW_S:
+                lo += 1
+            while hi < len(rows) and stamps[hi] <= ts + QUIET_WINDOW_S:
+                hi += 1
+            if not quiet or (prefix[hi] - prefix[lo]) < QUIET_FRACTION * (2 * QUIET_WINDOW_S / 60 + 1):
+                continue
+            if blocks and last is not None and ts - last <= STILL_BRIDGE_S:
+                blocks[-1][1] = ts
+                blocks[-1][2] += 1
+            else:
+                blocks.append([ts, ts, 1])
+            last = ts
+        if not blocks:
+            continue
+        onset, end, _ = max(blocks, key=lambda b: b[1] - b[0])
+        # The density window trims each edge; extend over the adjoining quiet minutes.
+        first = stamps.index(onset)
+        while first > 0 and rows[first - 1][1] and onset - rows[first - 1][0] <= 120:
+            first -= 1
+            onset = rows[first][0]
+        last_i = stamps.index(end)
+        while last_i + 1 < len(rows) and rows[last_i + 1][1] and rows[last_i + 1][0] - end <= 120:
+            last_i += 1
+            end = rows[last_i][0]
+        count = sum(1 for ts, quiet in rows[first:last_i + 1] if quiet)
+        wake = end + 60
+        # Tonight's block may still be growing; only report it once it has ended.
+        if wake - onset < MIN_ESTIMATED_SLEEP_S or wake > now - 1800:
+            continue
+        out.append({"night": night.isoformat(), "source": "estimated_minutes", "sleep_s": count * 60,
+                    "restful_s": None, "onset": onset, "wake": wake,
+                    "sleep_intervals": [(onset, wake)], "restful_intervals": [], "recorded_gaps": []})
+    return out
+
+
 def _merge(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """Union of intervals, so re-segmented or duplicate sessions never double count."""
     merged: list[list[float]] = []
@@ -408,10 +486,23 @@ def readiness(hrv_nights: list[dict[str, Any]], sleep: dict[str, Any], training_
 
 def build(analysed: list[tuple[float, dict[str, Any]]], sleep_sessions: list[dict[str, Any]],
           snapshot_totals: dict[str, tuple[int, int]], training_history: list[dict[str, Any]] | None,
-          now: float, need_s: int = SLEEP_NEED_S, seed: dict[str, Any] | None = None) -> dict[str, Any]:
+          now: float, need_s: int = SLEEP_NEED_S, seed: dict[str, Any] | None = None,
+          minutes: list[tuple[int, int | None, float | None]] | None = None) -> dict[str, Any]:
     today = datetime.fromtimestamp(now, TZ).date()
     nights = nightly_hrv(analysed)
     sleep_nights = nightly_sleep(sleep_sessions, snapshot_totals)
+    if minutes:
+        # Watch sessions win unless they are a short fragment of a clearly longer still block.
+        estimates = {n["night"]: n for n in estimate_sleep_from_minutes(minutes, set(), now)}
+        merged = {}
+        for n in sleep_nights:
+            e = estimates.get(n["night"])
+            fragment = (n["source"] == "sessions" and n["sleep_s"] < PARTIAL_SESSION_S and e is not None
+                        and e["sleep_s"] >= n["sleep_s"] + 2 * 3600 and e["onset"] <= n["wake"] and n["onset"] <= e["wake"])
+            merged[n["night"]] = dict(e, partial_sessions_s=n["sleep_s"]) if fragment else n
+        for night, e in estimates.items():
+            merged.setdefault(night, e)
+        sleep_nights = [merged[k] for k in sorted(merged)]
     sleep = sleep_score(sleep_nights, today, need_s)
     return {"today": today.isoformat(), "nights": nights[-60:], "hrv_status": hrv_status(nights, today, seed), "seed": seed,
             "sleep": sleep, "sleep_nights": sleep_nights[-60:],

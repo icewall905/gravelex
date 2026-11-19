@@ -610,6 +610,7 @@ def summary(days=42):
                 d=datetime.fromtimestamp(r['ts'],TZ).date().isoformat()
                 active_today[d]=max(active_today.get(d,0),int(r['k']))
         sleep_rows=[dict(r) for r in db.execute('SELECT start,seconds,kind FROM sleep_sessions WHERE start>=? ORDER BY start',(now-70*86400,))]
+        sleep_minutes=db.execute("SELECT ts,steps,json_extract(payload,'$.intensity') FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts",(now-70*86400,now)).fetchall()
         # Hourly snapshots carry the watch's running sleep total for the current
         # local day; its daily maximum is the previous night's sleep.
         snapshot_sleep={}
@@ -650,7 +651,8 @@ def summary(days=42):
     workouts=load['workouts'];history=load['history']
     recovery=hrv_analytics.analyze_history(hrv_rows, now=now)
     nightly=recovery_model.build([(r['ts'],hrv_analytics.analyze_session(r['payload'])) for r in hrv_rows if r['ts']>=now-70*86400],
-                                 sleep_rows,snapshot_sleep,full_history,now,seed=seed)
+                                 sleep_rows,snapshot_sleep,full_history,now,seed=seed,
+                                 minutes=[tuple(r) for r in sleep_minutes])
     daytime = daytime_stress.build(stress_minutes, stress_sleep, stress_workouts, now, TZ)
     monitors=monitor_observations.build(hrv_rows,now,TZ)
     stock = stock_estimates.build(hrv_rows, [], nightly['sleep'],
