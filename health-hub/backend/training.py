@@ -35,7 +35,7 @@ def _round(value):
 
 
 def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=None,
-            initial_fitness=None):
+            initial_fitness=None, phone_metrics=None):
     """Analyze bounded session records and confirmed local calendar days.
 
     ``load_method`` chooses the series used for ``load`` and fitness estimates;
@@ -66,6 +66,8 @@ def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=Non
         mins.append((_ts(row["ts"]), float(hr) if hr is not None else None))
     mins.sort()
     out = []
+    zones_by_id = {}
+    phone_metrics = phone_metrics or {}
     for source in workouts:
         if not isinstance(source, dict):
             raise ValueError("workouts must be objects")
@@ -82,26 +84,36 @@ def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=Non
         item.update({"hr_load": None, "rpe_load": None, "load": None,
                      "hr_coverage": 0.0, "overlap": False, "excluded": bool(source.get("ignored", False))})
         item["_start"], item["_end"] = start, start + seconds
-        buckets = {}
-        for ts, hr in mins:
-            if ts < start:
-                continue
-            if ts >= start + seconds:
-                break
-            if hr is not None:
-                # A wall-clock minute contributes at most once to one session.
-                buckets.setdefault(int(ts // 60), hr)
-        observed_seconds = sum(min(item["_end"], bucket * 60 + 60) - max(item["_start"], bucket * 60)
-                               for bucket in buckets)
-        # Keep the unrounded ratio for the threshold; display rounding is cosmetic.
-        coverage = min(1.0, observed_seconds / seconds)
+        phone = phone_metrics.get(source.get("id"))
+        if phone and (phone["start"], phone["seconds"]) == (start, seconds):
+            active = phone["active_seconds"]
+            weighted_hr = [(bpm, observed) for _, bpm, observed in phone["heart"]]
+            item.update(active_seconds=active, distance_m=phone["distance_m"])
+        else:
+            active = seconds
+            buckets = {}
+            for ts, hr in mins:
+                if ts < start:
+                    continue
+                if ts >= start + seconds:
+                    break
+                if hr is not None:
+                    # A wall-clock minute contributes at most once to one session.
+                    buckets.setdefault(int(ts // 60), hr)
+            weighted_hr = [(hr, min(start + seconds, bucket * 60 + 60) - max(start, bucket * 60))
+                           for bucket, hr in buckets.items()]
+        coverage = min(1.0, sum(observed for _, observed in weighted_hr) / active)
         item["hr_coverage"] = _round(coverage)
         if hr_max is not None and coverage >= .8:
-            item["hr_load"] = _round(sum((min(item["_end"], bucket * 60 + 60) - max(item["_start"], bucket * 60)) / 60
-                                           * sum(hr / hr_max >= edge for edge in (.5, .6, .7, .8, .9))
-                                           for bucket, hr in buckets.items()))
+            zones = [0.0] * 5
+            for hr, observed in weighted_hr:
+                rank = sum(hr / hr_max >= edge for edge in (.5, .6, .7, .8, .9))
+                if rank:
+                    zones[rank - 1] += observed / 60
+            zones_by_id[id(item)] = zones
+            item["hr_load"] = _round(sum((index + 1) * value for index, value in enumerate(zones)))
         if rpe is not None:
-            item["rpe_load"] = _round(seconds / 60 * rpe)
+            item["rpe_load"] = _round(active / 60 * rpe)
         out.append(item)
     # Mark meaningful overlaps before calculating either series.
     for i, left in enumerate(out):
@@ -170,16 +182,8 @@ def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=Non
     for w in out:
         if w["excluded"] or w["hr_load"] is None:
             continue
-        # Recount the observed minute buckets to populate transparent zone totals.
-        start, end = _ts(w["start"]), _ts(w["start"]) + float(w["seconds"])
-        seen = set()
-        for ts, hr in mins:
-            b = int(ts // 60)
-            if start <= ts < end and hr is not None and b not in seen:
-                seen.add(b); ratio = hr / hr_max * 100
-                idx = 0 if ratio < 60 else 1 if ratio < 70 else 2 if ratio < 80 else 3 if ratio < 90 else 4
-                if ratio >= 50:
-                    zones[idx]["minutes"] += (min(end, b * 60 + 60) - max(start, b * 60)) / 60
+        for zone, observed in zip(zones, zones_by_id[id(w)]):
+            zone["minutes"] += observed
     for z in zones: z["minutes"] = _round(z["minutes"])
     latest = history[-1] if history else {"load": None, "acute": None, "chronic": None, "form": None}
     latest_date = date.fromisoformat(latest["date"]) if history else None

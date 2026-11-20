@@ -2,7 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <application>
+        <activity android:name="com.anopticlabs.gravel.workout.WorkoutActivity" android:exported="false" android:launchMode="singleTop" />
+        <service
+            android:name="com.anopticlabs.gravel.workout.WorkoutRecorder"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice|specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started, visible workout timer for indoor workouts without GPS or Bluetooth sensors" />
+        </service>
         <receiver android:name=".ui.TestActionReceiver" android:exported="false" />
         <receiver
             android:name="coredevices.pebble.firmware.FirmwareSideloadReceiver"

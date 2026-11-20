@@ -90,3 +90,20 @@ These endpoints serve the [Pebble Health Android app](https://github.com/icewall
 ```sh
 curl -H "Authorization: Bearer $TOKEN" "https://health.example.net/api/v1/daily?from=2026-11-01&to=2026-11-20"
 ```
+
+
+## Phone workout uploads
+
+GravelEx sends saved workouts to `POST /fitness/phone-workouts` using the same
+enrolled history-upload token as `/fitness/records`. Phone sessions are scoped to
+the token owner. Retrying returns HTTP 201 and the same `phone:<uuid>` workout ID.
+A replay can update perceived effort. Reusing an ID for different recorded
+metrics returns HTTP 409.
+
+The JSON body contains `id` (UUID), `start` (Unix seconds), `seconds` (elapsed
+seconds), `active_seconds`, `type`, and optional `rpe`, `distance_m`, and
+`heart`. Each heart summary is an array of active minute offset, mean BPM,
+and observed seconds. Only observed seconds contribute to workout HR
+coverage and HR training load. Phone workout samples are stored separately
+from the watch's daily heart-rate history. Route coordinates, raw sensor
+samples and strength sets stay on the phone.

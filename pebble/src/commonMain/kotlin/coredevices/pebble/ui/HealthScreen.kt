@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,6 +46,8 @@ import io.rebble.libpebblecommon.database.entity.HealthDataEntity
 import kotlinx.datetime.LocalDate
 import org.koin.compose.viewmodel.koinViewModel
 import kotlin.math.roundToInt
+
+val LocalWorkoutEntry = staticCompositionLocalOf<(@Composable () -> Unit)?> { null }
 
 @Composable
 fun HealthScreen(topBarParams: TopBarParams, nav: NavBarNav) {
@@ -74,6 +77,7 @@ fun HealthScreen(topBarParams: TopBarParams, nav: NavBarNav) {
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            LocalWorkoutEntry.current?.invoke()
             ActivityCard(act, vm.selectedTimeRange, imperial)
             SleepCard(slp, vm.selectedTimeRange)
             if (hasHrmWatch) HeartRateCard(hr, vm.selectedTimeRange)

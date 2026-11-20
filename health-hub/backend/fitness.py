@@ -63,7 +63,8 @@ _schema_lock = threading.Lock()
 
 def _schema_ready(db):
     exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='provenance_migrations'").fetchone()
-    return bool(exists and db.execute('SELECT 1 FROM provenance_migrations WHERE version=2').fetchone())
+    return bool(exists and db.execute('SELECT 1 FROM provenance_migrations WHERE version=2').fetchone()
+                and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='phone_workouts'").fetchone())
 
 
 def connect():
@@ -103,6 +104,7 @@ def connect():
       active INTEGER, payload TEXT);
     CREATE TABLE IF NOT EXISTS workouts(id TEXT PRIMARY KEY, start INTEGER, seconds INTEGER,
       kind TEXT, rpe REAL, source TEXT);
+    CREATE TABLE IF NOT EXISTS phone_workouts(id TEXT PRIMARY KEY REFERENCES workouts(id), payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS pairing_tokens(hash TEXT PRIMARY KEY, expires INTEGER);
     CREATE TABLE IF NOT EXISTS day_confirmations(day TEXT PRIMARY KEY,status TEXT,confirmed_at INTEGER);
@@ -415,6 +417,72 @@ def ingest(data):
     return ts
 
 
+
+PHONE_SPORTS = frozenset(('run', 'hike', 'walk', 'cycle', 'strength', 'tennis', 'rowing', 'yoga', 'workout'))
+
+
+def ingest_phone_workout(data):
+    """Store a phone recording separately from watch minute history."""
+    now = int(time.time())
+
+    def integer(value, low, high, label):
+        checked = number(value, low, high, label)
+        if int(checked) != checked:
+            raise ValueError(f'{label} must be an integer')
+        return int(checked)
+
+    raw_id = data.get('id')
+    if not isinstance(raw_id, str) or len(raw_id) != 36 or str(uuid.UUID(raw_id)) != raw_id:
+        raise ValueError('Invalid workout ID')
+    ident = f'phone:{raw_id}'
+    start = integer(data.get('start'), 946684800, now + 300, 'Workout start')
+    elapsed = integer(data.get('seconds'), 1, min(172800, now + 300 - start), 'Elapsed seconds')
+    active = integer(data.get('active_seconds'), 1, elapsed, 'Active seconds')
+    kind = data.get('type')
+    if not isinstance(kind, str) or kind not in PHONE_SPORTS:
+        raise ValueError('Unknown activity')
+    rpe = data.get('rpe')
+    if rpe is not None:
+        rpe = integer(rpe, 1, 10, 'Perceived effort')
+    distance = data.get('distance_m')
+    if distance is not None:
+        distance = number(distance, 0, 40 * elapsed, 'Distance')
+
+    heart = data.get('heart', [])
+    if not isinstance(heart, list) or len(heart) > (active + 59) // 60:
+        raise ValueError('Invalid heart-rate summaries')
+    samples = []
+    for bucket in heart:
+        if not isinstance(bucket, list) or len(bucket) != 3:
+            raise ValueError('Expected heart-rate offset, BPM and observed seconds')
+        offset = integer(bucket[0], 0, active - 1, 'Heart-rate offset')
+        if offset % 60 or (samples and offset <= samples[-1][0]):
+            raise ValueError('Heart-rate offsets must use unique ascending minute boundaries')
+        bpm = integer(bucket[1], 1, 300, 'Heart rate')
+        observed = integer(bucket[2], 1, min(60, active - offset), 'Observed seconds')
+        samples.append([offset, bpm, observed])
+    metadata = json.dumps({'start': start, 'seconds': elapsed, 'active_seconds': active,
+                           'distance_m': distance, 'heart': samples}, separators=(',', ':'))
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute("""SELECT w.kind, w.rpe, p.payload FROM workouts w
+            JOIN phone_workouts p USING(id) WHERE w.id=?""", (ident,)).fetchone()
+        if existing is not None:
+            if existing['kind'] != kind or existing['payload'] != metadata:
+                raise workout_edits.ConflictError('Workout ID already belongs to a different recording')
+            if existing['rpe'] == rpe:
+                return ident
+        db.execute("""INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,?,'phone')
+            ON CONFLICT(id) DO UPDATE SET rpe=excluded.rpe""", (ident, start, elapsed, kind, rpe))
+        db.execute("INSERT OR IGNORE INTO phone_workouts VALUES(?,?)", (ident, metadata))
+        current = next(row for row in workout_edits.effective_rows(db) if row['id'] == ident)
+        invalidate_workout_days(db, [current])
+    return ident
+
+
+def phone_workout_metrics(db):
+    return {row['id']: json.loads(row['payload']) for row in db.execute('SELECT id,payload FROM phone_workouts')}
+
 def sleep_sessions(since=0):
     with connect() as db:
         return [dict(r) for r in db.execute("SELECT id,start,seconds,kind FROM sleep_sessions WHERE start>=? ORDER BY start", (int(since),))]
@@ -579,6 +647,7 @@ def summary(days=42):
         stress_minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts", (min(since, now-60*86400), now))]
         stress_sleep = [dict(r) for r in db.execute("SELECT * FROM sleep_sessions WHERE start+seconds>=?", (min(since, now-60*86400)-86400,))]
         workouts = workout_edits.effective_rows(db)
+        phone_metrics = phone_workout_metrics(db)
         training_minutes = {}
         for workout in workouts:
             for row in db.execute("SELECT * FROM minutes WHERE ts>=? AND ts<?", (workout["start"],workout["start"]+workout["seconds"])):
@@ -638,7 +707,8 @@ def summary(days=42):
     # window and to the newest 2000 sessions in it.
     earliest_ts=int(datetime.combine(earliest,datetime.min.time(),TZ).timestamp())
     workouts=sorted((w for w in workouts if w['start']+w['seconds']>=earliest_ts),key=lambda w:w['start'])[-2000:]
-    load=training.analyze(workouts,list(training_minutes.values()),full_days,config['hr_max'],config['load_method'],confirmations)
+    load=training.analyze(workouts,list(training_minutes.values()),full_days,config['hr_max'],config['load_method'], confirmations,
+                          phone_metrics=phone_metrics)
     ledger=training_ledger.build(load, confirmations, collection['daily'], datetime.fromtimestamp(now,TZ).date())
     full_history=load['history']
     finished=next((row for row in full_history if row['date']==ledger['baseline_end']),{})
@@ -754,7 +824,8 @@ def confirm_days_batch(data):
             for row in db.execute('SELECT * FROM minutes WHERE ts>=? AND ts<?',(workout['start'],workout['start']+workout['seconds'])):
                 minutes[row['ts']]=dict(row)
         settings={r['key']:json.loads(r['value']) for r in db.execute('SELECT * FROM settings')}
-        analyzed=training.analyze(workouts,list(minutes.values()),[],settings.get('hr_max'),settings.get('load_method','hr'))
+        analyzed=training.analyze(workouts,list(minutes.values()),[],settings.get('hr_max'),settings.get('load_method','hr'),
+                                  phone_metrics=phone_workout_metrics(db))
         items=training_ledger.validate_batch(data.get('days'),analyzed['workouts'],today)
         if any(datetime.fromisoformat(item['date']).date()<today-timedelta(days=730) for item in items):
             raise ValueError('Dates must be within the last 730 days')

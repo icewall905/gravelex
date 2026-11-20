@@ -68,3 +68,47 @@ def test_legacy_health_scoped_auth_preserves_forwarding(web, monkeypatch):
         assert result.get_json()['ha_delivered'] is True
     assert forwarded == [{'steps':321},{'steps':321}]
     assert client.get('/health/watchapp.pbw?t=test-master').status_code == 404
+
+
+def test_phone_workout_uses_history_scope_and_keeps_strap_metrics_out_of_watch_history(web):
+    import time
+    import uuid
+    from datetime import datetime
+    import app as receiver
+
+    start = (int(time.time()) // 86400 - 2) * 86400 + 3600
+    payload = dict(id=str(uuid.uuid4()), start=start, seconds=180, active_seconds=120,
+                   type='tennis', distance_m=450, rpe=5, heart=[[0, 160, 59], [60, 180, 60]])
+    route = '/fitness/phone-workouts'
+    assert web.post(route, json=payload).status_code == 401
+    wrong = web.post('/api/pair?kind=hrv').get_json()['token']
+    assert web.post(route, headers={'Authorization': f'Bearer {wrong}'}, json=payload).status_code == 401
+    token = web.post('/api/pair?kind=history').get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    rejected = web.post(route, headers=headers, json=dict(payload, heart=[[0, 160, 61]]))
+    assert rejected.status_code == 400
+    for client in (web, receiver.app.test_client()):
+        response = client.post(route, headers=headers, json=payload)
+        assert response.status_code == 201
+        assert response.get_json()['id'] == 'phone:' + payload['id']
+    assert web.post(route, headers=headers, json=dict(payload, seconds=181)).status_code == 409
+    with fitness.connect() as db:
+        assert db.execute('SELECT count(*) FROM workouts').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM minutes').fetchone()[0] == 0
+
+    fitness.profile({'hr_max': 200})
+    summary = fitness.summary(7)
+    workout, = summary['workouts']
+    assert (workout['source'], workout['kind'], workout['active_seconds'], workout['distance_m']) == ('phone', 'tennis', 120, 450)
+    assert workout['hr_coverage'] == .992
+    assert workout['hr_load'] == 8.933
+    assert workout['rpe_load'] == 10
+    assert 'heart' not in workout
+    zones = summary['training']['zones']
+    assert zones[3]['minutes'] == .983
+    assert zones[4]['minutes'] == 1
+    day = datetime.fromtimestamp(start, fitness.TZ).date().isoformat()
+    fitness.confirm_days_batch({'acknowledged': True, 'days': [{'date': day, 'status': 'complete'}]})
+    assert web.post(route, headers=headers, json=payload).status_code == 201
+    assert fitness.summary(7)['confirmations'][day] == 'complete'

@@ -7,6 +7,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import com.anopticlabs.gravel.workout.WorkoutEntry
+import coredevices.pebble.ui.LocalWorkoutEntry
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.lifecycleScope
 import co.touchlab.kermit.Logger
@@ -54,7 +57,9 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            App()
+            CompositionLocalProvider(LocalWorkoutEntry provides { WorkoutEntry() }) {
+                App()
+            }
         }
 
         lifecycleScope.launch {

@@ -277,7 +277,9 @@ fun WatchHomeScreen(
             return
         }
 
-        val tabs = WatchHomeNavTab.availableTabs(coreConfig, healthEnabled, notebookShown)
+        // A phone workout can be recorded with watch health tracking disabled.
+        val hasHealthContent = healthEnabled || LocalWorkoutEntry.current != null
+        val tabs = WatchHomeNavTab.availableTabs(coreConfig, hasHealthContent, notebookShown)
         val barTabs = WatchHomeNavTab.barTabs(coreConfig, tabs)
         val moreTabs = tabs.drop(barTabs.size)
         val currentTab = viewModel.selectedTab.value?.takeIf { it in tabs }
