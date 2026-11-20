@@ -524,7 +524,7 @@ function stockStrainFresh(model, now=Date.now()/1000) {
 }
 function readinessNow() {
   const r=rec().readiness || {};
-  if (r.formula_version==='readiness-stock-v1' && rec().today!==serverToday())
+  if (rec().today && rec().today!==serverToday())
     return {...r,score:null,sleep_based_score:null,status:'stale',reason:'This is a cached earlier day. Refresh for today’s readiness.'};
   return r;
 }
@@ -697,7 +697,8 @@ const CARDS = {
     const st = rec().hrv_status || {};
     const [word, kind] = hrvLabel(st.status);
     const building = st.status === 'baseline_building';
-    return card('hrv', 'HRV status', { link: 'hrv', chip: st.provisional ? chip('Provisional', '', st.reason) : expChip() },
+    const est = st.comparable_series?.metric === 'ppi_rmssd_estimate';
+    return card('hrv', 'HRV status', { link: 'hrv', chip: st.provisional ? chip('Provisional', '', st.reason) : est ? chip('Estimate', '', 'RMSSD estimated from the nightly 3-minute pulse-interval recording') : expChip() },
       h('p', { class: 'status-word', style: { fontSize: '20px' } }, ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms) ? 'Unvalidated estimate' : word),
       ppiSourceUnverified() && !isNum(st.last_night_rmssd_ms)
         ? ppiVariabilityDiagnostic()

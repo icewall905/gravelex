@@ -23,12 +23,15 @@ def _payload(context="scheduled"):
     }
 
 
-def test_batched_quality_is_never_a_recovery_night():
+def test_batched_quality_only_enters_recovery_as_labelled_estimate():
     quality = hrv.analyze_session(_payload())
     assert quality["status"] == "beat_continuity_unverified"
     assert quality["diagnostic_rmssd_ms"] is None
     assert quality["diagnostic_delivered_ppi_variation_ms"] is not None
-    assert recovery.nightly_hrv([(datetime(2026, 10, 22, 23, tzinfo=timezone.utc).timestamp(), quality)]) == []
+    nights = recovery.nightly_hrv([(datetime(2026, 10, 22, 23, tzinfo=timezone.utc).timestamp(), quality)])
+    assert nights and all(n["estimated"] and n["metric"] == recovery.ESTIMATE_METRIC for n in nights)
+    manual = hrv.analyze_session(_payload("manual"))
+    assert recovery.nightly_hrv([(datetime(2026, 10, 22, 23, tzinfo=timezone.utc).timestamp(), manual)]) == []
 
 
 def test_batched_monitor_counts_delivery_failure_but_keeps_pulse():

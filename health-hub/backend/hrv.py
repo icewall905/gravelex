@@ -135,6 +135,27 @@ def _respiration(values: list[float], period_ms: float, context: str) -> dict[st
             "note": None if reliable else ("awake recordings are dominated by a ~0.1 Hz blood-pressure rhythm"
                                            if context != "scheduled" else "breathing peak not distinct enough")}
 
+ESTIMATE_MIN_PAIRS = 60
+
+
+def estimate_rmssd(ppis: list[Any]) -> float | None:
+    """Estimated RMSSD from Pebble's ~1 Hz "latest PPI" updates.
+
+    Repeated values of the same beat are dropped, then intervals deviating more
+    than 20 % from their local median (7-sample window) are treated as
+    artifacts.  Beats skipped between updates remain a known bias, so the
+    result is labelled an estimate, never validated beat-to-beat RMSSD."""
+    x = [float(v) for v in ppis if _finite_number(v) and MIN_PPI_MS <= float(v) <= MAX_PPI_MS]
+    if not x:
+        return None
+    beats = [x[0]] + [b for a, b in zip(x, x[1:]) if b != a]
+    ok = [abs(v - median(beats[max(0, i - 3):i + 4])) <= 0.2 * median(beats[max(0, i - 3):i + 4])
+          for i, v in enumerate(beats)]
+    diffs = [beats[i + 1] - beats[i] for i in range(len(beats) - 1) if ok[i] and ok[i + 1]]
+    if len(diffs) < ESTIMATE_MIN_PAIRS:
+        return None
+    return round((sum(d * d for d in diffs) / len(diffs)) ** 0.5, 3)
+
 
 def _batched_ppi_session(payload: dict[str, Any], ppis: list[Any], offsets: list[Any]) -> dict[str, Any]:
     """Analyze delivery of PPI results without assigning them a beat clock.
@@ -250,6 +271,7 @@ def _batched_ppi_session(payload: dict[str, Any], ppis: list[Any], offsets: list
         "quality": status,
         "validated": False,
         "experimental_rmssd_ms": None,
+        "estimated_rmssd_ms": estimate_rmssd(ppis),
         "metric": "delivered_ppi_variation_unverified",
         "stream": "batched_ppi_unverified",
         "sample_period_ms": None,

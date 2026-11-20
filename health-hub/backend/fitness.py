@@ -661,7 +661,10 @@ def summary(days=42):
     # its source gates remain unchanged and are retained separately.
     nightly['hrv_readiness'] = nightly['readiness']
     if os.environ.get('RECOVERY_MODE', 'stock_firmware') == 'stock_firmware':
-        nightly['readiness'] = stock['readiness']
+        # Prefer the HRV model once estimated overnight HRV can score; the
+        # stock heuristic stays as fallback when it cannot.
+        if nightly['hrv_readiness'].get('score') is None:
+            nightly['readiness'] = stock['readiness']
     else:
         stock['mode'] = 'diagnostics_only'
     with connect() as snapshot_db:

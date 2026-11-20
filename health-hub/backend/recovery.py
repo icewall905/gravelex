@@ -20,6 +20,8 @@ TZ = ZoneInfo(os.environ.get("PEBBLE_TZ", "UTC"))  # the wearer's local day boun
 
 # HRV status, modelled on the published 7-day-average-vs-personal-range idea.
 BASELINE_NIGHTS = 28          # look-back for the personal range
+ESTIMATE_METRIC = "ppi_rmssd_estimate"
+ESTIMATE_ALGORITHM = "hrv-v4-ppi-estimate"
 MIN_BASELINE_NIGHTS = 14      # before this, status is "baseline_building"
 WEEK_NIGHTS_REQUIRED = 3      # nights in the last 7 needed for a weekly average
 BAND_SD = 0.5                 # balanced band half-width, in baseline SDs
@@ -102,8 +104,17 @@ def nightly_hrv(analysed: list[tuple[float, dict[str, Any]]]) -> list[dict[str, 
                    or q.get("metric") == "delivered_ppi_variation_unverified"
                    or q.get("algorithm_version") == "hrv-v3-batched-ppi"
                    or q.get("status") == "beat_continuity_unverified")
-        if (q.get("context") != "scheduled" or q.get("status") != "experimental"
-                or batched or not q.get("experimental_rmssd_ms")):
+        if q.get("context") != "scheduled":
+            continue
+        if batched:
+            # Pebble ~1 Hz PPI updates: a de-duplicated, artifact-filtered
+            # estimate forms its own comparable series.
+            if not q.get("estimated_rmssd_ms") or not q.get("mean_rr_ms"):
+                continue
+            q = dict(q, experimental_rmssd_ms=q["estimated_rmssd_ms"], metric=ESTIMATE_METRIC,
+                     algorithm_version=ESTIMATE_ALGORITHM, source="pebble_ppi_updates",
+                     comparable_series=None, respiration=None)
+        elif q.get("status") != "experimental" or not q.get("experimental_rmssd_ms"):
             continue
         night = _night_of(ts)
         if night is not None:
@@ -127,6 +138,7 @@ def nightly_hrv(analysed: list[tuple[float, dict[str, Any]]]) -> list[dict[str, 
         nights.append({"night": night.isoformat(), "sessions": len(qs), "rmssd_ms": _round(rmssd),
                        "ln_rmssd": round(math.log(rmssd), 4), "resting_hr": _round(60000.0 / rr),
                        "breaths_per_min": _round(median(resp)) if resp else None,
+                       "estimated": identity[0] == ESTIMATE_METRIC,
                        "metric": identity[0], "comparable_series": _series_info(identity),
                        "excluded_sessions": len(candidates) - len(qs), "excluded_groups": excluded})
     return nights
