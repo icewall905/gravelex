@@ -203,15 +203,15 @@ class SessionEndSentinelTest {
             "loadAppJs's granted block calls the field without reading it first" to
                 (loadAppJsViewRead to {
                     it.edited(
-                        "            val view = webView?.takeIf { !ending } ?: return@withContext\n            view.evaluateJavascript(\n",
-                        "            webView!!.evaluateJavascript(\n",
+                        "            val view = webView?.takeIf { !ending } ?: return@withContext\n            // The WebView's own",
+                        "            val view = webView!!\n            // The WebView's own",
                     )
                 }),
             "loadAppJs's granted block loads the script into an ending session" to
                 (loadAppJsViewRead to {
                     it.edited(
-                        "            val view = webView?.takeIf { !ending } ?: return@withContext\n            view.evaluateJavascript(\n",
-                        "            val view = webView ?: return@withContext\n            view.evaluateJavascript(\n",
+                        "            val view = webView?.takeIf { !ending } ?: return@withContext\n            // The WebView's own",
+                        "            val view = webView ?: return@withContext\n            // The WebView's own",
                     )
                 }),
             "loadAppJs reads the view under another name at entry" to

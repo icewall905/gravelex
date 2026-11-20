@@ -10,6 +10,7 @@ import io.ktor.utils.io.readAvailable
 import io.rebble.libpebblecommon.connection.CommonConnectedDevice
 import io.rebble.libpebblecommon.connection.FirmwareUpdateCheckResult
 import io.rebble.libpebblecommon.connection.PebbleIdentifier
+import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdateTrigger
 import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdater.FirmwareUpdateStatus
 import io.rebble.libpebblecommon.disk.pbz.PbzFirmware
 import io.rebble.libpebblecommon.metadata.WatchHardwarePlatform
@@ -136,7 +137,7 @@ class VerifiedFirmwareInstaller(
         val target = InstallTarget(
             identifierKey = device.identifier.asString,
             platform = device.watchInfo.platform,
-            sideload = device::sideloadFirmware,
+            sideload = { device.sideloadFirmware(it, FirmwareUpdateTrigger.Ui) },
         )
         scope.launch { runInstall(target, update) }
     }

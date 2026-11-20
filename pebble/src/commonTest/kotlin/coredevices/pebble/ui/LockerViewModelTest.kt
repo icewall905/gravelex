@@ -108,7 +108,7 @@ private object NoNetworkWebServices : PebbleWebServices {
     override suspend fun fetchUsersMeCore(): CoreUsersMe? = unexpected()
     override suspend fun fetchPebbleLocker(): LockerModel? = unexpected()
     override suspend fun addToLegacyLocker(uuid: String): Boolean = unexpected()
-    override suspend fun fetchAppStoreHome(type: AppType, hardwarePlatform: WatchType?, enabledOnly: Boolean, useCache: Boolean): List<AppStoreHomeResult> = unexpected()
+    override fun appStoreHomes(type: AppType, hardwarePlatform: WatchType?, enabledOnly: Boolean, useCache: Boolean): Flow<List<AppStoreHomeResult>> = unexpected()
     override suspend fun fetchPebbleAppStoreHomes(hardwarePlatform: WatchType?, useCache: Boolean): Map<AppType, AppStoreHomeResult?> = unexpected()
     override suspend fun searchAppStore(search: String, appType: AppType, watchType: WatchType, page: Int, pageSize: Int): List<Pair<AppstoreSource, StoreSearchResult>> = unexpected()
     override suspend fun addToLegacyLockerWithResponse(uuid: String): LockerAddResponse? = unexpected()

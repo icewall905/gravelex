@@ -34,6 +34,16 @@ class FirestoreStubTest {
     }
 
     @Test
+    fun updateFieldsRunsItsBlockAsANoOp() = runTest {
+        var ran = false
+        Firebase.firestore.document("lockers/abc").updateFields {
+            FieldPath("permissions", "key") to "value"
+            ran = true
+        }
+        assertTrue(ran)
+    }
+
+    @Test
     fun documentGetReturnsNonExistentSnapshot() = runTest {
         val snapshot = Firebase.firestore.document("users/abc").get()
         assertFalse(snapshot.exists)

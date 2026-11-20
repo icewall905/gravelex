@@ -192,6 +192,8 @@ class GithubReleases(
             // Release bodies are empty upstream; the picker and notification
             // already carry the version string.
             notes = "",
+            // Set by FirmwareUpdateManager, which knows what the watch is running.
+            installsDirectly = false,
         )
     }
 

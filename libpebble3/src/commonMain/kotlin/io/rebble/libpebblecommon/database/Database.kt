@@ -99,7 +99,7 @@ internal const val DATABASE_FILENAME = "libpebble3.db"
         AppPrefsEntrySyncEntity::class,
         NotificationRuleEntity::class,
     ],
-    version = 51,
+    version = 52,
     autoMigrations = [
         AutoMigration(from = 10, to = 11),
         AutoMigration(from = 11, to = 12),
@@ -139,6 +139,8 @@ internal const val DATABASE_FILENAME = "libpebble3.db"
         AutoMigration(from = 45, to = 46),
         // The fork keeps its existing grants and SpO2 columns when adding plugin permissions.
         AutoMigration(from = 46, to = 51),
+        // Core's 50 -> 51 (plugin permission reason/required/askedAtMs), renumbered: the fork's 51 is taken.
+        AutoMigration(from = 51, to = 52, spec = AutoMigration52::class),
     ],
     exportSchema = true,
 )
@@ -170,6 +172,13 @@ abstract class Database : RoomDatabase() {
 @DeleteTable(tableName = "WatchSettingsEntity")
 @DeleteTable(tableName = "WatchSettingsSyncEntity")
 class AutoMigration30 : AutoMigrationSpec
+
+/** Rows from before askedAtMs prompted whenever undecided, as if asked when recorded. */
+class AutoMigration52 : AutoMigrationSpec {
+    override fun onPostMigrate(connection: SQLiteConnection) {
+        connection.execSQL("UPDATE AppPermission SET askedAtMs = requestedAtMs")
+    }
+}
 
 @Suppress("NO_ACTUAL_FOR_EXPECT")
 expect object DatabaseConstructor : RoomDatabaseConstructor<Database> {

@@ -112,6 +112,11 @@ class DocumentReference internal constructor() {
 
     suspend fun <T> update(data: T) {}
 
+    // Runs the block, like the settings DSLs, so upstream's field assignments execute.
+    suspend fun updateFields(fieldsAndValuesUpdateDSL: FieldsAndValuesUpdateDSL.() -> Unit) {
+        FieldsAndValuesUpdateDSL().fieldsAndValuesUpdateDSL()
+    }
+
     suspend fun delete() {}
 }
 
@@ -119,6 +124,8 @@ class DocumentSnapshot internal constructor(
     val reference: DocumentReference = DocumentReference(),
 ) {
     val exists: Boolean get() = false
+
+    val id: String get() = ""
 
     /**
      * Upstream guards data() behind exists checks or maps it over (empty)
@@ -157,6 +164,12 @@ class FilterBuilder internal constructor() {
 }
 
 class FieldPath(vararg fieldNames: String)
+
+class FieldsAndValuesUpdateDSL internal constructor() {
+    infix fun <T> FieldPath.to(value: T) {}
+
+    infix fun <T> String.to(value: T) {}
+}
 
 /**
  * The real type is an Android typealias to the native SDK exception; here it

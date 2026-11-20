@@ -45,6 +45,7 @@ import io.rebble.libpebblecommon.connection.ConnectedPebbleDeviceInRecovery
 import io.rebble.libpebblecommon.connection.FirmwareUpdateCheckResult
 import io.rebble.libpebblecommon.connection.LibPebble
 import io.rebble.libpebblecommon.connection.PebbleIdentifier
+import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdateTrigger
 import io.rebble.libpebblecommon.connection.endpointmanager.FirmwareUpdater
 import io.rebble.libpebblecommon.connection.forDevice
 import kotlinx.coroutines.Job
@@ -205,7 +206,7 @@ fun DebugFirmwareSideload(watchIdentifier: String, coreNav: CoreNav) {
                     }
                     doFirmwareUpdate {
                         logger.d { "doFirmwareUpdate: $tempFwPath" }
-                        sideloadFirmware(tempFwPath)
+                        sideloadFirmware(tempFwPath, FirmwareUpdateTrigger.Sideload)
                     }
                 }
             }
@@ -265,7 +266,7 @@ fun DebugFirmwareSideload(watchIdentifier: String, coreNav: CoreNav) {
                                 setUpdateState(UiFirmwareUpdateStatus.Starting)
                                 doFirmwareUpdate {
                                     logger.d { "sideload from container path: $drop" }
-                                    sideloadFirmware(drop)
+                                    sideloadFirmware(drop, FirmwareUpdateTrigger.Sideload)
                                 }
                             } else {
                                 logger.w { "no firmware at $drop" }

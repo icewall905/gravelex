@@ -95,12 +95,12 @@ class RealPebbleAccountTest {
         override suspend fun fetchUsersMeCore(): CoreUsersMe? = null
         override suspend fun fetchPebbleLocker(): LockerModel? = null
         override suspend fun addToLegacyLocker(uuid: String): Boolean = false
-        override suspend fun fetchAppStoreHome(
+        override fun appStoreHomes(
             type: AppType,
             hardwarePlatform: WatchType?,
             enabledOnly: Boolean,
             useCache: Boolean,
-        ): List<AppStoreHomeResult> = emptyList()
+        ): Flow<List<AppStoreHomeResult>> = flow { emit(emptyList()) }
 
         override suspend fun fetchPebbleAppStoreHomes(
             hardwarePlatform: WatchType?,

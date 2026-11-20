@@ -20,6 +20,7 @@ import coredevices.ring.service.recordings.RecordingProcessingStage
 import coredevices.ring.service.recordings.RecordingProcessor
 import coredevices.ring.storage.RecordingStorage
 import coredevices.ring.util.trace.RingTraceSession
+import coredevices.util.WatchNotifier
 import coredevices.util.queue.RecoverableTaskException
 import coredevices.util.transcription.TranscriptionException
 import coredevices.util.transcription.TranscriptionSessionStatus
@@ -60,8 +61,9 @@ open class DefaultRecordingOperation(
     }
 
     private val recordingStorage: RecordingStorage by inject()
-    private val recordingEntryDao: RecordingEntryDao by inject()
-    private val recordingProcessor: RecordingProcessor by inject()
+    private val watchNotifier: WatchNotifier by inject()
+    protected val recordingEntryDao: RecordingEntryDao by inject()
+    protected val recordingProcessor: RecordingProcessor by inject()
     private val ringTransferRepository: RingTransferRepository by inject()
     private val recordingBackgroundScope: RecordingBackgroundScope by inject()
     private val prefs: Preferences by inject()
@@ -70,10 +72,13 @@ open class DefaultRecordingOperation(
     fun sendNotEnoughMemoryNotification() {
         val now = Clock.System.now()
         if (lastNotEnoughMemoryNotif == null || now - lastNotEnoughMemoryNotif!! > 5.minutes) {
+            val title = "Low Memory Warning"
+            val body = "Offline speech recognition failed due to low memory. Please consider closing other apps or using online speech recognition only."
             NotifierManager.getLocalNotifier().notify {
-                title = "Low Memory Warning"
-                body = "Offline speech recognition failed due to low memory. Please consider closing other apps or using online speech recognition only."
+                this.title = title
+                this.body = body
             }
+            watchNotifier.send("stt-low-memory", title, body)
             lastNotEnoughMemoryNotif = now
         }
     }
