@@ -20,11 +20,13 @@ context.record={today:'2001-01-01',readiness:{formula_version:'readiness-stock-v
 assert.equal(context.readinessNow().score,null); assert.equal(context.readinessNow().sleep_based_score,null);
 context.record.today=new Date().toISOString().slice(0,10); assert.equal(context.readinessNow().score,77);
 console.log('Stock estimate cache expiry checks passed');
-context.nowSec=()=>context.clock;
-context.todayISO=()=>new Date(context.clock*1000).toISOString().slice(0,10);
+context.isoInTz=context.isoOf;
 context.D=()=>({daytime_stress:{score:65,measured_at:observed}});
 vm.runInContext(extract('daytimeStressNow'),context);
-context.clock=observed+60; assert.equal(context.daytimeStressNow().score,65);
-context.clock=observed+3601; assert.equal(context.daytimeStressNow().score,null);
-context.clock=observed-1; assert.equal(context.daytimeStressNow().score,null);
+context.clock=observed+60; assert.equal(context.daytimeStressNow(context.clock).score,65);
+context.clock=observed+3601; assert.equal(context.daytimeStressNow(context.clock).score,null);
+context.clock=observed-1; assert.equal(context.daytimeStressNow(context.clock).score,null);
+context.D=()=>({daytime_stress:{score:65,measured_at:observed,today:{date:context.isoOf(new Date(observed*1000)),score:45}}});
+assert.equal(context.daytimeStressNow(observed+3601).today.score,45);
+assert.equal(context.daytimeStressNow(observed+86400).today,null);
 console.log('Daytime stress cache expiry checks passed');

@@ -886,29 +886,47 @@ function calendarGrid(days, hist, compact) {
 /* ================================================================== *
  * Today hero — the watch
  * ================================================================== */
-function daytimeStressNow() {
+function daytimeStressNow(now = Math.floor(Date.now()/1000)) {
   const st = D().daytime_stress || {};
-  const fresh = isNum(st.measured_at) && nowSec() >= st.measured_at && nowSec()-st.measured_at <= 3600 && isoOf(new Date(st.measured_at*1000)) === todayISO();
-  return {...st, score: fresh ? st.score : null};
+  const date = isoInTz(new Date(now*1000));
+  const fresh = isNum(st.measured_at) && now >= st.measured_at && now-st.measured_at <= 3600 && isoInTz(new Date(st.measured_at*1000)) === date;
+  return {...st, score: fresh ? st.score : null, today: st.today?.date === date ? st.today : null};
+}
+function daytimeStressReason(st) {
+  const d = st.today || {};
+  switch (st.reason) {
+    case 'no_waking_pulse': return 'No waking pulse readings outside recorded sleep and workouts today.';
+    case 'too_few_quiet_blocks': return `${d.quiet_blocks} of ${st.required_blocks} required quiet periods with recorded pulse today.`;
+    case 'building_baseline': return `${d.baseline_days} of 3 earlier days with usable quiet pulse.`;
+    case 'daily_only': return 'Today’s estimate is available. The latest reading is over an hour old.';
+    default: return 'Waiting for qualifying quiet waking pulse.';
+  }
 }
 function daytimeStressDetail() {
   const st = daytimeStressNow(), days = new Map((st.daily || []).map(d=>[d.date,d]));
   const points = new Map((st.points || []).map(p=>[p.ts,p.score]));
-  const start = new Date(); start.setHours(0,0,0,0);
-  const end = new Date(start); end.setDate(end.getDate()+1);
+  const end = Math.floor(nowSec() / 900) * 900;
   const items = [];
-  for (let ts=start.getTime()/1000; ts<Math.min(end.getTime()/1000,nowSec()+1); ts+=300) items.push({key:ts,ts,label:fmtClock(ts),v:points.get(ts) ?? null});
-  const latestDay=days.get(todayISO());
+  for (let ts=end-25*3600; ts<=end; ts+=900) {
+    if (isoInTz(new Date(ts * 1000)) === todayISO()) items.push({key:ts,ts,label:fmtClock(ts),v:points.get(ts) ?? null});
+  }
+  const day=st.today || {};
   return card('stress','Stress · quiet pulse estimate',{chip:chip('Estimated'),cls:'wide'},
-    isNum(st.score) ? [big(fmt(st.score),'of 100'),h('meter',{min:0,max:100,low:25,high:75,optimum:0,value:st.score,'aria-label':'Estimated stress',style:{width:'100%',height:'24px'}},`${st.score} of 100`)] : pending('No current estimate','Needs quiet waking pulse and three earlier days with at least 30 quiet minutes each. Readings expire after one hour.'),
-    h('p',{class:'foot'},st.measured_at ? `Last scored reading ${fmtDateTime(st.measured_at)} · ${latestDay?.quiet_minutes ?? 0} quiet minutes today.` : 'No scored readings yet.'),
+    isNum(st.score) ? [big(fmt(st.score),'of 100'),h('p',{class:'foot'},`Latest scored period · ${fmtDateTime(st.measured_at)}`)]
+      : pending('No recent reading', daytimeStressReason(st)),
+    isNum(day.score) ? h('p',{class:'lede'},`Today’s estimate ${fmt(day.score)} / 100 across ${day.quiet_blocks} quiet periods.`) : null,
+    h('p',{class:'foot'},`${day.waking_hr_minutes ?? 0} eligible waking minutes contained pulse today. ${day.quiet_minutes ?? 0} also met the quiet movement requirement.`),
     lineChart({items,W:chartW(),H:180,range:[0,100],unit:'of 100',label:'Estimated stress today; gaps indicate unscored periods'}),
-    h('h3',null,'Daily average'),
+    h('h3',null,'Daily estimate'),
     lineChart({items:dateSpan(S.range).map(d=>({key:d,label:d,v:days.get(d)?.score ?? null})),W:chartW(),H:180,range:[0,100],unit:'of 100',label:'Daily quiet pulse estimate'}),
-    info('How this estimate works','Ten consecutive minutes with zero recorded steps and no active flag are required. Recorded sleep, workouts and the following 15 minutes are excluded; only 06:00–23:00 is considered. Missing movement data is excluded.',
-      'Five-minute pulse medians use at least three eligible samples. Baseline is the median of daily quiet-pulse medians from the preceding 28 days, requiring three days with at least 30 eligible minutes. Score = 25 + 2.5 × pulse elevation in bpm, capped at 0–100. These are custom heuristic units, not validated stress thresholds.',
-      'Garmin uses heart rate and beat-to-beat HRV. This estimate uses pulse and movement only. Illness, caffeine, posture, missed sleep and sensor errors can also raise it; it cannot identify emotional stress. Unverified Pebble pulse intervals never feed this score. Daily averages describe scored quiet periods, not the whole day.'),
-    h('a',{href:'https://www.garmin.com/en-CA/garmin-technology/health-science/stress-tracking/',target:'_blank',rel:'noopener'},'Garmin: how stress tracking works'));
+    info('How this estimate works','The hub requires five observed minutes of quiet movement before accepting a pulse reading. It excludes sleep, workouts and the 15 minutes after workouts.',
+      'A daily estimate needs pulse in at least three separate 15-minute blocks and three earlier comparable days. Missing periods remain gaps. This pulse-based estimate can reflect posture, caffeine, illness and other influences.'));
+}
+function sleepPulseCard() {
+  const reading = (D().sleep_pulse || []).find(n => n.night === todayISO());
+  return card('rhr','Pulse during sleep',{cls:'wide'}, reading && isNum(reading.pulse)
+    ? [big(fmt(reading.pulse,1),'bpm'), h('p',{class:'foot'},`${reading.samples} recorded samples across ${reading.blocks} sleep periods · ${reading.night}`)]
+    : pending('No sleep pulse summary yet', reading ? `Pulse was recorded in ${reading.blocks} of 3 required periods.` : 'Waiting for timed sleep and pulse recorded during it.'));
 }
 function watchHero() {
   const r = readinessNow(), sl = rec().sleep || {}, hs = rec().hrv_status || {}, n = lastNight();
@@ -960,7 +978,7 @@ function watchHero() {
     h('div', { class: 'watch-metrics' },
       watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready', spark.ready),
       watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep', spark.sleep),
-      watchMetric('stress', 'Stress', isNum(stress.score) ? `${fmt(stress.score)} / 100` : null, isNum(stress.score) ? `estimated · ${fmtClock(stress.measured_at)}` : 'Quiet pulse estimate · no current reading', 'stress', spark.stress),
+      watchMetric('stress', 'Stress', isNum(stress.score ?? stress.today?.score) ? `${fmt(stress.score ?? stress.today.score)} / 100` : null, isNum(stress.score) ? `estimated · ${fmtClock(stress.measured_at)}` : isNum(stress.today?.score) ? 'Estimated · today’s quiet periods' : 'Quiet pulse estimate · view coverage', 'stress', spark.stress),
       watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps', spark.steps),
       watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart', spark.hr),
       watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr', spark.pulse),
@@ -2073,7 +2091,7 @@ const PAGES = {
       section('Body & device', CARDS.weight(), CARDS.device())];
   },
   sleep() {
-    return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep', { regenerate: true }), DETAIL.sleep.render())];
+    return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep', { regenerate: true }), sleepPulseCard(), DETAIL.sleep.render())];
   },
   recovery() {
     return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress())];

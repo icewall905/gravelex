@@ -43,3 +43,25 @@ def test_stale_and_gaps():
     rows = [r for r in rows if not (NOW-600 < r['ts'] <= NOW)]
     result = build(rows)
     assert all(p['observed_at'] <= NOW-600 for p in result['points'])
+
+
+
+def test_sparse_pulse_can_yield_a_daily_estimate_and_stays_dated():
+    rows = minutes()
+    for row in rows:
+        if (NOW - row["ts"]) % 900 != 0:
+            row["hr"] = None
+    result = build(rows)
+    assert result["today"]["quiet_blocks"] >= 3
+    assert result["today"]["score"] == 75
+    later = build(rows, now=NOW + 7200)
+    assert later["score"] is None and later["today"]["score"] == 75
+    tomorrow = build(rows, now=NOW + 86400)
+    assert tomorrow["today"]["score"] is None
+
+
+def test_sleep_pulse_uses_measured_blocks_and_timed_sleep_only():
+    rows = sorted(minutes(1), key=lambda row: row["ts"])
+    night = {"night": "2026-10-26", "sleep_intervals": [(NOW-3600, NOW)], "source": "sessions"}
+    assert daytime_stress.sleep_pulse(rows, [night], NOW)[0]["pulse"] == 80
+    assert daytime_stress.sleep_pulse(rows, [{**night, "source": "estimated_minutes"}], NOW) == []

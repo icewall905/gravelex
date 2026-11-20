@@ -755,6 +755,7 @@ def summary(days=42):
                                  sleep_rows,snapshot_sleep,full_history,now,seed=seed,
                                  minutes=[tuple(r) for r in sleep_minutes])
     daytime = daytime_stress.build(stress_minutes, stress_sleep, stress_workouts, now, TZ)
+    sleep_pulse = daytime_stress.sleep_pulse(stress_minutes, recovery_model.nightly_sleep(stress_sleep, {}), now)
     monitors=monitor_observations.build(hrv_rows,now,TZ)
     stock = stock_estimates.build(hrv_rows, [], nightly['sleep'],
         recovery_model.training_state(full_history, today=datetime.fromtimestamp(now,TZ).date()), now, TZ)
@@ -783,7 +784,7 @@ def summary(days=42):
       "daily": daily_rows, "tz": str(TZ),
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},
-      "daytime_stress":daytime, "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
+      "daytime_stress":daytime, "sleep_pulse":sleep_pulse, "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
       "fitness": physiology.fitness(json.loads(body_row['value']) if body_row else None,
                                     (weight or {}).get('latest',{}).get('trend_kg'), config.get('hr_max'),
                                     fit_minutes, active_today, TZ, datetime.fromtimestamp(now,TZ).date()),
