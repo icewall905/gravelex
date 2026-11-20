@@ -1,0 +1,1 @@
+Updated the Pebble Android base to 2.0.0, including connection fixes, app-store improvements, and recovery-aware firmware updates. GravelEx keeps plugins opt-in and preserves existing watchapp permissions.

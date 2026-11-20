@@ -1,9 +1,7 @@
-Open **Health → Log workout** to record running, hiking, cycling, tennis, strength, and other activities.
+GravelEx 0.7.0 brings the Pebble Android 2.0.0 updates to the de-Googled companion app.
 
-- Use phone GPS for an offline route, distance, kilometre splits, and pace or speed and elevation charts.
-- Connect a Bluetooth chest strap such as the Garmin HRM-Pro for live heart rate, a heart-rate chart, and zones based on your configured maximum heart rate.
-- Pause and resume, mark laps, and log exercises, reps, and weight during strength sessions.
-- Review workouts in local history and save GPS recordings as GPX.
-- Send workout summaries to a configured PebbleFit hub for training-load analysis. GPS coordinates and strength sets stay on the phone.
+- Includes upstream Android startup and connection fixes, app-store improvements, and recovery-aware PebbleOS updates.
+- Adds watchapp permission and plugin activity improvements. Plugins remain opt-in in GravelEx, and existing watchapp grants carry over.
+- Keeps GravelEx’s PebbleFit export, workout recording, Notebook, and Index integration.
 
-The recording and review flow still needs physical-device validation with the HRM-Pro and screen-off GPS.
+Obtainium users can update from the existing GravelEx GitHub source. The update uses the existing app ID and signing certificate.

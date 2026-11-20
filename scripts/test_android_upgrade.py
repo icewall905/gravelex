@@ -67,6 +67,37 @@ class AndroidUpgradeTest(unittest.TestCase):
                 self.assertEqual(fresh.execute(f'PRAGMA foreign_key_list("{table}")').fetchall(),
                                  upgraded.execute(f'PRAGMA foreign_key_list("{table}")').fetchall(), table)
 
+    def test_installed_gravelex_upgrades_to_schema_54(self):
+        app_id = '00000000-0000-0000-0000-000000000001'
+        for version in (51, 52):
+            with self.subTest(version=version), create_database(version) as connection:
+                health = insert_health(connection)
+                connection.execute('INSERT INTO LockerAppPermission VALUES (?, ?, ?)', (app_id, 'Network', 0))
+                connection.execute(
+                    'INSERT INTO AppPermission (appUuid, permission, granted, requestedAtMs) VALUES (?, ?, ?, ?)',
+                    (app_id, 'Location', 1, 1000),
+                )
+                connection.execute(
+                    '''INSERT INTO LockerEntryEntity (
+                        recordHashcode, deleted, id, version, title, type, developerName,
+                        configurable, pbwVersionCode, sideloaded, platforms, microphoneGranted
+                    ) VALUES (1, 0, ?, '1', 'Watch app', 'Watchapp', 'Developer', 0, '1', 0, '[]', 1)''',
+                    (app_id,),
+                )
+                if version == 51:
+                    upgrade(connection, migration='Database_AutoMigration_51_52_Impl.kt')
+                upgrade(connection, migration='Database_AutoMigration_52_54_Impl.kt')
+
+                self.assertEqual(health, connection.execute('SELECT * FROM health_data').fetchall())
+                self.assertEqual((app_id, 'Network', 0), connection.execute(
+                    'SELECT appUuid, permission, granted FROM LockerAppPermission').fetchone())
+                self.assertEqual((app_id, 'Location', 1, 1000, 0), connection.execute(
+                    'SELECT appUuid, permission, granted, requestedAtMs, declared FROM AppPermission').fetchone())
+                self.assertEqual((app_id, 1), connection.execute(
+                    'SELECT id, watchPermissions FROM LockerEntryEntity').fetchone())
+                for table in ('AppDataUsage', 'PluginActionLog'):
+                    self.assertEqual(0, connection.execute(f'SELECT count(*) FROM {table}').fetchone()[0])
+
     def test_core_metadata_upgrade_matches_fresh_schema(self):
         schemas = ROOT / 'util/schema/coredevices.database.CoreDatabase'
         with create_database(9, schemas) as upgraded, create_database(11, schemas) as fresh:
