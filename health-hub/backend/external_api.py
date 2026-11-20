@@ -186,6 +186,7 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
     training = summary.get("training") or {}
     latest_training = training.get("latest") or {}
     hrv = summary.get("hrv") or {}
+    hrv_status = (summary.get("recovery") or {}).get("hrv_status") or {}
     diagnostic = hrv.get("diagnostic") or {}
     metrics = {
         "readiness": _summary_metric(readiness.get("score"), "score", status=readiness.get("status"), estimated=True,
@@ -201,7 +202,8 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
         "training_load": _summary_metric(latest_training.get("load7"), "load", status=latest_training.get("status")),
         "acute_load": _summary_metric(latest_training.get("acute"), "load", status=latest_training.get("status"), estimated=True),
         "chronic_load": _summary_metric(latest_training.get("chronic"), "load", status=latest_training.get("status"), estimated=True),
-        "hrv_rmssd": None,  # Stock PPI is not validated beat-to-beat HRV.
+        "hrv_rmssd": _summary_metric(hrv_status.get("last_night_rmssd_ms"), "ms", status=hrv_status.get("status"),
+                                     estimated=True, observed_at=(summary.get("recovery") or {}).get("today")),
         "breathing_rate": None,  # No validated respiratory estimate yet.
     }
 

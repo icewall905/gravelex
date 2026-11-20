@@ -39,11 +39,19 @@ For an APK download button on your own hub, populate the ignored downloads direc
 
 Choose your own owner/repository if you maintain a fork. This helper verifies the release checksum before replacing the APK. APK signing remains in the Android release workflow; the hub never receives that private signing key. Set optional `SOURCE_URL` to the public source/instructions URL you want the PWA to link to.
 
+## Full setup guide and metric reference
+
+- [../docs/SELF-HOSTING.md](../docs/SELF-HOSTING.md): an end-to-end walkthrough covering the server, reverse proxy, GravelEx export, the recommended watch settings, the HRV watch app, the Android app, updates and troubleshooting.
+- [METRICS.md](METRICS.md): how every number is computed (daily totals, resting HR, sleep stitching and stillness estimate, estimated HRV, HRV status, readiness, stress, load).
+- [Pebble Health Android app](https://github.com/icewall905/pebble-health): a native client for this hub's API.
+
 ## Watch apps and HRV
 
 GravelEx exports minute HR, steps, movement, calories, distance, sleep/activity sessions and recorded SpO2. Minute HR does not contain the beat intervals needed for HRV. The watch-app source packages under `watchapps/` supply the separate measurement/history/daily-summary paths. Build them with your own `PUBLIC_URL` using `scripts/build-watch-apps.sh`, then install and pair through their watchapp settings. Build output goes into the ignored downloads directory. Authentication is paired at runtime rather than compiled into a watch app.
 
 A watch-history request transfers stored watch data to the phone. Upload now transfers data already stored on the phone to the hub. These are separate actions; SpO2 only appears when the firmware produces a valid measurement. Sparse readings remain gaps and retain their real measurement timestamp and raw device quality.
+
+The HRV watch app records about 3 minutes of pulse intervals each night. Pebble delivers the latest interval about once per second rather than one value per beat. The hub therefore removes repeats, filters artifacts and stores an **estimated** nightly RMSSD in its own comparable series (`ppi_rmssd_estimate`). HRV status and readiness use that estimate once 14 baseline nights exist. See [METRICS.md](METRICS.md#hrv).
 
 HRV motion eligibility and the required field study are documented in [MOTION-CALIBRATION.md](MOTION-CALIBRATION.md). Uncalibrated recordings remain diagnostic-only; no universal stillness threshold is supplied.
 

@@ -9,6 +9,9 @@ Initialization migrates the shared password into the bootstrap administrator nam
 | Endpoint | Scope | Result |
 | --- | --- | --- |
 | `GET /api/v1/summary` | `summary:read` | Current compact metrics |
+| `GET /api/v1/dashboard?days=42` | `summary:read` | Full dashboard model for first-party clients (7–365 days) |
+| `GET /api/v1/daily?from=YYYY-MM-DD&to=YYYY-MM-DD` | `history:read` | One row per local day (≤ 730 days; default last 30) |
+| `GET /api/v1/intraday?date=YYYY-MM-DD` | `history:read` | One local day: HR points, 15-minute steps, sleep (default today) |
 | `GET /api/v1/minutes` | `history:read` | Bounded minute history |
 | `GET /api/v1/workouts` | `history:read` | Bounded workouts |
 | `GET /api/v1/sleep` | `history:read` | Bounded sleep records |
@@ -19,7 +22,7 @@ Initialization migrates the shared password into the bootstrap administrator nam
 
 Summary returns `{api_version: "1", generated_at, timezone, metrics}`. Each metric is either a value object or `null`; a value object carries `value`, `unit`, `status`, `estimated`, and `observed_at` when applicable. The metric keys are `readiness`, `sleep_score`, `sleep_hours`, `overnight_pulse`, `overnight_strain`, `spo2`, `weight`, `steps`, `watch_battery`, `training_load`, `acute_load`, `chronic_load`, `hrv_rmssd`, and `breathing_rate`.
 
-History uses half-open UNIX-second bounds: `start` is inclusive and `end` is exclusive. Weight records use their calendar dates converted to the configured timezone before filtering. Without a range, the last seven days are returned; a requested window may span at most 365 days. `hrv_rmssd` and `breathing_rate` remain null while stock PPI physiology is unvalidated; diagnostic recordings require the raw scope. Health API responses are never cached for offline access.
+History uses half-open UNIX-second bounds: `start` is inclusive and `end` is exclusive. Weight records use their calendar dates converted to the configured timezone before filtering. Without a range, the last seven days are returned; a requested window may span at most 365 days. `hrv_rmssd` is last night's **estimated** RMSSD (`estimated: true`, `status` = HRV status such as `balanced`), or null when there was no usable recording last night; see [METRICS.md](METRICS.md#hrv). `breathing_rate` remains null. Raw recordings require the raw scope. Health API responses are never cached for offline access.
 
 Every history response is bounded by `limit` (default 100, maximum 1000) and an opaque `cursor`; clients must send the returned cursor unchanged and must not construct one. The response envelope is:
 
@@ -73,3 +76,17 @@ observations, not the last legacy watch-app status packet. Daily totals are part
 unsynced minutes remain unknown. Explicit `snapshot_*` API metrics retain their
 original dates and are historical snapshots, not today's totals. Server receipt age
 includes GravelEx batches, independently of each measurement's observation time.
+
+## Dashboard, daily and intraday endpoints
+
+These endpoints serve the [Pebble Health Android app](https://github.com/icewall905/pebble-health) and other first-party clients. They are not paginated and use local days in the hub's `PEBBLE_TZ`.
+
+`/api/v1/dashboard` returns the same model as the browser dashboard, trimmed for mobile. It drops raw observations older than 36 hours, HRV diagnostics, readiness history, monitor observations, the training ledger and collector history. Top-level keys include `daily`, `recovery` (`sleep`, `sleep_nights`, `nights`, `hrv_status`, `readiness`), `training`, `workouts`, `oxygen`, `weight`, `watch_battery`, `daytime_stress`, `stock_estimates`, `briefing` and `tz`. Clients should ignore unknown keys.
+
+`/api/v1/daily` items: `date`, `minutes`, `steps`, `active_minutes`, `active_kcal`, `resting_kcal`, `distance_m`, `hr_minutes`, `hr_min`, `hr_avg`, `hr_max`, `resting_hr`. Counts (`minutes`, `steps`, `active_minutes`, `hr_minutes`) are 0 for days with no data. Other fields are null when nothing was observed, which does not mean zero.
+
+`/api/v1/intraday` returns `date`, `start`, `end`, `points` (`{ts, hr, steps, active, intensity}` per minute record), `steps_15min` (`{ts, steps}`) and `sleep` (`{start, seconds, kind}` sessions overlapping the day).
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" "https://health.example.net/api/v1/daily?from=2026-11-01&to=2026-11-20"
+```
