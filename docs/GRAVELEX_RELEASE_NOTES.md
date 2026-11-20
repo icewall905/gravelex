@@ -1,11 +1,9 @@
-GravelEx 0.5.1 fixes the watch clock drifting away from the phone's time and merges Gravel 0.5.0.
+Open **Health → Log workout** to record running, hiking, cycling, tennis, strength, and other activities.
 
-- Watch time stays in sync: the hourly re-sync now runs by the wall clock even while the phone is in deep sleep, the app checks the watch's clock every 15 minutes and corrects drift of 2 seconds or more, opening the app syncs when a sync is overdue, and a timezone change sends the new zone instead of occasionally the old one.
-- Gravel 0.5.0: recording into the Notebook from a Pebble Index 01 ring (early beta), with Import again for a damaged sync position.
-- Gravel 0.5.0: weather is off until you agree to what it sends to Core Devices' weather server; Current Location is sent as a nearby town, and place search uses a built-in town list instead of Android's geocoder.
-- Gravel 0.5.0: removes the auto-verified cloud.repebble.com link claim, so installing no longer triggers a lookup of that host.
-- Manual weather coordinates are kept and labelled "Manual Location"; automatic backlight sunrise/sunset times need weather on, and setting a time by hand turns them off.
+- Use phone GPS for an offline route, distance, kilometre splits, and pace or speed and elevation charts.
+- Connect a Bluetooth chest strap such as the Garmin HRM-Pro for live heart rate, a heart-rate chart, and zones based on your configured maximum heart rate.
+- Pause and resume, mark laps, and log exercises, reps, and weight during strength sessions.
+- Review workouts in local history and save GPS recordings as GPX.
+- Send workout summaries to a configured PebbleFit hub for training-load analysis. GPS coordinates and strength sets stay on the phone.
 
-Update GravelEx.apk over your existing installation through Obtainium. Package tdgs.gravel and the permanent signing key remain unchanged. Core Devices 1.18 changes are not included yet.
-
-Validated with the Android host and JVM unit suites (libpebble3, pebble, composeApp, util, androidApp) and a debug compile. Physical phone/watch behavior has not been tested for this release because no device was attached.
+The recording and review flow still needs physical-device validation with the HRM-Pro and screen-off GPS.

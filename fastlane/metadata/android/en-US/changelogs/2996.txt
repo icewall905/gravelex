@@ -1,0 +1,1 @@
+Log workouts in Health with phone GPS, Bluetooth chest-strap heart rate, laps, and strength sets. Review route, pace, elevation, and heart-rate charts, save GPX files, and send workout summaries to PebbleFit.
