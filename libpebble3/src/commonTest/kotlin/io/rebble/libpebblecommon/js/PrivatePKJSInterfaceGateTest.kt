@@ -99,7 +99,7 @@ class PrivatePKJSInterfaceGateTest {
                 plugins.permissions,
             ),
             emulator,
-            HttpInterceptorManager(emulator, InjectedPKJSHttpInterceptors(listOf(interceptor))),
+            HttpInterceptorManager(emulator, InjectedPKJSHttpInterceptors(listOf(interceptor))) { _, _, _, _, _ -> },
             NotificationConfigFlow(configFlow),
             resolver,
             plugins.registry, plugins.permissions, plugins.client,

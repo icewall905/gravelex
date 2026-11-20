@@ -30,7 +30,7 @@ class NativeWebSocketGateSentinelTest {
             )
             if (!gate.containsMatchIn(code)) add(noGate)
             val managers = Regex("""WebSocketManager\(([^\n]*)\)""").findAll(code).map { it.groupValues[1] }.toList()
-            if (managers.size != 1 || !managers.single().trimEnd().endsWith(", webSocketAccess")) add(ungatedManager)
+            if (managers.size != 1 || !managers.single().trimEnd().endsWith(", webSocketAccess, dataUsage")) add(ungatedManager)
             val endSession = Regex("""private fun endSession\(view: WebView\) \{\n(.*?)\n    \}""", RegexOption.DOT_MATCHES_ALL)
                 .find(code)?.groupValues?.get(1).orEmpty()
             if ("webSockets.close()" !in endSession) add(openOnEnd)
@@ -56,7 +56,7 @@ class NativeWebSocketGateSentinelTest {
             "the construction term is dropped" to
                 (noGate to { it.edited("if (!networkAllowed || denyConstruction) {", "if (!networkAllowed) {") }),
             "the manager gets the app gate alone" to
-                (ungatedManager to { it.edited("Uuid.parse(appInfo.uuid), webSocketAccess)", "Uuid.parse(appInfo.uuid), networkAccess)") }),
+                (ungatedManager to { it.edited("httpClient, Uuid.parse(appInfo.uuid), webSocketAccess, dataUsage)", "httpClient, Uuid.parse(appInfo.uuid), networkAccess, dataUsage)") }),
             "endSession leaves sockets open" to
                 (openOnEnd to { it.edited("        _readyState.value = false\n        webSockets.close()\n", "        _readyState.value = false\n") }),
         )

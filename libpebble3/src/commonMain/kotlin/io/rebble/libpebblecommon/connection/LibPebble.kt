@@ -63,6 +63,8 @@ import io.rebble.libpebblecommon.notification.VibePattern
 import io.rebble.libpebblecommon.packets.ProtocolCapsFlag
 import io.rebble.libpebblecommon.performPlatformSpecificInit
 import io.rebble.libpebblecommon.plugin.LockerPluginLoader
+import io.rebble.libpebblecommon.permissions.AppDataUsage
+import io.rebble.libpebblecommon.permissions.AppDataUsageApi
 import io.rebble.libpebblecommon.permissions.AppPermissions
 import io.rebble.libpebblecommon.permissions.AppPermissionsApi
 import io.rebble.libpebblecommon.permissions.PermissionDecisionRecord
@@ -73,6 +75,8 @@ import io.rebble.libpebblecommon.plugin.ConfigMessageTarget
 import io.rebble.libpebblecommon.plugin.ActionResult
 import io.rebble.libpebblecommon.plugin.IconPixelSize
 import io.rebble.libpebblecommon.plugin.NativePlugin
+import io.rebble.libpebblecommon.plugin.PluginActionLog
+import io.rebble.libpebblecommon.plugin.PluginActionLogApi
 import io.rebble.libpebblecommon.plugin.PluginCaller
 import io.rebble.libpebblecommon.plugin.PluginClient
 import io.rebble.libpebblecommon.plugin.PluginErrors
@@ -121,7 +125,7 @@ sealed class PebbleConnectionEvent {
 interface LibPebble : Scanning, RequestSync, LockerApi, NotificationApps, WatchappPermissions, CallManagement, Calendar,
     OtherPebbleApps, PKJSToken, Watches, Errors, Contacts, AnalyticsEvents, HealthApi, WatchPrefs,
     SystemGeolocation, Timeline, Vibrations, Weather, HealthDataApi, Plugins, AppPermissionsApi,
-    PluginFileAccessApi, NotificationReplies {
+    PluginFileAccessApi, NotificationReplies, AppDataUsageApi, PluginActionLogApi {
     fun init()
 
     val config: StateFlow<LibPebbleConfig>
@@ -281,6 +285,7 @@ interface Plugins {
         item: String,
         properties: List<String>? = null,
         iconPixelSize: IconPixelSize? = null,
+        limit: Int? = null,
     ): Flow<SourceUpdate>
 
     /** The first update, or a [PluginErrors.TIMEOUT] error. */
@@ -578,6 +583,8 @@ class LibPebble3(
     private val weatherManager: WeatherManager,
     private val watchappPermissions: WatchappPermissions,
     private val appPermissions: AppPermissions,
+    private val appDataUsage: AppDataUsage,
+    pluginActionLog: PluginActionLog,
     pluginClient: PluginClient,
     pluginFileAccess: PluginFileAccess,
     private val notificationReplies: NotificationReplies,
@@ -591,7 +598,8 @@ class LibPebble3(
     Vibrations by notificationApi, WatchPrefs by watchPreferences, Weather by weatherManager,
     HealthDataApi by health, Plugins by pluginClient,
     AppPermissionsApi by appPermissions, PluginFileAccessApi by pluginFileAccess,
-    NotificationReplies by notificationReplies {
+    NotificationReplies by notificationReplies, AppDataUsageApi by appDataUsage,
+    PluginActionLogApi by pluginActionLog {
     private val logger = Logger.withTag("LibPebble3")
     private val initialized = AtomicBoolean(false)
 
@@ -601,6 +609,7 @@ class LibPebble3(
             return
         }
         appPermissions.init()
+        appDataUsage.init()
         libPebbleCoroutineScope.launch { respectDoNotDisturbMigrator.migrateIfNeeded() }
         WatchHardwarePlatform.init(libPebbleCoroutineScope, libPebbleConfigFlow.config)
         bluetoothStateProvider.init()
@@ -688,6 +697,8 @@ class LibPebble3(
 
     companion object {
         private lateinit var koin: Koin
+
+        internal val isCreated: Boolean get() = ::koin.isInitialized
 
         fun create(
             /**

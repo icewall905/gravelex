@@ -1,5 +1,6 @@
 package coredevices.pebble.account
 
+import coredevices.pebble.ui.NoSourcesDao
 import com.russhwolf.settings.MapSettings
 import coredevices.database.AppstoreSource
 import coredevices.firestore.PebbleUser
@@ -57,6 +58,7 @@ class RealPebbleAccountTest {
         pebbleWebServices = FakeWebServices,
         bootConfigProvider = FakeBootConfig,
         usersDao = FakeUsersDao,
+        appstoreSourceDao = NoSourcesDao,
         secretCipher = cipher,
     )
 

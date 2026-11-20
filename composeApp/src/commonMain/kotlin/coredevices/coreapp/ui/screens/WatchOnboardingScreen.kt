@@ -1,6 +1,5 @@
 package coredevices.coreapp.ui.screens
 
-import com.russhwolf.settings.Settings
 import coredevices.pebble.rememberLibPebble
 import CoreNav
 import androidx.compose.foundation.ScrollState
@@ -54,11 +53,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import co.touchlab.kermit.Logger
+import com.russhwolf.settings.Settings
 import com.anopticlabs.gravel.firmware.FirmwarePickerRoute
 import com.anopticlabs.gravel.firmware.firmwarePickerServes
 import coredevices.pebble.Platform
 import coredevices.pebble.firmware.ForkFirmwareInstallState
 import coredevices.pebble.firmware.VerifiedFirmwareInstaller
+import coredevices.pebble.rememberLibPebble
 import coredevices.pebble.services.AppStoreHomeResult
 import coredevices.pebble.services.LanguagePackRepository
 import coredevices.pebble.services.PebbleWebServices

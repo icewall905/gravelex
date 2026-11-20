@@ -118,7 +118,7 @@ private object NoNetworkWebServices : PebbleWebServices {
     override suspend fun getWeather(latitude: Double, longitude: Double, units: WeatherUnit, language: String): WeatherResponse? = unexpected()
 }
 
-private object NoSourcesDao : AppstoreSourceDao {
+internal object NoSourcesDao : AppstoreSourceDao {
     private fun unexpected(): Nothing = fail("the debounce must never touch the source table")
     override suspend fun insertSource(source: AppstoreSource): Long = unexpected()
     override fun getAllSources(): Flow<List<AppstoreSource>> = unexpected()

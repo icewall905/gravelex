@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhonelinkRing
 import androidx.compose.material.icons.filled.Notifications
@@ -201,7 +202,7 @@ fun InstallReviewDialog(review: InstallReview, onAnswer: (Map<String, Boolean>?)
                                 null,
                                 review.automatic.requiredFirst(defined, { it }, review::isRequired),
                                 automatic = true,
-                                subtitle = automaticExplanation(review.appName, policy),
+                                subtitle = automaticExplanation(review.appName, policy, review.automatic),
                             )
                         }
                     }
@@ -221,8 +222,9 @@ fun InstallReviewDialog(review: InstallReview, onAnswer: (Map<String, Boolean>?)
     )
 }
 
-private fun automaticExplanation(appName: String, policy: PermissionPolicy) = when (policy) {
-    PermissionPolicy.NeverAsk ->
+// Health can also be allowed because the app was built before the SDK checked it.
+private fun automaticExplanation(appName: String, policy: PermissionPolicy, keys: List<String>) = when {
+    policy == PermissionPolicy.NeverAsk || PluginPermissions.HEALTH in keys ->
         "You don't need to do anything here: your settings allow these. Deny any you'd rather $appName didn't use."
     else ->
         "You don't need to do anything here. $appName can't send data off your phone, so these are allowed under your current settings. Deny any you'd rather it didn't use."
@@ -266,6 +268,15 @@ internal fun PermissionRow(
                     PermissionKind.Dangerous ->
                         KindInfo(Icons.Filled.Warning, "Sensitive", "Sensitive permissions always need your approval, whatever your settings.")
                     else -> {}
+                }
+                if (permissionOf(key) == PluginPermissions.HEALTH) {
+                    lastConnectedWatch()?.takeUnless { enforcesHealth(it.runningFwVersion) }?.let { watch ->
+                        KindInfo(
+                            Icons.Filled.Warning,
+                            "Not enforced on ${watch.displayName()}",
+                            "${watch.displayName()} can't restrict health data, so apps can read it whatever you choose here.",
+                        )
+                    }
                 }
             }
             control()
@@ -358,6 +369,14 @@ private fun ReasonDialog(title: String, reason: String, onDismiss: () -> Unit) {
     )
 }
 
+private val FIRMWARE_MAJOR_MINOR = Regex("v?(\\d+)\\.(\\d+)")
+
+/** Broadly, the watches that can run newer firmware. */
+private fun enforcesHealth(firmware: String): Boolean {
+    val (major, minor) = FIRMWARE_MAJOR_MINOR.find(firmware)?.destructured ?: return true
+    return major.toInt() > 4 || (major.toInt() == 4 && minor.toInt() >= 40)
+}
+
 @Composable
 private fun KindInfo(icon: ImageVector, title: String, explanation: String) {
     var explaining by remember { mutableStateOf(false) }
@@ -407,6 +426,7 @@ private fun permissionIcon(key: String, defined: Map<String, PluginDefinedPermis
     PluginPermissions.LOCAL_NETWORK -> Icons.Filled.Router
     PluginPermissions.LOCATION -> Icons.Filled.LocationOn
     PluginPermissions.WATCH_MICROPHONE -> Icons.Filled.Mic
+    PluginPermissions.HEALTH -> Icons.Filled.MonitorHeart
     PluginPermissions.NOTIFICATIONS -> Icons.Filled.Notifications
     PluginPermissions.CALENDAR -> Icons.Filled.CalendarMonth
     PluginPermissions.CONTACTS -> Icons.Filled.Contacts
@@ -429,6 +449,7 @@ fun permissionLabel(key: String, defined: Map<String, PluginDefinedPermission>):
     PluginPermissions.GLOBAL_INTERNET -> "Connect to any website or local device"
     PluginPermissions.LOCATION -> "Use your location"
     PluginPermissions.WATCH_MICROPHONE -> "Use your watch microphone"
+    PluginPermissions.HEALTH -> "Read your health data"
     PluginPermissions.NOTIFICATIONS -> packageOf(key)?.let { "Read your notifications from $it" } ?: "Read all your notifications"
     PluginPermissions.CALENDAR -> "Read your calendar"
     PluginPermissions.CONTACTS -> "Read your contacts"
@@ -461,10 +482,14 @@ internal fun rememberPluginPermissions(): Map<String, PluginDefinedPermission> {
     return remember { libPebble.pluginPermissions() }.collectAsState(emptyMap()).value
 }
 
-fun requestSummary(keys: List<String>, defined: Map<String, PluginDefinedPermission>): String {
-    val labels = keys.map { permissionLabel(it, defined).replaceFirstChar { c -> c.lowercase() } }
-    return if (labels.size <= 1) labels.joinToString() else labels.dropLast(1).joinToString() + " and " + labels.last()
-}
+fun requestLabels(keys: List<String>, defined: Map<String, PluginDefinedPermission>): List<String> =
+    keys.map { permissionLabel(it, defined).replaceFirstChar { c -> c.lowercase() } }
+
+fun requestSummary(labels: List<String>): String =
+    if (labels.size <= 1) labels.joinToString() else labels.dropLast(1).joinToString() + " and " + labels.last()
+
+fun requestSummary(keys: List<String>, defined: Map<String, PluginDefinedPermission>): String =
+    requestSummary(requestLabels(keys, defined))
 
 @Composable
 fun PendingPermissionRequests(onReview: (Uuid) -> Unit) {
@@ -510,7 +535,7 @@ fun PendingPermissionRequests(onReview: (Uuid) -> Unit) {
 }
 
 @Composable
-fun AppPermissionsSection(appUuid: Uuid) {
+fun AppPermissionsSection(appUuid: Uuid, collapsible: Boolean = true) {
     val libPebble = rememberLibPebble()
     val config by libPebble.config.collectAsState()
     if (!config.watchConfig.enablePlugins) return
@@ -550,9 +575,14 @@ fun AppPermissionsSection(appUuid: Uuid) {
     val scope = rememberCoroutineScope()
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         // A legacy app's are collapsed, and never hidden while a request waits for an answer.
-        val open = (legacy && statuses.any { it.status == PermissionStatus.Waiting }) || (expandedByUser ?: !legacy)
-        SectionHeader(if (legacy) "Permissions (Legacy App)" else "Permissions", open) { expandedByUser = !open }
-        if (!open) return@Column
+        val title = if (legacy) "Permissions (Legacy App)" else "Permissions"
+        if (collapsible) {
+            val open = (legacy && statuses.any { it.status == PermissionStatus.Waiting }) || (expandedByUser ?: !legacy)
+            SectionHeader(title, open) { expandedByUser = !open }
+            if (!open) return@Column
+        } else {
+            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp))
+        }
         if (legacy) {
             Text(
                 "Apps built before permissions existed can use these by default. To be asked first, turn on " +
@@ -633,7 +663,7 @@ fun AppPermissionsSection(appUuid: Uuid) {
 
 /** A section's title, which collapses and expands it. */
 @Composable
-private fun SectionHeader(title: String, open: Boolean, onToggle: () -> Unit) {
+internal fun SectionHeader(title: String, open: Boolean, onToggle: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle),
@@ -735,6 +765,7 @@ private fun legacyAccessName(key: String) = when (permissionOf(key)) {
     PluginPermissions.LOCATION -> "location"
     PluginPermissions.TIMELINE -> "timeline pins"
     PluginPermissions.SHOW_NOTIFICATIONS -> "watch notifications"
+    PluginPermissions.HEALTH -> "health data"
     else -> "phone apps"
 }
 

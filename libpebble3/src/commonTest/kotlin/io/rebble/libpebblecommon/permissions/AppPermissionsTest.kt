@@ -8,20 +8,25 @@ import io.rebble.libpebblecommon.connection.PebbleConnectionEvent
 import io.rebble.libpebblecommon.connection.PebbleDevice
 import io.rebble.libpebblecommon.connection.Watches
 import io.rebble.libpebblecommon.database.dao.LockerAppPermissionDao
+import io.rebble.libpebblecommon.database.entity.AppDataUsageEntity
 import io.rebble.libpebblecommon.database.entity.LockerAppPermission
 import io.rebble.libpebblecommon.di.LibPebbleCoroutineScope
 import io.rebble.libpebblecommon.metadata.pbw.appinfo.PbwAppInfo
 import io.rebble.libpebblecommon.permissions.PermissionDecision.Denied
 import io.rebble.libpebblecommon.permissions.PermissionDecision.Granted
 import io.rebble.libpebblecommon.permissions.PermissionDecision.NeedsApproval
+import io.rebble.libpebblecommon.plugin.Connections
 import io.rebble.libpebblecommon.plugin.PluginNetworkVerdict
 import io.rebble.libpebblecommon.plugin.PluginPermission
+import io.rebble.libpebblecommon.plugin.PluginPermissions
 import io.rebble.libpebblecommon.plugin.PluginPermissions.CALENDAR
 import io.rebble.libpebblecommon.plugin.PluginPermissions.GLOBAL_INTERNET
 import io.rebble.libpebblecommon.plugin.PluginPermissions.INTERNET
 import io.rebble.libpebblecommon.plugin.PluginPermissions.LOCAL_NETWORK
 import io.rebble.libpebblecommon.plugin.PluginPermissions.LOCATION
 import io.rebble.libpebblecommon.plugin.PluginPermissions.WATCH_MICROPHONE
+import io.rebble.libpebblecommon.plugin.PluginPermissions.HEALTH
+import io.rebble.libpebblecommon.packets.blobdb.WatchPermission
 import io.rebble.libpebblecommon.plugin.PluginPermissions.LEGACY_PEBBLEKIT
 import io.rebble.libpebblecommon.plugin.PluginPermissions.NOTIFICATIONS
 import io.rebble.libpebblecommon.plugin.PluginPermissions.PARAM_PACKAGES
@@ -47,9 +52,11 @@ import kotlinx.serialization.json.Json
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -60,7 +67,8 @@ internal fun subject(
     legacy: Boolean = false,
     hasAndroidCompanion: Boolean = false,
     hasCompanionApp: Boolean = false,
-) = PermissionSubject(APP, legacy, hasAndroidCompanion, hasCompanionApp)
+    legacyForHealth: Boolean = legacy,
+) = PermissionSubject(APP, legacy, hasAndroidCompanion, hasCompanionApp, legacyForHealth)
 
 internal fun installedAs(
     subject: PermissionSubject?,
@@ -489,11 +497,11 @@ internal class FakePermissionDao : LockerAppPermissionDao {
     }
 
     override suspend fun clearDeclarations(appUuid: Uuid) {
-        rows.value = rows.value.mapValues { (key, row) -> if (key.first == appUuid) row.copy(reason = null, required = null) else row }
+        rows.value = rows.value.mapValues { (key, row) -> if (key.first == appUuid) row.copy(reason = null, required = null, declared = false) else row }
     }
 
     override suspend fun setDeclaration(appUuid: Uuid, permission: String, reason: String?, required: Boolean?) {
-        rows.value[appUuid to permission]?.let { insertOrReplace(it.copy(reason = reason, required = required)) }
+        rows.value[appUuid to permission]?.let { insertOrReplace(it.copy(reason = reason, required = required, declared = true)) }
     }
 
     override suspend fun deleteByAppUuid(appUuid: Uuid) {
@@ -1136,20 +1144,23 @@ class RuntimeRequestTest {
     }
 }
 
-class LocalMicrophoneGrantsTest {
+class LocalWatchPermissionsTest {
     private val dao = FakePermissionDao()
     private val permissions = permissions(dao)
+    private val MIC = mapOf(APP to WatchPermission.MICROPHONE)
+    private val ENFORCED = WatchPermission.HEALTH_ENFORCED
+    private val GRANTED = WatchPermission.HEALTH_ENFORCED or WatchPermission.HEALTH_GRANTED
 
     @Test
     fun localAndStreamingCaptureFollowTheSamePermissionPolicy() = runTest {
         val permissions = permissions(dao, config = WatchConfig(enablePlugins = true, permissionPolicy = PermissionPolicy.AlwaysAsk))
         assertEquals(NeedsApproval, permissions.request(APP, WATCH_MICROPHONE))
-        assertEquals(emptySet(), permissions.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), permissions.localWatchPermissions().first())
         permissions.setPermissionDecisions(APP, mapOf(WATCH_MICROPHONE to true))
-        assertEquals(setOf(APP), permissions.localMicrophoneGrants().first())
+        assertEquals(MIC, permissions.localWatchPermissions().first())
         assertEquals(Granted, permissions.request(APP, WATCH_MICROPHONE))
         permissions.setPermissionDecisions(APP, mapOf(WATCH_MICROPHONE to false))
-        assertEquals(emptySet(), permissions.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), permissions.localWatchPermissions().first())
     }
 
     @Test
@@ -1157,10 +1168,10 @@ class LocalMicrophoneGrantsTest {
         val permissions = permissions(dao, config = WatchConfig(enablePlugins = true, permissionPolicy = PermissionPolicy.NeverAsk))
         permissions.recordRequested(APP, listOf(WATCH_MICROPHONE, INTERNET))
         assertEquals(Granted, permissions.request(APP, WATCH_MICROPHONE))
-        assertEquals(setOf(APP), permissions.localMicrophoneGrants().first())
+        assertEquals(MIC, permissions.localWatchPermissions().first())
         permissions.setPermissionDecisions(APP, mapOf(WATCH_MICROPHONE to false))
         assertEquals(Denied, permissions.request(APP, WATCH_MICROPHONE))
-        assertEquals(emptySet(), permissions.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), permissions.localWatchPermissions().first())
     }
 
     @Test
@@ -1171,20 +1182,20 @@ class LocalMicrophoneGrantsTest {
             WatchConfigFlow(config),
             FixedClock(1_000), RunningApps(NoWatches), testScope)
         permissions.recordRequested(APP, listOf(WATCH_MICROPHONE, INTERNET))
-        val seen = mutableListOf<Set<Uuid>>()
+        val seen = mutableListOf<Map<Uuid, Int>>()
         val streaming = mutableListOf<Set<String>>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             permissions.grantedKeys(subject(), listOf(WATCH_MICROPHONE)).collect { streaming += it }
         }
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
-            permissions.localMicrophoneGrants().collect { seen += it }
+            permissions.localWatchPermissions().collect { seen += it }
         }
         runCurrent()
         config.value = config.value.copy(watchConfig = config.value.watchConfig.copy(permissionPolicy = PermissionPolicy.NeverAsk))
         runCurrent()
         config.value = config.value.copy(watchConfig = config.value.watchConfig.copy(permissionPolicy = PermissionPolicy.AlwaysAsk))
         runCurrent()
-        assertEquals(listOf(emptySet(), setOf(APP), emptySet()), seen)
+        assertEquals(listOf(emptyMap(), MIC, emptyMap()), seen)
         assertEquals(listOf(emptySet(), setOf(WATCH_MICROPHONE), emptySet()), streaming)
     }
 
@@ -1192,13 +1203,13 @@ class LocalMicrophoneGrantsTest {
     fun disablingEnforcementSyncsNoGrantsToTheWatchAndRemovedAppsHaveNoGrant() = runTest {
         permissions.setPermissionDecisions(APP, mapOf(WATCH_MICROPHONE to true))
         val disabled = permissions(dao, config = WatchConfig(enablePlugins = false))
-        assertEquals(emptySet(), disabled.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), disabled.localWatchPermissions().first())
         assertEquals(Granted, disabled.request(APP, WATCH_MICROPHONE))
         permissions.setPermissionDecisions(APP, mapOf(WATCH_MICROPHONE to false))
-        assertEquals(emptySet(), disabled.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), disabled.localWatchPermissions().first())
         assertEquals(Granted, disabled.request(APP, WATCH_MICROPHONE))
         val removed = permissions(dao, installed = installedAs(null))
-        assertEquals(emptySet(), removed.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), removed.localWatchPermissions().first())
     }
 
     @Test
@@ -1206,11 +1217,11 @@ class LocalMicrophoneGrantsTest {
         val subjects = MutableSharedFlow<Map<Uuid, PermissionSubject>>(replay = 1)
         val app = subject()
         subjects.emit(mapOf(APP to app))
-        val seen = mutableListOf<Set<Uuid>>()
+        val seen = mutableListOf<Map<Uuid, Int>>()
         val installed = object : InstalledApps {
             override fun subjectsOf(appUuids: Set<Uuid>) = subjects.map { all -> all.filterKeys { it in appUuids } }
             override fun pluginPermissions() = flowOf(emptyMap<String, PluginDefinedPermission>())
-            override suspend fun syncMicrophoneGrants(grants: Set<Uuid>) { seen += grants }
+            override suspend fun syncWatchPermissions(permissions: Map<Uuid, Int>) { seen += permissions }
         }
         val permissions = permissions(dao, installed = installed,
             scope = LibPebbleCoroutineScope(backgroundScope.coroutineContext))
@@ -1222,13 +1233,71 @@ class LocalMicrophoneGrantsTest {
         runCurrent()
         permissions.setPermissionDecisions(APP, mapOf(WATCH_MICROPHONE to false))
         runCurrent()
-        assertEquals(listOf(emptySet(), setOf(APP), setOf(APP), emptySet()), seen)
+        assertEquals(listOf(emptyMap(), MIC, MIC, emptyMap()), seen)
     }
 
     @Test
     fun unrelatedGrantsNeverAllowLocalCapture() = runTest {
         permissions.setPermissionDecisions(APP, mapOf(INTERNET to true, LOCATION to true))
-        assertEquals(emptySet(), permissions.localMicrophoneGrants().first())
+        assertEquals(emptyMap(), permissions.localWatchPermissions().first())
+    }
+
+    @Test
+    fun healthIsEnforcedOnlyForAppsThatAskedForIt() = runTest {
+        val permissions = permissions(dao, config = WatchConfig(enablePlugins = true, permissionPolicy = PermissionPolicy.AlwaysAsk))
+        permissions.recordRequested(APP, listOf(LOCATION))
+        assertEquals(emptyMap(), permissions.localWatchPermissions().first())
+        permissions.recordRequested(APP, listOf(HEALTH))
+        assertEquals(mapOf(APP to ENFORCED), permissions.localWatchPermissions().first())
+        permissions.setPermissionDecisions(APP, mapOf(HEALTH to true))
+        assertEquals(mapOf(APP to GRANTED), permissions.localWatchPermissions().first())
+        permissions.setPermissionDecisions(APP, mapOf(HEALTH to false, WATCH_MICROPHONE to true))
+        assertEquals(mapOf(APP to (ENFORCED or WatchPermission.MICROPHONE)), permissions.localWatchPermissions().first())
+    }
+
+    @Test
+    fun legacyAppsKeepHealthUnlessAskedFirst() = runTest {
+        val legacy = RequestedPermissions(declared = null, hasPkjs = false, hasHealth = true)
+        val config = WatchConfig(enablePlugins = true, permissionPolicy = PermissionPolicy.AlwaysAsk)
+        val allowed = permissions(dao, config = config, installed = installedAs(subject(legacy = true)))
+        allowed.recordRequested(APP, legacy)
+        assertEquals(mapOf(APP to GRANTED), allowed.localWatchPermissions().first())
+        val asking = permissions(dao, config = config.copy(askLegacyAppsForPermissions = true), installed = installedAs(subject(legacy = true)))
+        assertEquals(mapOf(APP to ENFORCED), asking.localWatchPermissions().first())
+        assertEquals(emptyList(), RequestedPermissions(declared = null, hasPkjs = false).all)
+    }
+
+    @Test
+    fun appsFromBeforeTheHealthSdkAreTreatedAsLegacyForHealth() = runTest {
+        val config = WatchConfig(enablePlugins = true, permissionPolicy = PermissionPolicy.AlwaysAsk)
+        val oldSdk = installedAs(subject(legacyForHealth = true))
+        val allowed = permissions(dao, config = config, installed = oldSdk)
+        allowed.recordRequested(APP, RequestedPermissions(declared = listOf(PluginPermission(HEALTH)), hasPkjs = false))
+        assertEquals(mapOf(APP to GRANTED), allowed.localWatchPermissions().first())
+        val asking = permissions(dao, config = config.copy(askLegacyAppsForPermissions = true), installed = oldSdk)
+        assertEquals(mapOf(APP to ENFORCED), asking.localWatchPermissions().first())
+        val newSdk = permissions(dao, config = config, installed = installedAs(subject(legacyForHealth = false)))
+        assertEquals(mapOf(APP to ENFORCED), newSdk.localWatchPermissions().first())
+    }
+
+    @Test
+    fun onlyAppsFromBeforeTheHealthSdkAreAskedAboutTheirHealthCapability() {
+        val declared = listOf(PluginPermission(LOCATION))
+        assertEquals(listOf(LOCATION, HEALTH), RequestedPermissions(declared, hasPkjs = false, hasHealth = true).all)
+        assertEquals(listOf(LOCATION), RequestedPermissions(declared, hasPkjs = false, hasHealth = true, legacyForHealth = false).all)
+        assertTrue(isLegacyForHealth(listOf("5.112", "5.86")))
+        assertTrue(isLegacyForHealth(listOf("3.8")))
+        assertFalse(isLegacyForHealth(listOf("5.113")))
+        assertFalse(isLegacyForHealth(listOf("6.0")))
+    }
+
+    @Test
+    fun aVersionDeclaringPermissionsDropsLegacyHealthUnlessItDeclaresIt() = runTest {
+        permissions.recordRequested(APP, RequestedPermissions(declared = null, hasPkjs = false, hasHealth = true))
+        permissions.recordRequested(APP, RequestedPermissions(declared = listOf(PluginPermission(LOCATION)), hasPkjs = false))
+        assertEquals(emptyMap(), permissions.localWatchPermissions().first())
+        permissions.recordRequested(APP, RequestedPermissions(declared = listOf(PluginPermission(HEALTH)), hasPkjs = false))
+        assertEquals(setOf(HEALTH), dao.rows.value.keys.map { it.second }.toSet())
     }
 }
 
@@ -1297,5 +1366,94 @@ class AllAppsStatusesTest {
         val all = permissions.statuses(null).first()
         assertEquals(listOf(APP to CALENDAR), all.map { it.appUuid to it.permission })
         assertEquals(PermissionStatus.AllowedAutomatically, all.single().status)
+    }
+}
+
+class UsageKeyTest {
+    private val dao = FakePermissionDao()
+
+    @Test
+    fun aLegacyAppsTrafficIsAllUnderGlobalInternet() = runTest {
+        val legacy = permissions(dao, installed = installedAs(subject(legacy = true)))
+        assertEquals(UsageKey(GLOBAL_INTERNET, declared = true), legacy.usageKeys(APP, listOf("https://api.example.com/x"))["https://api.example.com/x"])
+        assertEquals(UsageKey(GLOBAL_INTERNET, declared = true), legacy.usageKeys(APP, listOf("http://192.168.1.2/"))["http://192.168.1.2/"])
+    }
+
+    @Test
+    fun aDeclaredDomainCoversItsSubdomains() = runTest {
+        val permissions = permissions(dao)
+        val declared = PluginPermission(INTERNET, mapOf(PluginPermissions.PARAM_DOMAINS to listOf("example.com")))
+        permissions.recordRequested(APP, RequestedPermissions(declared = listOf(declared), hasPkjs = true))
+
+        assertEquals(UsageKey(internetKey("example.com"), declared = true), permissions.usageKeys(APP, listOf("https://api.example.com/x"))["https://api.example.com/x"])
+    }
+
+    @Test
+    fun aHostOnlyGrantedWhileRunningIsNotDeclared() = runTest {
+        val permissions = permissions(dao)
+        permissions.recordRequested(APP, RequestedPermissions(declared = emptyList(), hasPkjs = true))
+        permissions.setDecisions(APP, mapOf(internetKey("home.example.net") to true))
+
+        assertEquals(UsageKey(internetKey("home.example.net"), declared = false), permissions.usageKeys(APP, listOf("https://home.example.net/api"))["https://home.example.net/api"])
+    }
+
+    @Test
+    fun theLocalNetworkNamesNoHost() = runTest {
+        assertEquals(UsageKey(LOCAL_NETWORK, declared = true), permissions(dao).usageKeys(APP, listOf("http://192.168.1.2:8123/"))["http://192.168.1.2:8123/"])
+    }
+
+    @Test
+    fun oneLookupAnswersEveryUrl() = runTest {
+        val urls = listOf("https://api.example.com/", "http://192.168.1.2/", "file:///etc/passwd")
+        assertEquals(
+            mapOf(
+                urls[0] to UsageKey(internetKey("api.example.com"), declared = false),
+                urls[1] to UsageKey(LOCAL_NETWORK, declared = true),
+            ),
+            permissions(dao).usageKeys(APP, urls),
+        )
+    }
+
+    @Test
+    fun countsEvenWithPermissionsOff() = runTest {
+        val off = permissions(dao, config = WatchConfig(enablePlugins = false))
+        assertEquals(UsageKey(internetKey("api.example.com"), declared = false), off.usageKeys(APP, listOf("https://api.example.com/"))["https://api.example.com/"])
+        assertNull(off.usageKeys(APP, listOf("file:///data/libpebble3.db"))["file:///data/libpebble3.db"])
+    }
+}
+
+class AppDataUsageSummaryTest {
+    private val other = Uuid.parse("00000000-0000-0000-0000-00000000a002")
+
+    private fun row(
+        appUuid: Uuid = APP,
+        permission: String = internetKey("example.com"),
+        day: Int = 100,
+        connection: String = Connections.WIFI,
+        declared: Boolean = true,
+        received: Long = 0,
+    ) = AppDataUsageEntity(appUuid, permission, day, connection, declared, requests = 1, sentBytes = 0, receivedBytes = received)
+
+    @Test
+    fun eachAppAddsUpItsDaysAndConnectionsHeaviestFirst() {
+        val summaries = listOf(
+            row(received = 100),
+            row(day = 101, connection = Connections.CELLULAR, received = 50),
+            row(appUuid = other, received = 1_000),
+        ).byApp()
+
+        assertEquals(listOf(other, APP), summaries.map { it.appUuid })
+        val app = summaries.last()
+        assertEquals(150, app.totalBytes)
+        assertEquals(50, app.mobileBytes)
+        assertEquals(2, app.requests)
+    }
+
+    @Test
+    fun anUndeclaredDomainIsHashedForReports() {
+        val usage = listOf(row(permission = internetKey("home.example.net"), declared = false)).byApp().single().byPermission.single()
+        assertEquals("$INTERNET/#${"home.example.net".hashCode()}", usage.reportableKey)
+        assertEquals(GLOBAL_INTERNET, listOf(row(permission = GLOBAL_INTERNET)).byApp().single().byPermission.single().reportableKey)
+        assertEquals(LOCAL_NETWORK, listOf(row(permission = LOCAL_NETWORK, declared = false)).byApp().single().byPermission.single().reportableKey)
     }
 }

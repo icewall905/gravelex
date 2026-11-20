@@ -77,6 +77,8 @@ data class WatchConfig(
     val verboseWatchManagerLogging: Boolean = false,
     val autoResumeFirmwareUpdate: Boolean = true,
     val pkjsInspectable: Boolean = false,
+    /** Android PKJS XMLHttpRequests go through the app, so their bytes are counted. */
+    val pkjsRequestsThroughApp: Boolean = true,
     val emulateRemoteTimeline: Boolean = true,
     /**
      * When true, LibPebble3 will always send music state as paused, never as playing.
@@ -208,7 +210,7 @@ data class NotificationConfig(
      * Mute all call alerts on the phone when at least one watch is connected
      */
     val mutePhoneCallSoundsWhenConnected: Boolean = false,
-    /** Legacy; only read to migrate into the RespectPhoneSilence watch pref. */
+    /** Drop DND-silenced notifications for watches which can't receive the RespectPhoneSilence watch pref. */
     val respectDoNotDisturb: Boolean = false,
     /**
      * Default new apps to be enabled (else they will be disabled).

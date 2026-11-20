@@ -80,6 +80,7 @@ kotlin {
                     exclude(group = "com.google.android.gms", module = "play-services-auth")
                     exclude(group = "com.google.android.gms", module = "play-services-fitness")
                 }
+                implementation(libs.highlights)
                 implementation(compose.runtime)
                 implementation(compose.foundation)
                 implementation(libs.compose.material3)

@@ -22,5 +22,5 @@ internal class TestPluginBridge(uuid: Uuid, config: WatchConfigFlow, scope: Coro
     private val running = RunningApps(NoWatches)
     val permissions = AppPermissions(FakePermissionDao(), installedAs(PermissionSubject(uuid, legacy = true)),
         config, FixedClock(1_000), running, LibPebbleCoroutineScope(scope.coroutineContext))
-    val client = PluginClient(registry, permissions, running, RealLibPebbleAnalytics(), PluginLogs())
+    val client = PluginClient(registry, permissions, running, RealLibPebbleAnalytics(), PluginLogs()) { _, _, _, _, _ -> }
 }
