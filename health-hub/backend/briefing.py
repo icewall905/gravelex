@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import re
 import sys
@@ -30,6 +29,7 @@ import time
 from datetime import date, datetime, timedelta
 from statistics import mean, median
 from typing import Any
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import fitness
@@ -37,9 +37,15 @@ import accounts
 from contextvars import copy_context
 
 log = logging.getLogger("pebble-health.briefing")
-FACTS_VERSION = 6
-PAGES = ("today", "sleep", "recovery", "training", "more")
+FACTS_VERSION = 9
+STANDARD_PAGES = ("today", "sleep", "recovery", "training", "more")
 _running = threading.Lock()
+PATTERN_ACTIONS = {
+    "check_sync": "Check whether the watch and phone have synced recently.",
+    "review_step_coverage": "Look at collection coverage before comparing your step totals.",
+    "review_training_days": "Review recent training days and confirm the ones you can account for.",
+    "review_weekly_goal": "Review the recorded minutes and the remaining weekly goal balance.",
+}
 
 
 def configured() -> bool:
@@ -74,23 +80,6 @@ def _avg(values):
     return mean(values) if values else None
 
 
-def _spearman(pairs):
-    """Rank correlation; None below 7 pairs."""
-    if len(pairs) < 7:
-        return None
-    def ranks(v):
-        order = sorted(range(len(v)), key=lambda i: v[i])
-        r = [0.0] * len(v)
-        for rank, i in enumerate(order):
-            r[i] = rank
-        return r
-    xs, ys = ranks([p[0] for p in pairs]), ranks([p[1] for p in pairs])
-    mx, my = mean(xs), mean(ys)
-    num = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
-    den = math.sqrt(sum((a - mx) ** 2 for a in xs) * sum((b - my) ** 2 for b in ys))
-    return round(num / den, 2) if den else None
-
-
 def facts(s: dict[str, Any], tz) -> dict[str, Any]:
     now = datetime.fromtimestamp(s["now"], tz)
     today = now.date()
@@ -122,9 +111,11 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
     last_hrv = next((n for n in nights if n["night"] == today.isoformat()), None)
     hs, sl, ready = rc.get("hrv_status") or {}, rc.get("sleep") or {}, rc.get("readiness") or {}
 
-    # Cross-page links, only reported when there are enough paired days.
-    by_sleep = {n["night"]: n["sleep_s"] / 3600 for n in sleep_nights}
-    sleep_vs_hrv = _spearman([(by_sleep[n["night"]], n["rmssd_ms"]) for n in nights if n["night"] in by_sleep])
+    report = s.get("insights") or {}
+    if report and s.get("briefing_history"):
+        report = dict(report, longer_history=s["briefing_history"])
+    sleep_vs_hrv = next((link["rank_correlation"] for link in report.get("associations", [])
+                         if link["predictor"] == "sleep_minutes" and link["outcome"] == "rmssd_ms"), None)
 
     collector = s.get("collector") or {}
     night_sessions_today = (last_hrv or {}).get("sessions", 0)
@@ -167,6 +158,7 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
         "facts_version": FACTS_VERSION,
         "date": today.isoformat(), "weekday": now.strftime("%A"), "time": now.strftime("%H:%M"),
         "name": s.get("wearer") or None,
+        "patterns": report or None,
         "today": {
             "oxygen": {"status": oxygen.get("status", "waiting_for_data"), "latest_percent": oxygen_latest.get("percent"), "raw_device_quality": oxygen_latest.get("quality"),
                        "measured_at": datetime.fromtimestamp(oxygen_latest["ts"], tz).isoformat() if oxygen_latest.get("ts") else None,
@@ -279,7 +271,7 @@ Rules:
 - Stock-firmware readiness and overnight strain are custom low-confidence estimates. Call them estimated; overnight pulse is a sparse filtered spot summary, not proven resting HR. Overnight strain is not current daytime or psychological stress, and must retain its observation date. Sleep-only guidance is not overall readiness. Training load may be missing. Do not diagnose causes of a pulse change.
 - Batched PPI delivery diagnostics are transport observations only. Never call them HRV/RMSSD, readiness, stress, breathing, or a cadence failure; report the source-blocked reason when present.
 - SpO2 is experimental optical spot sampling. State its actual measurement date and sparse coverage when discussed. Do not infer sleep apnea, hypoxia duration, diagnosis, recovery benefit or normality from it. No samples means unknown, not zero.
-- Prefer comparisons with the person's own averages over absolute judgements.
+- Prefer comparisons with the person's own history over absolute judgements.
 - The "focus" is one practical, specific suggestion for today, grounded in the facts.
 - Lead with what changed or matters most and why; do not list every number. Mention a missing value at most once per page.
 - Say each point once: the headline, summary, highlights and focus must not repeat each other.
@@ -289,6 +281,14 @@ Rules:
 - Write durations as given (e.g. "5h 41m"), never as decimal hours.
 - Keep it short: headline <= 12 words, summary <= 2 sentences, 2-4 highlights of <= 20 words each.
 Return JSON exactly matching the schema."""
+
+PATTERNS_SYSTEM = SYSTEM + """
+Write only the Patterns page. These instructions take priority for this page:
+- In patterns, use the dated longitudinal evidence and the provided medians, deltas and coverage. Compare distinct time windows, and explain how missing days may affect the comparison. The activity forecast is conditional on adequately recorded days and describes recorded steps; its typical error comes from historical replay. The weekly goal balance is planning arithmetic, never a prescription or a reason to increase training today.
+- Use longer_history to look for sustained changes or earlier periods with similar observations. Its weekly windows are disjoint and end at the most recent completed date. Use comparable_past_weeks as examples of similar observation profiles. They do not predict what happens next. Omitted dates and weeks have no usable measurements in this record. Describe the dated examples you actually use and their sample counts when helpful.
+- Discuss only associations marked exploratory_pattern. State which metric preceded the other when lag_days is set. Give sample counts when helpful. These are exploratory rank associations, not effects or medical findings. Avoid any claim about unmeasured factors. Treat the two windows as checks of consistency, not independent studies.
+- For the patterns focus field, return exactly one action code from suggested_actions, or an empty string. The dashboard translates the code to readable text.
+"""
 
 PAGE_SCHEMA = {
     "type": "object",
@@ -303,13 +303,19 @@ PAGE_SCHEMA = {
     },
     "required": ["headline", "summary", "highlights", "focus", "data_notes"],
 }
-SCHEMA = {"type": "object", "properties": {p: PAGE_SCHEMA for p in PAGES}, "required": list(PAGES)}
+SCHEMA = {"type": "object", "properties": {p: PAGE_SCHEMA for p in STANDARD_PAGES},
+          "required": list(STANDARD_PAGES)}
+PATTERNS_SCHEMA = {"type": "object", "properties": {"patterns": {
+    **PAGE_SCHEMA, "properties": {**PAGE_SCHEMA["properties"],
+                                 "focus": {"type": "string", "enum": ["", *PATTERN_ACTIONS]}}
+}}, "required": ["patterns"]}
 
 PAGE_GUIDE = {
     "today": "The big picture for the day: readiness, last night, activity so far, weight trend, intensity goal.",
     "sleep": "Analyze last night: onset, wake, duration, quieter/non-restful intervals and recorded gaps against recent nights, regularity and debt. Discuss recent workout timing, duration, effort and available load alongside recovery pulse, qualified HRV and activity context from other pages. Distinguish workouts before sleep from those afterward. Describe possible associations, never claim causation. Respect sleep limitations; do not invent awakenings, restlessness, stages or missing lifestyle factors. Give one practical suggestion grounded in the observations.",
     "recovery": "Overnight HRV, pulse and breathing against recent nights; baseline progress; any sleep/HRV link.",
     "training": "Intensity minutes against the weekly goal, training load status, VO2max estimate and what moves it.",
+    "patterns": "Explain the most useful longer-term change, and an exploratory association or an honest limit on what can be inferred. Use dated evidence when useful. Prefer actionable data gaps over repeating the other pages.",
     "more": "Is the setup healthy: uploads, battery, night recordings arriving, anything the person should fix.",
 }
 
@@ -354,17 +360,28 @@ def _allowed(f: dict[str, Any]) -> set[float]:
     return nums
 
 
-def _chat(messages: list[dict[str, str]]) -> tuple[dict[str, Any], str]:
+def _chat(messages: list[dict[str, str]], schema) -> tuple[dict[str, Any], str]:
     base = os.environ["LLM_BASE_URL"].rstrip("/")
     body = {"model": os.environ.get("LLM_MODEL", "currentmodel"), "messages": messages, "temperature": 0.4,
             # Reasoning counts against the output budget, and the model is much
             # better with it on; this runs once a night, so be generous.
-            "max_tokens": int(os.environ.get("LLM_MAX_TOKENS", "32000")), "response_format": {"type": "json_object", "schema": SCHEMA}}
+            "max_tokens": int(os.environ.get("LLM_MAX_TOKENS", "32000")), "response_format": {"type": "json_object", "schema": schema}}
     headers = {"Content-Type": "application/json"}
     if os.environ.get("LLM_API_KEY"):
         headers["Authorization"] = "Bearer " + os.environ["LLM_API_KEY"]
-    with urlopen(Request(base + "/chat/completions", json.dumps(body).encode(), headers), timeout=1800) as r:
-        reply = json.load(r)
+    request = Request(base + "/chat/completions", json.dumps(body).encode(), headers)
+    for delay in (0, 3, 10):
+        if delay:
+            time.sleep(delay)
+        try:
+            with urlopen(request, timeout=1800) as response:
+                reply = json.load(response)
+            break
+        except HTTPError as error:
+            if error.code not in (502, 503, 504) or delay == 10:
+                raise
+            log.warning("retrying briefing model after gateway HTTP %d", error.code)
+            error.close()
     content = reply["choices"][0]["message"]["content"] or ""
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
     content = re.sub(r"^```(?:json)?|```$", "", content).strip()
@@ -387,16 +404,19 @@ class EmptyBriefing(ValueError):
     pass
 
 
-def _normalise(result: dict[str, Any]) -> dict[str, Any]:
+def _normalise(result: dict[str, Any], pages) -> dict[str, Any]:
     """Servers don't always enforce the schema: unwrap one nesting level and
     accept plain-string highlights (taking a page-level tone if given)."""
-    if isinstance(result, dict) and not any(p in result for p in PAGES):
-        inner = [v for v in result.values() if isinstance(v, dict) and any(p in v for p in PAGES)]
+    if isinstance(result, dict) and not any(p in result for p in pages):
+        inner = [v for v in result.values() if isinstance(v, dict) and any(p in v for p in pages)]
         if inner:
             result = inner[0]
+        elif len(pages) == 1 and ("headline" in result or "summary" in result):
+            result = {pages[0]: result}
     if not isinstance(result, dict):
         result = {}
-    for page in PAGES:
+    normalised = {}
+    for page in pages:
         p = result.get(page) if isinstance(result.get(page), dict) else {}
         page_tone = p.get("tone") if p.get("tone") in ("good", "neutral", "watch") else "neutral"
         p["highlights"] = [h if isinstance(h, dict) else {"text": str(h), "tone": page_tone} for h in p.get("highlights") or []]
@@ -406,65 +426,100 @@ def _normalise(result: dict[str, Any]) -> dict[str, Any]:
         p["data_notes"] = [str(n) for n in p.get("data_notes") or []]
         for key in ("headline", "summary", "focus"):
             p[key] = str(p.get(key) or "")
-        result[page] = p
-    if not any(result[p]["headline"] or result[p]["summary"] for p in PAGES):
+        normalised[page] = p
+    if not any(normalised[p]["headline"] or normalised[p]["summary"] for p in pages):
         raise EmptyBriefing("model returned no usable page content")
-    return result
+    return normalised
 
 
 def _check(result: dict[str, Any], allowed: set[float]) -> dict[str, list[str]]:
     problems = {}
-    for page in PAGES:
-        p = result.get(page) or {}
-        texts = [p.get("headline", ""), p.get("summary", ""), p.get("focus", "")] + \
-                [h.get("text", "") for h in p.get("highlights", [])] + list(p.get("data_notes", []))
+    for page, p in result.items():
+        texts = [p["headline"], p["summary"], p["focus"]] + [
+            h.get("text", "") for h in p["highlights"]] + p["data_notes"]
         bad = sorted({b for t in texts for b in ungrounded(t, allowed)})
         if bad:
             problems[page] = bad
     return problems
 
 
-def _scrub(result: dict[str, Any], allowed: set[float]) -> dict[str, Any]:
+def _scrub(result: dict[str, Any], allowed: set[float]) -> None:
     """Drop any remaining sentence-level item with an ungrounded number."""
-    for page in PAGES:
-        p = result.get(page) or {}
-        p["highlights"] = [h for h in p.get("highlights", []) if not ungrounded(h.get("text", ""), allowed)][:4]
-        p["data_notes"] = [n for n in p.get("data_notes", []) if not ungrounded(n, allowed)][:3]
+    for p in result.values():
+        p["highlights"] = [h for h in p["highlights"] if not ungrounded(h.get("text", ""), allowed)][:4]
+        p["data_notes"] = [n for n in p["data_notes"] if not ungrounded(n, allowed)][:3]
         for key in ("headline", "summary", "focus"):
-            if ungrounded(p.get(key, ""), allowed):
+            if ungrounded(p[key], allowed):
                 p[key] = ""
-        result[page] = p
-    return result
 
 
-def generate(summary: dict[str, Any], tz) -> dict[str, Any]:
-    f = facts(summary, tz)
-    allowed = _allowed(f)
-    user = ("Page guide:\n" + json.dumps(PAGE_GUIDE, indent=1) +
-            "\n\nFacts (null = not measured yet):\n" + json.dumps(f, indent=1) +
-            "\n\nWrite the briefing for each page. Answer with exactly this JSON shape:\n" +
-            json.dumps({p: {"headline": "...", "summary": "...", "highlights": [{"text": "...", "tone": "good|neutral|watch"}],
-                            "focus": "...", "data_notes": ["..."]} for p in PAGES}))
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
-    try:
-        result, model = _chat(messages)
-        result = _normalise(result)
-    except (EmptyBriefing, json.JSONDecodeError):
-        result, model = _chat(messages)
-        result = _normalise(result)
-    problems = _check(result, allowed)
+def _write(facts, guides, system, schema):
+    pages = tuple(guides)
+    allowed = _allowed(facts)
+    shape = {p: {"headline": "...", "summary": "...", "highlights": [{"text": "...", "tone": "good|neutral|watch"}],
+                 "focus": "...", "data_notes": ["..."]} for p in pages}
+    user = ("Page guide:\n" + json.dumps(guides) +
+            "\n\nFacts (null = not measured yet):\n" + json.dumps(facts, separators=(",", ":")) +
+            "\n\nWrite the requested pages using exactly this JSON shape:\n" + json.dumps(shape))
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     retried = False
+    try:
+        result, model = _chat(messages, schema)
+        result = _normalise(result, pages)
+    except (EmptyBriefing, json.JSONDecodeError):
+        retried = True
+        result, model = _chat(messages, schema)
+        result = _normalise(result, pages)
+    problems = _check(result, allowed)
     if problems:
         retried = True
         messages += [{"role": "assistant", "content": json.dumps(result)},
                      {"role": "user", "content": "These numbers do not appear in the facts: " + json.dumps(problems) +
-                      ". Rewrite the whole briefing using only numbers from the facts."}]
-        result, model = _chat(messages)
-        result = _normalise(result)
+                      ". Rewrite these pages using only numbers from the facts."}]
+        result, model = _chat(messages, schema)
+        result = _normalise(result, pages)
     remaining = _check(result, allowed)
-    result = _scrub(result, allowed)
-    return {"pages": {p: result.get(p) for p in PAGES}, "model": model, "facts": f,
-            "grounding": {"retried": retried, "dropped_numbers": remaining}}
+    _scrub(result, allowed)
+    return result, model, retried, remaining
+
+
+def generate(summary: dict[str, Any], tz) -> dict[str, Any]:
+    f = facts(summary, tz)
+    standard_facts = {key: value for key, value in f.items() if key != "patterns"}
+    standard_guides = {key: PAGE_GUIDE[key] for key in STANDARD_PAGES}
+    try:
+        pages, model, retried, remaining = _write(standard_facts, standard_guides, SYSTEM, SCHEMA)
+        if not any(page["headline"] or page["summary"] for page in pages.values()):
+            raise EmptyBriefing("standard pages failed the evidence checks")
+        standard_status = "ok"
+    except Exception:
+        log.exception("standard briefing failed")
+        pages, model, retried, remaining = {}, None, False, {}
+        standard_status = "error"
+    patterns_status = "no_data"
+    if (report := f["patterns"]):
+        try:
+            response, patterns_model, patterns_retried, patterns_remaining = _write(
+                report, {"patterns": PAGE_GUIDE["patterns"]}, PATTERNS_SYSTEM, PATTERNS_SCHEMA)
+            retried = retried or patterns_retried
+            remaining.update(patterns_remaining)
+            patterns = response["patterns"]
+            if not (patterns["headline"] or patterns["summary"]):
+                raise EmptyBriefing("patterns page failed the evidence checks")
+            selected = patterns["focus"]
+            actions = report.get("suggested_actions", [])
+            patterns["focus"] = PATTERN_ACTIONS.get(selected, "") if selected in actions else ""
+            pages["patterns"] = patterns
+            model = model or patterns_model
+            patterns_status = "ok"
+        except Exception:
+            log.exception("patterns briefing failed")
+            patterns_status = "error"
+    if not pages:
+        raise EmptyBriefing("neither briefing request produced usable pages")
+    return {"pages": pages, "model": model, "facts": f,
+            "grounding": {"retried": retried, "dropped_numbers": remaining,
+                          "standard_status": standard_status, "patterns_status": patterns_status}}
 
 
 # --------------------------------------------------------------------------
@@ -491,6 +546,8 @@ def run() -> str:
         summary = fitness.summary(42)
         started = time.time()
         try:
+            if summary.get("insights"):
+                summary["briefing_history"] = fitness.briefing_history(summary)
             out = generate(summary, fitness.TZ)
             status, error = "ok", None
         except Exception as exc:

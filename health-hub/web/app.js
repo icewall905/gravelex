@@ -1944,7 +1944,7 @@ function briefPanel(page, opts = {}) {
   const when = stale ? fmtDateTime(b.created) : fmtClock(b.created);
   const btn = opts.regenerate ? h('button', { class: 'btn small', type: 'button', onclick: e => regenerateBriefing(e.currentTarget) }, 'Regenerate') : null;
   return h('article', { class: 'card wide brief', 'data-m': 'ready' },
-    h('div', { class: 'card-head' }, swatch(), h('h2', null, page === 'sleep' ? 'AI sleep analysis' : 'Briefing'), chip(stale ? 'Out of date' : 'AI', stale ? '' : 'exp', 'Written by a language model from your computed numbers')),
+    h('div', { class: 'card-head' }, swatch(), h('h2', null, ({ sleep: 'AI sleep analysis', patterns: 'AI patterns briefing' })[page] || 'Briefing'), chip(stale ? 'Out of date' : 'AI', stale ? '' : 'exp', 'Written by a language model from your computed numbers')),
     p.headline ? h('p', { class: 'brief-head' }, p.headline) : null,
     p.summary ? h('p', { class: 'lede' }, p.summary) : null,
     (p.highlights || []).length ? h('ul', { class: 'brief-list' }, p.highlights.map(x => h('li', { class: `tone-${x.tone}` }, h('i', { 'aria-hidden': 'true' }), x.text))) : null,
@@ -1953,10 +1953,69 @@ function briefPanel(page, opts = {}) {
     h('p', { class: 'brief-meta' }, `Written ${when} by ${b.model || 'the language model'} from your numbers. Every number is checked against the data.`, btn ? ' ' : null, btn));
 }
 
+function patternsPanel() {
+  const report = D().insights;
+  if (!report) return null;
+  const coverage = report.coverage_last_7_days;
+  const goal = report.weekly_intensity_goal;
+  const forecast = report.steps_today_estimate;
+  const links = report.associations.filter(item => item.status === 'exploratory_pattern');
+  const actions = {
+    check_sync: ['Check watch and phone sync', '#more'],
+    review_step_coverage: ['Review collection coverage', '#more'],
+    review_training_days: ['Review unconfirmed training days', '#training'],
+  };
+  const nextActions = report.suggested_actions.filter(key => key in actions);
+  return [
+    card('steps', 'Personal patterns', { cls: 'wide' },
+      h('p', { class: 'foot' }, `Completed days through ${report.through}`),
+      stats([
+        ['Minute coverage · last 7 days', fmt(coverage.minute_coverage_pct), '%'],
+        ['Step days with enough data', `${coverage.usable_step_days} / 7`],
+        ['Watch-recorded nights', `${coverage.recorded_sleep_nights} / 7`],
+        ['Confirmed training days', `${coverage.confirmed_load_days} / 7`],
+      ]),
+      h('details', { class: 'info' }, h('summary', null, 'Compare with your baseline'),
+        h('ul', null, Object.values(report.metrics).map(metric => {
+          const recent = metric.recent_median;
+          const baseline = metric.baseline_median;
+          const last = metric.latest;
+          return h('li', null, h('strong', null, metric.label), ' · ',
+            recent == null ? 'Too few recent readings'
+              : `${fmt(recent, 1)} ${metric.unit} across ${metric.recent_days} recent days`,
+            baseline == null ? ` · ${metric.baseline_days} baseline days available`
+              : ` · baseline ${fmt(baseline, 1)} ${metric.unit} across ${metric.baseline_days} days`,
+            last ? ` · last recorded ${fmt(last.value, 1)} ${metric.unit} on ${last.date}` : null);
+        })),
+        h('p', null, 'Compares medians for the last 7 completed days and the preceding 28 days. Steps and active minutes require at least 75% recorded coverage for their respective fields.')),
+      h('details', { class: 'info' }, h('summary', null, 'Links between metrics'),
+        links.length
+          ? h('ul', null, links.map(link => h('li', null,
+            `${report.metrics[link.predictor].label} and ${report.metrics[link.outcome].label.toLowerCase()} · ${link.lag_days ? 'next date' : 'same date'} · ${link.rank_correlation > 0 ? 'move together' : 'move in opposite directions'} across ${link.pairs} paired dates`)))
+          : h('p', null, 'No relationship met the sample and consistency checks.'),
+        h('p', null, 'These exploratory relationships reflect recorded dates and may be affected by missing days or other factors.')),
+      nextActions.length ? h('ul', null, nextActions.map(key =>
+        h('li', null, h('a', { href: actions[key][1] }, actions[key][0])))) : null),
+    card('intensity', 'Activity planning', { cls: 'wide' },
+      goal ? stats([
+        ['Recorded this week', `${fmt(goal.observed)} / ${fmt(goal.target)}`, 'min'],
+        ['Remaining to record', fmt(goal.remaining_to_record), 'min'],
+        goal.remaining_to_record > 0 ? ['Even split through Sunday', fmt(goal.even_split_minutes), 'min/day'] : null,
+      ]) : h('p', null, 'Set a maximum heart rate to enable intensity tracking.'),
+      forecast.status === 'available'
+        ? h('p', { class: 'foot' }, `The step estimate for ${fmtDayShort(forecast.date)} is ${fmt(forecast.estimate)} with typical recording coverage. The typical error in historical replay was ${fmt(forecast.typical_error_steps)} steps across ${forecast.evaluation_days} days.`)
+        : h('p', { class: 'foot' }, forecast.status === 'no_skill_over_persistence'
+          ? 'A recent median did not improve on the last eligible day in historical replay.'
+          : 'A step estimate needs more days with adequate step coverage.')),
+    briefPanel('patterns'),
+  ];
+}
+
 const PAGES = {
   today() {
     const section = (title, ...cards) => [h('h2', { class: 'section-title' }, title), h('div', { class: 'feed' }, cards)];
     return [h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
+      h('div', { class: 'feed' }, patternsPanel()),
       section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress()),
       section('Activity', CARDS.steps(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.fitness(), CARDS.train(), CARDS.workouts(3)),
       section('Body & device', CARDS.weight(), CARDS.device())];

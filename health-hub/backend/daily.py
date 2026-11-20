@@ -39,6 +39,7 @@ def rollup(db, start_day: date, end_day: date, tz, now: int) -> list[dict[str, A
     night_hr: dict[date, list[int]] = {}
     for d in (b[1] for b in bounds[:-1]):
         days[d] = {"date": d.isoformat(), "minutes": 0, "steps": 0, "active_minutes": 0,
+                   "step_minutes": 0, "active_observed_minutes": 0, "overnight_hr_minutes": 0,
                    "active_kcal": None, "resting_kcal": None, "distance_m": None,
                    "hr_minutes": 0, "hr_min": None, "hr_avg": None, "hr_max": None, "resting_hr": None}
     rows = db.execute(
@@ -54,6 +55,9 @@ def rollup(db, start_day: date, end_day: date, tz, now: int) -> list[dict[str, A
         row["minutes"] += 1
         if isinstance(steps, int) and 0 <= steps <= 10000:
             row["steps"] += steps
+            row["step_minutes"] += 1
+        if active in (0, 1):
+            row["active_observed_minutes"] += 1
         if active == 1:
             row["active_minutes"] += 1
         for key, value in (("active_kcal", ak), ("resting_kcal", rk), ("distance_m", dm)):
@@ -71,6 +75,7 @@ def rollup(db, start_day: date, end_day: date, tz, now: int) -> list[dict[str, A
                        hr_avg=round(sum(values) / len(values), 1))
         # Lowest sustained pulse: 10th percentile of 00-06 readings, needs 20.
         night = sorted(night_hr.get(d, []))
+        row["overnight_hr_minutes"] = len(night)
         if len(night) >= 20:
             row["resting_hr"] = night[len(night) // 10]
         for key in ("active_kcal", "resting_kcal", "distance_m"):

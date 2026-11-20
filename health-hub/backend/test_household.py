@@ -262,3 +262,28 @@ def test_ha_summary_identity_all_metrics_and_daily_missingness(household):
     own_api=owner.post('/api/settings/api-tokens',json={'name':'HA owner'}).get_json()['token']
     own=dashboard.app.test_client().get('/api/v1/summary',headers=bearer(own_api)).get_json()
     assert own['metrics']['steps_today'] is None
+
+
+def test_insights_history_scope_uses_authenticated_wearer(household):
+    from datetime import datetime, timedelta
+
+    owner = login('owner')
+    member(owner)
+    other = login('member')
+    day = datetime.now(fitness.TZ).date() - timedelta(days=1)
+    start = int(datetime.combine(day, datetime.min.time(), fitness.TZ).timestamp())
+    with accounts.as_user(accounts.find_username('owner')):
+        with fitness.connect() as db:
+            db.executemany("INSERT INTO minutes(ts,steps,payload) VALUES(?,?,?)",
+                           [(start + i * 60, 2, '{}') for i in range(1200)])
+    anon = dashboard.app.test_client()
+    assert anon.get('/api/v1/insights').status_code == 401
+    for client, scope, expected in [(owner, 'summary:read', 403), (owner, 'history:read', 200),
+                                    (other, 'history:read', 200)]:
+        issued = client.post('/api/settings/api-tokens', json={'name': scope, 'scopes': [scope]}).get_json()
+        response = anon.get('/api/v1/insights', headers=bearer(issued['token']))
+        assert response.status_code == expected
+        if expected == 200:
+            report = response.get_json()
+            assert report['through'] == day.isoformat()
+            assert report['days'][-1].get('steps') == (2400 if client is owner else None)

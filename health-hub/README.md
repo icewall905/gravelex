@@ -82,7 +82,9 @@ HA integration and the timestamped oxygen sensor are documented in [integrations
 
 The API is local-first and read-only. Scoped API tokens are account-bound and members can read only their own history; account administration does not grant default access to other members' health data. Keep API tokens separate from phone upload tokens and dashboard sessions. See [API.md](API.md) for scopes, bounded history queries, login/logout routes, pairing and token handling.
 
-For an LLM briefing, configure both endpoint and model; a local endpoint is supported. Then start the optional service:
+The dashboard’s Today page compares activity, sleep, overnight pulse, comparable HRV, confirmed training load and weight against personal history. It includes weekly intensity planning and a step forecast when historical replay supports one. The same dated evidence is available to local tools through [the insights API](API.md).
+
+For an LLM briefing, configure the endpoint and model. The Patterns briefing uses a separate model request with the dated evidence, coverage, backtest results and a list of applicable next actions. The model also receives up to 365 completed days of observed activity, sleep, overnight pulse and weight when available, with disjoint seven-day summaries and a few historically comparable weeks when coverage permits. HRV and confirmed load use the recent report. The model can explain sustained changes and choose a follow-up grounded in those results. The configured model endpoint receives the briefing evidence, so use a self-hosted endpoint for local inference. Set `LLM_MAX_TOKENS` to adjust the output and reasoning budget (32,000 by default). Then start the optional service:
 
 ```sh
 docker compose --profile briefing up -d

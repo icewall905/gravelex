@@ -21,6 +21,7 @@ import monitor_observations
 import stock_estimates
 import daytime_stress
 import daily as daily_model
+import insights
 import motion_quality
 import workout_edits
 import uuid
@@ -565,6 +566,44 @@ def hrv_ingest(data):
     return payload
 
 
+def watch_sleep_inputs(db, since, now):
+    sleep = [dict(row) for row in db.execute(
+        "SELECT start, seconds, kind FROM sleep_sessions WHERE start>=? AND start+seconds<=? ORDER BY start",
+        (since, now))]
+    totals = {}
+    # Watch snapshots carry a running sleep total for their local day.
+    for row in db.execute("""
+        SELECT ts, json_extract(payload,'$.status.sleep_seconds') AS sleep,
+               json_extract(payload,'$.status.sleep_restful_seconds') AS restful
+        FROM reports WHERE source='watchapp' AND ts BETWEEN ? AND ?
+    """, (since, now)):
+        if row["sleep"]:
+            day = datetime.fromtimestamp(row["ts"], TZ).date().isoformat()
+            if row["sleep"] > totals.get(day, (0, 0))[0]:
+                totals[day] = (int(row["sleep"]), int(row["restful"] or 0))
+    return sleep, totals
+
+
+def briefing_history(result):
+    """Load compact historical evidence only when generating the briefing."""
+    now = result["now"]
+    today = datetime.fromtimestamp(now, TZ).date()
+    first = today - timedelta(days=insights.MAX_BRIEFING_DAYS)
+    last = today - timedelta(days=1)
+    since = int(datetime.combine(first - timedelta(days=1), datetime.min.time(), TZ).timestamp())
+    with connect() as db:
+        rows = daily_model.rollup(db, first, last, TZ, now)
+        sleep, snapshots = watch_sleep_inputs(db, since, now)
+    official_nights = recovery_model.nightly_sleep(sleep, snapshots)
+    # Keep the same recent qualified observations shown in the interactive report.
+    evidence = {"daily": rows, "weight": result.get("weight"),
+                "recovery": {"sleep_nights": official_nights}}
+    days = insights.qualified_days(evidence, today, TZ, insights.MAX_BRIEFING_DAYS)
+    recent = result["insights"]["days"]
+    days[-len(recent):] = recent
+    return insights.longer_history(days)
+
+
 def summary(days=42):
     now = int(time.time())
     days = max(7, min(int(days), 365))
@@ -609,16 +648,8 @@ def summary(days=42):
             if r['k'] is not None:
                 d=datetime.fromtimestamp(r['ts'],TZ).date().isoformat()
                 active_today[d]=max(active_today.get(d,0),int(r['k']))
-        sleep_rows=[dict(r) for r in db.execute('SELECT start,seconds,kind FROM sleep_sessions WHERE start>=? ORDER BY start',(now-70*86400,))]
+        sleep_rows, snapshot_sleep = watch_sleep_inputs(db, now-70*86400, now)
         sleep_minutes=db.execute("SELECT ts,steps,json_extract(payload,'$.intensity') FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts",(now-70*86400,now)).fetchall()
-        # Hourly snapshots carry the watch's running sleep total for the current
-        # local day; its daily maximum is the previous night's sleep.
-        snapshot_sleep={}
-        for r in db.execute("""SELECT ts,json_extract(payload,'$.status.sleep_seconds') s,json_extract(payload,'$.status.sleep_restful_seconds') rs
-            FROM reports WHERE source='watchapp' AND ts>=?""",(now-70*86400,)):
-            if r['s']:
-                d=datetime.fromtimestamp(r['ts'],TZ).date().isoformat()
-                if r['s']>snapshot_sleep.get(d,(0,0))[0]:snapshot_sleep[d]=(int(r['s']),int(r['rs'] or 0))
         collector=db.execute('SELECT payload FROM collector_reports ORDER BY ts DESC LIMIT 1').fetchone()
         hrv = db.execute("SELECT ts,payload FROM hrv_sessions ORDER BY ts DESC LIMIT 1").fetchone()
         count = db.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
@@ -673,7 +704,7 @@ def summary(days=42):
         nightly['readiness_history']=readiness_history.read_history(snapshot_db, since, now)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
-    return {"wearer": (accounts.current() or {}).get("display_name", os.environ.get("WEARER_NAME", "")), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
+    result = {"wearer": (accounts.current() or {}).get("display_name", os.environ.get("WEARER_NAME", "")), "now": now, "collector_history":collector_history, "collector":json.loads(collector["payload"]) if collector else None, "profile": config, "latest": last,
       "watch_battery": battery, "current_activity": activity,
       "last_received": receipt,
       "sync_age_seconds": max(0, now - receipt) if receipt is not None else None,
@@ -688,6 +719,10 @@ def summary(days=42):
                                     fit_minutes, active_today, TZ, datetime.fromtimestamp(now,TZ).date()),
       "model": {"hr": "Edwards-style zone minutes v1; at least 80% HR coverage", "rpe": "Session minutes × perceived effort (1–10)",
                 "note": "Separate load scales. Unrecorded days are unknown; fitness/fatigue estimates need confirmed rest days and recording coverage."}}
+
+    if days >= insights.WINDOW + 1:
+        result["insights"] = insights.build(result, TZ)
+    return result
 
 
 def today():

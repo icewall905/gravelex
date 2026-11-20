@@ -11,6 +11,7 @@ Initialization migrates the shared password into the bootstrap administrator nam
 | `GET /api/v1/summary` | `summary:read` | Current compact metrics |
 | `GET /api/v1/dashboard?days=42` | `summary:read` | Full dashboard model for first-party clients (7–365 days) |
 | `GET /api/v1/daily?from=YYYY-MM-DD&to=YYYY-MM-DD` | `history:read` | One row per local day (≤ 730 days; default last 30) |
+| `GET /api/v1/insights` | `history:read` | Personal baselines, comparable trends, collection coverage, and activity planning |
 | `GET /api/v1/intraday?date=YYYY-MM-DD` | `history:read` | One local day: HR points, 15-minute steps, sleep (default today) |
 | `GET /api/v1/minutes` | `history:read` | Bounded minute history |
 | `GET /api/v1/workouts` | `history:read` | Bounded workouts |
@@ -77,13 +78,19 @@ unsynced minutes remain unknown. Explicit `snapshot_*` API metrics retain their
 original dates and are historical snapshots, not today's totals. Server receipt age
 includes GravelEx batches, independently of each measurement's observation time.
 
-## Dashboard, daily and intraday endpoints
+## Dashboard, daily, intraday and insights endpoints
 
 These endpoints serve the [Pebble Health Android app](https://github.com/icewall905/pebble-health) and other first-party clients. They are not paginated and use local days in the hub's `PEBBLE_TZ`.
 
-`/api/v1/dashboard` returns the same model as the browser dashboard, trimmed for mobile. It drops raw observations older than 36 hours, HRV diagnostics, readiness history, monitor observations, the training ledger and collector history. Top-level keys include `daily`, `recovery` (`sleep`, `sleep_nights`, `nights`, `hrv_status`, `readiness`), `training`, `workouts`, `oxygen`, `weight`, `watch_battery`, `daytime_stress`, `stock_estimates`, `briefing` and `tz`. Clients should ignore unknown keys.
+`/api/v1/dashboard` returns the same model as the browser dashboard, trimmed for mobile. It drops raw observations older than 36 hours, HRV diagnostics, readiness history, monitor observations, the training ledger, collector history, and the longitudinal insights dataset. Top-level keys include `daily`, `recovery` (`sleep`, `sleep_nights`, `nights`, `hrv_status`, `readiness`), `training`, `workouts`, `oxygen`, `weight`, `watch_battery`, `daytime_stress`, `stock_estimates`, `briefing` and `tz`. Clients should ignore unknown keys.
 
-`/api/v1/daily` items: `date`, `minutes`, `steps`, `active_minutes`, `active_kcal`, `resting_kcal`, `distance_m`, `hr_minutes`, `hr_min`, `hr_avg`, `hr_max`, `resting_hr`. Counts (`minutes`, `steps`, `active_minutes`, `hr_minutes`) are 0 for days with no data. Other fields are null when nothing was observed, which does not mean zero.
+`/api/v1/daily` returns observed local-day totals. `step_minutes`, `active_observed_minutes` and `overnight_hr_minutes` count valid field observations. A day with no minute rows has null step and active totals and zero observation counts.
+
+`/api/v1/insights` includes daily evidence for the last 41 completed local dates, newest usable measurement per metric, 7-day medians and 28-day comparison medians with observation counts. `baseline_middle_80_pct` is the 10th to 90th percentile of observed baseline values. An absent metric in `days` means no qualified observation. The current day appears only in the goal plan and forecast target.
+
+Steps and active minutes require 75% field coverage of the actual local day, including DST. Low overnight pulse uses at least 60 recorded heart-rate minutes from midnight through 06:00 and summarizes the lower tail. Sleep values are watch sessions or watch daily totals labelled by source. HRV estimates stay within the current comparable series. Training load uses confirmed days and the current load method.
+
+The server screens six predefined rank associations across two chronological windows. Only directionally consistent exploratory associations expose a coefficient. Lags refer to calendar dates. A step estimate needs at least eight sequential holdouts and a lower average absolute error than using the last eligible total. The forecast describes adequately recorded days, with typical absolute error given separately. The intensity balance uses recorded minutes and includes today in the split through Sunday.
 
 `/api/v1/intraday` returns `date`, `start`, `end`, `points` (`{ts, hr, steps, active, intensity}` per minute record), `steps_15min` (`{ts, steps}`) and `sleep` (`{start, seconds, kind}` sessions overlapping the day).
 

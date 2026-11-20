@@ -16,6 +16,7 @@ from urllib.parse import quote
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import briefing
+import insights
 import fitness
 import oxygen
 import provenance
@@ -144,6 +145,8 @@ def dashboard_summary(days=42):
                         "change_7d_kg": latest.get("weight_delta_7d"), "change_28d_kg": latest.get("weight_delta_28d"),
                         "days_since_latest": (datetime.now(fitness.TZ).date() - date.fromisoformat(latest["date"])).days,
                     }
+                    if "insights" in result:
+                        result["insights"] = insights.build(result, fitness.TZ)
         except Exception:
             app.logger.exception("Dated scale bridge unavailable")
             result["composition"] = {"people": [], "error": "Scale service temporarily unavailable"}

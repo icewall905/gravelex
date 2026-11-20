@@ -297,7 +297,7 @@ def _lean_dashboard(summary: dict[str, Any]) -> dict[str, Any]:
     recovery = summary.get("recovery")
     if isinstance(recovery, dict):
         out["recovery"] = {k: v for k, v in recovery.items() if k != "readiness_history"}
-    for key in ("monitor_observations", "training_ledger", "collector_history"):
+    for key in ("monitor_observations", "training_ledger", "collector_history", "insights"):
         out.pop(key, None)
     return out
 
@@ -341,6 +341,21 @@ def factory(summary_provider):
         if isinstance(summary, tuple):
             return jsonify(summary[0]), summary[1]
         return jsonify(_lean_dashboard(summary))
+
+    @bp.get("/insights")
+    def insights_route():
+        denied = _auth("history:read")
+        if denied is not None:
+            return denied
+        if fitness is None:
+            return jsonify(error="unavailable"), 503
+        summary = summary_provider(42) if callable(summary_provider) else fitness.summary(42)
+        if isinstance(summary, tuple):
+            return jsonify(summary[0]), summary[1]
+        report = summary.get("insights")
+        if report is None:
+            return jsonify(error="unavailable"), 503
+        return jsonify(api_version="1", generated_at=summary["now"], timezone=str(fitness.TZ), **report)
 
     @bp.get("/daily")
     def daily_route():
