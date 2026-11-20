@@ -6,6 +6,7 @@ Each watch app authenticates with its own paired token, limited to one scope:
 from flask import Blueprint, abort, request
 
 import fitness
+from workout_edits import ConflictError
 
 
 def blueprint(admin_authorized=lambda: False):
@@ -27,6 +28,22 @@ def blueprint(admin_authorized=lambda: False):
             ts = fitness.ingest(data)
             fitness.refresh_hrv_token(token())
             return {"ok": True, "ts": ts}, 201
+        except (ValueError, TypeError, KeyError) as error:
+            return {"error": str(error)}, 400
+
+    @bp.post("/fitness/phone-workouts")
+    def phone_workout():
+        if not admin_authorized() and not fitness.authorize_hrv(token(), "history"):
+            abort(401)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            abort(400)
+        try:
+            ident = fitness.ingest_phone_workout(data)
+            fitness.refresh_hrv_token(token())
+            return {"ok": True, "id": ident}, 201
+        except ConflictError as error:
+            return {"error": str(error)}, 409
         except (ValueError, TypeError, KeyError) as error:
             return {"error": str(error)}, 400
 

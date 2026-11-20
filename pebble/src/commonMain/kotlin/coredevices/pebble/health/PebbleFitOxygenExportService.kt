@@ -23,6 +23,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -136,6 +141,32 @@ class PebbleFitOxygenExportService(
         catch (_: TimeoutCancellationException) { "Connection timed out." }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { "Connection failed. Check the URL and network." }
+    }
+
+    internal suspend fun uploadPhoneWorkout(workout: JsonObject): String = syncMutex.withLock {
+        val config = stableConfig() ?: return "Set up the PebbleFit server and token in Health Settings."
+        try {
+            val response = requestClient.post("${config.url}/fitness/phone-workouts") {
+                headers { append(HttpHeaders.Authorization, "Bearer " + config.token) }
+                contentType(ContentType.Application.Json)
+                setBody(workout.toString())
+            }
+            when (response.status.value) {
+                201 -> {
+                    val expected = "phone:" + workout["id"]?.jsonPrimitive?.content
+                    val acknowledged = Json.parseToJsonElement(response.bodyAsText()).jsonObject["id"]?.jsonPrimitive?.content
+                    if (acknowledged == expected) "Workout sent to PebbleFit." else "PebbleFit did not confirm the workout."
+                }
+                401, 403 -> "Check your PebbleFit history upload token in Health Settings."
+                404, 405 -> "Update your PebbleFit server to enable phone workout uploads."
+                409 -> "PebbleFit already has a different workout with this ID."
+                else -> "PebbleFit could not save the workout (HTTP ${response.status.value})."
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            "Could not send workout. Check your PebbleFit connection and try again."
+        }
     }
 
     suspend fun syncNow(automatic: Boolean = false): OxygenExportStatus = syncMutex.withLock {

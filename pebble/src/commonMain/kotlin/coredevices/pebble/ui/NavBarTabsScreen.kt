@@ -51,7 +51,8 @@ fun NavBarTabsScreen(topBarParams: TopBarParams) {
     // Unavailable tabs stay in the list, unshown, so they keep their place relative to their neighbours.
     val notebookShown = rememberNotebookTab()?.shown?.collectAsState()?.value == true
     val allTabs = remember { WatchHomeNavTab.orderedTabs(coreConfigHolder.config.value).toMutableStateList() }
-    val tabs = allTabs.filter { WatchHomeNavTab.isAvailable(it, coreConfig, healthEnabled, notebookShown) }
+    val hasHealthContent = healthEnabled || LocalWorkoutEntry.current != null
+    val tabs = allTabs.filter { WatchHomeNavTab.isAvailable(it, coreConfig, hasHealthContent, notebookShown) }
     val barTabs = WatchHomeNavTab.barTabs(coreConfig, tabs)
     val listState = rememberLazyListState()
     // Keyed lookups: the list has headers, and hidden tabs aren't shown.
