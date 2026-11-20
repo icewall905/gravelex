@@ -14,6 +14,14 @@
                 android:value="User-started, visible workout timer for indoor workouts without GPS or Bluetooth sensors" />
         </service>
         <receiver android:name=".ui.TestActionReceiver" android:exported="false" />
+        <receiver
+            android:name="coredevices.pebble.firmware.FirmwareSideloadReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="coredevices.pebble.SIDELOAD_FIRMWARE" />
+            </intent-filter>
+        </receiver>
         <receiver android:name="coredevices.pebble.permissions.PermissionRequestReceiver" android:exported="false" />
 
         <!-- Derived from the installing app's id so the fork does not squat upstream's
