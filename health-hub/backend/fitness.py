@@ -19,6 +19,8 @@ import training_ledger
 import readiness_history
 import monitor_observations
 import stock_estimates
+import daytime_stress
+import daily as daily_model
 import motion_quality
 import workout_edits
 import uuid
@@ -30,6 +32,30 @@ TZ = ZoneInfo(os.environ.get("PEBBLE_TZ", "UTC"))  # the wearer's local day boun
 DB_PATH = os.environ.get("FITNESS_DB", "/data/fitness.sqlite3")
 
 SLEEP_KINDS = ("sleep", "restful_sleep")
+# GravelEx folds the watch's Nap (3) and DeepNap (4) overlays into sleep and
+# restful_sleep; the raw overlay type keeps naps out of nightly sleep totals.
+NAP_KINDS = {("sleep", 3): "nap", ("restful_sleep", 4): "restful_nap"}
+
+
+def reclassify_naps(db):
+    """Move sleep rows that the raw uploads identify as naps to nap kinds. Idempotent."""
+    moved = 0
+    seen = set()
+    for row in db.execute("""SELECT DISTINCT json_extract(value,'$.start') start, json_extract(value,'$.type') kind,
+            json_extract(value,'$.raw_overlay_type') raw FROM reports, json_each(json_extract(payload,'$.sessions'))
+            WHERE source='gravelex' AND json_extract(value,'$.raw_overlay_type') IN (3,4)""").fetchall():
+        nap = NAP_KINDS.get((row['kind'], row['raw']))
+        if nap is None or (row['start'], nap) in seen:
+            continue
+        seen.add((row['start'], nap))
+        old_id, new_id = f"pebble:{row['start']}:{row['kind']}", f"pebble:{row['start']}:{nap}"
+        existing = db.execute('SELECT start,seconds FROM sleep_sessions WHERE id=?', (old_id,)).fetchone()
+        if existing:
+            db.execute('INSERT OR REPLACE INTO sleep_sessions(id,start,seconds,kind) VALUES(?,?,?,?)',
+                       (new_id, existing['start'], existing['seconds'], nap))
+            db.execute('DELETE FROM sleep_sessions WHERE id=?', (old_id,))
+            moved += 1
+    return moved
 
 
 _schema_lock = threading.Lock()
@@ -204,23 +230,64 @@ def record_battery_reading(db, observed, percent, source, device, received):
                (int(observed), int(received) if received is not None else None, source, device, int(percent)))
 
 
+def _opportunistic_write(db, write):
+    """Cache-style write from a read path: never wait behind an upload.
+
+    Dashboard reads persist derived rows (battery series, readiness snapshots,
+    weight sync). Waiting the full connection timeout for the receiver's write
+    lock stacked several 15 s waits and hit the worker timeout, so a busy
+    database skips the write; the next read retries it. Commits at once so no
+    write lock is held during the rest of the read.
+    """
+    previous = db.execute('PRAGMA busy_timeout').fetchone()[0]
+    db.execute('PRAGMA busy_timeout=250')
+    try:
+        write()
+        db.commit()
+        return True
+    except sqlite3.OperationalError as error:
+        if 'locked' not in str(error).lower() and 'busy' not in str(error).lower():
+            raise
+        db.rollback()
+        return False
+    finally:
+        db.execute(f'PRAGMA busy_timeout={int(previous)}')
+
+
 def watch_battery(db, now):
-    """Resolve battery independently of health backfills and transport receipts."""
+    """Resolve battery independently of health backfills and transport receipts.
+
+    Runs on every dashboard read, so it extracts only the small status fields in
+    SQL (full health batches are megabytes) and scans only uploads newer than the
+    persisted series' recent window. It writes only observations missing from the
+    series, because even an ignored INSERT waits for the receiver's write lock.
+    """
     best = None
     readings = []
-    query = "SELECT ts,received,source,payload FROM reports WHERE json_type(payload,'$.watch_status')='object' OR json_type(payload,'$.status.battery_percent') IN ('integer','real')"
+    _ensure_battery_series(db)
+    latest_saved = db.execute('SELECT MAX(observed_at) FROM watch_battery_readings').fetchone()[0]
+    scan_from = (latest_saved - BATTERY_SERIES_DAYS * 86400) if latest_saved else 0
+    fields = ("json_extract(payload,'$.watch_status') ws, json_extract(payload,'$.status.battery_percent') bp,"
+              " json_type(payload,'$.status.battery_percent') bpt")
+    query = (f"SELECT ts,received,source,{fields} FROM reports WHERE ts>=? AND"
+             " (json_type(payload,'$.watch_status')='object' OR json_type(payload,'$.status.battery_percent') IN ('integer','real'))")
+    params = [scan_from]
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ingest_observations'").fetchone():
         # reports has a (second, source) key: a later page can replace the first
         # page in the same second. Immutable raw batches preserve its battery.
-        query += " UNION ALL SELECT measured_ts AS ts,received,source,payload FROM ingest_observations WHERE kind='health_batch' AND json_type(payload,'$.watch_status')='object'"
-    for row in db.execute(query + ' ORDER BY ts DESC'):
-        payload = json.loads(row['payload'])
-        direct = payload.get('watch_status') if row['source'] == 'gravelex' else None
+        query += (f" UNION ALL SELECT measured_ts AS ts,received,source,{fields} FROM ingest_observations"
+                  " WHERE kind='health_batch' AND measured_ts>=? AND json_type(payload,'$.watch_status')='object'")
+        params.append(scan_from)
+    for row in db.execute(query + ' ORDER BY ts DESC', params):
+        try:
+            direct = json.loads(row['ws']) if row['source'] == 'gravelex' and row['ws'] else None
+        except (TypeError, ValueError):
+            continue
         if isinstance(direct, dict) and direct.get('source') == 'gravelex_ble':
             percent, observed = direct.get('battery_percent'), direct.get('observed_at')
             source, device = 'gravelex_ble', direct.get('device_id')
-        elif row['source'] == 'watchapp':
-            percent, observed = (payload.get('status') or {}).get('battery_percent'), row['ts']
+        elif row['source'] == 'watchapp' and row['bpt'] in ('integer', 'real'):
+            percent, observed = row['bp'], row['ts']
             source, device = 'watchapp', None
         else:
             continue
@@ -235,14 +302,19 @@ def watch_battery(db, now):
             best = (rank, {'last_percent': int(percent), 'observed_at': int(observed),
                            'received_at': row['received'], 'source': source, 'device_id': device})
         readings.append((int(observed), row['received'], source, device, int(percent)))
-    # Every validated observation joins the persistent series. The first run
-    # backfills the full history from the raw batches; later runs only touch
-    # the recent window because older readings are already stored.
-    _ensure_battery_series(db)
-    watermark = ((db.execute('SELECT MAX(observed_at) FROM watch_battery_readings').fetchone()[0] or 0)
-                 - BATTERY_SERIES_DAYS * 86400)
-    db.executemany("INSERT OR IGNORE INTO watch_battery_readings VALUES(?,?,?,?,?)",
-                   [r for r in readings if r[0] >= watermark])
+    if best is None and latest_saved:
+        # Older than the scan window: the persisted series still knows the last reading.
+        row = db.execute("SELECT observed_at,received,source,device_id,percent FROM watch_battery_readings"
+                         " WHERE observed_at<=? ORDER BY observed_at DESC, source='gravelex_ble' DESC LIMIT 1", (now + 300,)).fetchone()
+        if row:
+            best = (None, {'last_percent': row['percent'], 'observed_at': row['observed_at'],
+                           'received_at': row['received'], 'source': row['source'], 'device_id': row['device_id']})
+    known = {(r[0], r[1], r[2] or '') for r in db.execute(
+        'SELECT observed_at,source,device_id FROM watch_battery_readings WHERE observed_at>=?', (scan_from,))}
+    missing = list({(r[0], r[2], r[3] or ''): r for r in readings if (r[0], r[2], r[3] or '') not in known}.values())
+    if missing:
+        _opportunistic_write(db, lambda: db.executemany(
+            "INSERT OR IGNORE INTO watch_battery_readings VALUES(?,?,?,?,?)", missing))
     # Equal-timestamp observations from two upload paths collapse to one series
     # point; direct BLE takes precedence, as for the headline reading.
     series, seen = [], set()
@@ -316,21 +388,27 @@ def ingest(data):
               ON CONFLICT(ts) DO UPDATE SET hr=excluded.hr,steps=excluded.steps,
               active=excluded.active,payload=excluded.payload""",
               (t, payload['hr'], payload['steps'], payload['active'], json.dumps(payload)))
+        effective = None
         for s in sessions:
             if not isinstance(s, dict):
                 raise ValueError("Sessions must be objects")
             start = int(number(s.get("start"), 946684800, now + 300, "session start"))
             seconds = int(number(s.get("seconds"), 1, 172800, "session duration"))
             kind = str(s.get("type", "workout"))[:40]
+            kind = NAP_KINDS.get((kind, s.get("raw_overlay_type")), kind)
             ident = f"pebble:{start}:{kind}"
-            if kind in SLEEP_KINDS:
+            if kind in SLEEP_KINDS or kind in NAP_KINDS.values():
                 db.execute("""INSERT INTO sleep_sessions(id,start,seconds,kind) VALUES(?,?,?,?)
                   ON CONFLICT(id) DO UPDATE SET seconds=excluded.seconds""", (ident, start, seconds, kind))
                 continue
-            before=next((row for row in workout_edits.effective_rows(db) if row['id']==ident),None)
+            if effective is None:
+                effective={row['id']:row for row in workout_edits.effective_rows(db)}
+            before=effective.get(ident)
             db.execute("""INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,NULL,'pebble')
               ON CONFLICT(id) DO UPDATE SET seconds=excluded.seconds""", (ident, start, seconds, kind))
-            after=next(row for row in workout_edits.effective_rows(db) if row['id']==ident)
+            # Overlays are keyed by id, so only this session's effective row can change.
+            after=next(row for row in workout_edits.effective_rows(db) if row['id']==ident) if before is None or before.get('seconds')!=seconds else before
+            effective[ident]=after
             keys=('start','seconds','kind','rpe','ignored')
             if before is None or any(before.get(key)!=after.get(key) for key in keys):
                 invalidate_workout_days(db,[row for row in (before,after) if row is not None])
@@ -498,6 +576,8 @@ def summary(days=42):
         battery = watch_battery(db, now)
         receipt = db.execute("SELECT MAX(received) FROM reports").fetchone()[0]
         minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? ORDER BY ts", (since,))]
+        stress_minutes = [dict(r) for r in db.execute("SELECT * FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts", (min(since, now-60*86400), now))]
+        stress_sleep = [dict(r) for r in db.execute("SELECT * FROM sleep_sessions WHERE start+seconds>=?", (min(since, now-60*86400)-86400,))]
         workouts = workout_edits.effective_rows(db)
         training_minutes = {}
         for workout in workouts:
@@ -517,7 +597,7 @@ def summary(days=42):
         seed_row=db.execute("SELECT value FROM settings WHERE key='baseline_seed'").fetchone()
         seed=json.loads(seed_row['value']) if seed_row else None
         if accounts.legacy_context():
-            weight_model.sync(db, now)
+            _opportunistic_write(db, lambda: weight_model.sync(db, now))
         weight=weight_model.history(db, datetime.fromtimestamp(now,TZ).date())
         blood_oxygen=oxygen.summary(db,since,now,TZ)
         import briefing as briefing_model  # deferred: briefing imports this module
@@ -530,6 +610,7 @@ def summary(days=42):
                 d=datetime.fromtimestamp(r['ts'],TZ).date().isoformat()
                 active_today[d]=max(active_today.get(d,0),int(r['k']))
         sleep_rows=[dict(r) for r in db.execute('SELECT start,seconds,kind FROM sleep_sessions WHERE start>=? ORDER BY start',(now-70*86400,))]
+        sleep_minutes=db.execute("SELECT ts,steps,json_extract(payload,'$.intensity') FROM minutes WHERE ts>=? AND ts<=? ORDER BY ts",(now-70*86400,now)).fetchall()
         # Hourly snapshots carry the watch's running sleep total for the current
         # local day; its daily maximum is the previous night's sleep.
         snapshot_sleep={}
@@ -542,6 +623,7 @@ def summary(days=42):
         hrv = db.execute("SELECT ts,payload FROM hrv_sessions ORDER BY ts DESC LIMIT 1").fetchone()
         count = db.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
         collection = collection_health.build(db, now, TZ)
+        daily_rows = daily_model.rollup(db, start_day, datetime.fromtimestamp(now, TZ).date(), TZ, now)
         hrv_recent = []
         for row in db.execute("SELECT ts,payload FROM hrv_sessions ORDER BY ts DESC LIMIT 12"):
             payload=json.loads(row["payload"])
@@ -552,6 +634,10 @@ def summary(days=42):
     earliest=min([start_day]+[datetime.fromtimestamp(w['start'],TZ).date() for w in workouts]+[datetime.fromisoformat(d).date() for d in confirmations])
     earliest=max(earliest,datetime.fromtimestamp(now,TZ).date()-timedelta(days=729))
     full_days=[str(earliest+timedelta(days=i)) for i in range((datetime.fromtimestamp(now,TZ).date()-earliest).days+1)]
+    # Auto-detected walks accumulate; analytics are bounded to the analysed
+    # window and to the newest 2000 sessions in it.
+    earliest_ts=int(datetime.combine(earliest,datetime.min.time(),TZ).timestamp())
+    workouts=sorted((w for w in workouts if w['start']+w['seconds']>=earliest_ts),key=lambda w:w['start'])[-2000:]
     load=training.analyze(workouts,list(training_minutes.values()),full_days,config['hr_max'],config['load_method'],confirmations)
     ledger=training_ledger.build(load, confirmations, collection['daily'], datetime.fromtimestamp(now,TZ).date())
     full_history=load['history']
@@ -561,10 +647,13 @@ def summary(days=42):
                          acute=finished.get('acute'),chronic=finished.get('chronic'),form=finished.get('form'))
     load['history']=[r for r in load['history'] if r['date']>=str(start_day)]
     load['workouts']=[w for w in load['workouts'] if w['start']>=since]
+    stress_workouts = workouts
     workouts=load['workouts'];history=load['history']
     recovery=hrv_analytics.analyze_history(hrv_rows, now=now)
     nightly=recovery_model.build([(r['ts'],hrv_analytics.analyze_session(r['payload'])) for r in hrv_rows if r['ts']>=now-70*86400],
-                                 sleep_rows,snapshot_sleep,full_history,now,seed=seed)
+                                 sleep_rows,snapshot_sleep,full_history,now,seed=seed,
+                                 minutes=[tuple(r) for r in sleep_minutes])
+    daytime = daytime_stress.build(stress_minutes, stress_sleep, stress_workouts, now, TZ)
     monitors=monitor_observations.build(hrv_rows,now,TZ)
     stock = stock_estimates.build(hrv_rows, [], nightly['sleep'],
         recovery_model.training_state(full_history, today=datetime.fromtimestamp(now,TZ).date()), now, TZ)
@@ -572,11 +661,15 @@ def summary(days=42):
     # its source gates remain unchanged and are retained separately.
     nightly['hrv_readiness'] = nightly['readiness']
     if os.environ.get('RECOVERY_MODE', 'stock_firmware') == 'stock_firmware':
-        nightly['readiness'] = stock['readiness']
+        # Prefer the HRV model once estimated overnight HRV can score; the
+        # stock heuristic stays as fallback when it cannot.
+        if nightly['hrv_readiness'].get('score') is None:
+            nightly['readiness'] = stock['readiness']
     else:
         stock['mode'] = 'diagnostics_only'
     with connect() as snapshot_db:
-        readiness_history.persist_daily(snapshot_db, nightly['today'], nightly['readiness'], now)
+        _opportunistic_write(snapshot_db, lambda: readiness_history.persist_daily(
+            snapshot_db, nightly['today'], nightly['readiness'], now))
         nightly['readiness_history']=readiness_history.read_history(snapshot_db, since, now)
     quality=hrv_analytics.analyze_session(json.loads(hrv['payload'])) if hrv else None
     last = json.loads(latest["payload"]) if latest else None
@@ -586,9 +679,10 @@ def summary(days=42):
       "sync_age_seconds": max(0, now - receipt) if receipt is not None else None,
       "training_ledger": ledger, "collection_health": collection, "reports": count, "minute_records": len(minutes), "workouts": workouts, "history": history, "training": load,
       "observations": sorted(observed,key=lambda r:r["ts"])[-15000:], "confirmations": confirmations,
+      "daily": daily_rows, "tz": str(TZ),
       "hrv": {"status": "diagnostic_only" if hrv else "not_collected", "ts": hrv["ts"] if hrv else None,
               "diagnostic": json.loads(hrv["payload"]) if hrv else None, "sessions": hrv_recent, "quality": quality, "analysis":recovery},
-      "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
+      "daytime_stress":daytime, "stock_estimates":stock, "monitor_observations":monitors, "oxygen": blood_oxygen, "stress": recovery["stress"], "recovery": nightly, "weight": weight, "briefing": brief,
       "fitness": physiology.fitness(json.loads(body_row['value']) if body_row else None,
                                     (weight or {}).get('latest',{}).get('trend_kg'), config.get('hr_max'),
                                     fit_minutes, active_today, TZ, datetime.fromtimestamp(now,TZ).date()),

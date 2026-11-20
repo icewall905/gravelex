@@ -125,7 +125,11 @@ def api_summary():
 
 def dashboard_summary(days=42):
     try:
-        result = fitness.summary(int(days))
+        days = int(days)
+    except (ValueError, TypeError):
+        return {"error": "Invalid day range"}, 400
+    try:
+        result = fitness.summary(days)
         try:
             data = _scale_data()
             if data:
@@ -144,8 +148,9 @@ def dashboard_summary(days=42):
             app.logger.exception("Dated scale bridge unavailable")
             result["composition"] = {"people": [], "error": "Scale service temporarily unavailable"}
         return result
-    except (ValueError, TypeError):
-        return {"error": "Invalid day range"}, 400
+    except Exception:
+        app.logger.exception("Summary failed")
+        return {"error": "Summary temporarily unavailable"}, 500
 
 
 @app.get("/api/provenance/minute")

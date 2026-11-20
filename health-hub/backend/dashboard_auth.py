@@ -19,7 +19,11 @@ def install(app, web_dir):
     app.config.update(SESSION_COOKIE_NAME='ph_session', SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE='Strict',
                       SESSION_COOKIE_SECURE=os.environ.get('PUBLIC_URL','').startswith('https://'),
-                      PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
+                      SESSION_REFRESH_EACH_REQUEST=True,
+                      # Sliding window: each authenticated request re-issues the
+                      # permanent cookie, so this is time since last visit, not
+                      # since login.
+                      PERMANENT_SESSION_LIFETIME=timedelta(days=30))
 
     def configured():
         return bool(os.environ.get('PH_SESSION_SECRET') and accounts.initialize())

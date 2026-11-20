@@ -8,4 +8,4 @@ COPY scripts/rebuild-minutes.py scripts/set-password.py ./scripts/
 COPY web/ ./web/
 USER 10001:10001
 EXPOSE 8790 9998
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8790", "--access-logfile", "-", "dashboard:app"]
+CMD ["gunicorn", "-w", "3", "--timeout", "120", "-b", "0.0.0.0:8790", "--access-logfile", "-", "dashboard:app"]

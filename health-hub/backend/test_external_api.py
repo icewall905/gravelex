@@ -102,3 +102,15 @@ class ExternalApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_lean_dashboard_drops_bulk_but_keeps_recent_minutes():
+    summary = {"now": 1000000, "observations": [{"ts": 1, "hr": 50}, {"ts": 999000, "hr": 60}],
+               "hrv": {"status": "x", "diagnostic": {"ppi": [1] * 10}, "quality": {}, "analysis": {}},
+               "recovery": {"sleep": {}, "readiness_history": [1]},
+               "monitor_observations": {}, "daily": [{"date": "d"}]}
+    lean = external_api._lean_dashboard(summary)
+    assert lean["observations"] == [{"ts": 999000, "hr": 60}]
+    assert lean["recovery"] == {"sleep": {}}
+    assert lean["hrv"] == {"status": "x"} and "monitor_observations" not in lean
+    assert lean["daily"] == [{"date": "d"}] and len(summary["observations"]) == 2

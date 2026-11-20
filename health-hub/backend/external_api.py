@@ -186,6 +186,7 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
     training = summary.get("training") or {}
     latest_training = training.get("latest") or {}
     hrv = summary.get("hrv") or {}
+    hrv_status = (summary.get("recovery") or {}).get("hrv_status") or {}
     diagnostic = hrv.get("diagnostic") or {}
     metrics = {
         "readiness": _summary_metric(readiness.get("score"), "score", status=readiness.get("status"), estimated=True,
@@ -201,7 +202,8 @@ def _metrics(summary: dict[str, Any]) -> dict[str, Any]:
         "training_load": _summary_metric(latest_training.get("load7"), "load", status=latest_training.get("status")),
         "acute_load": _summary_metric(latest_training.get("acute"), "load", status=latest_training.get("status"), estimated=True),
         "chronic_load": _summary_metric(latest_training.get("chronic"), "load", status=latest_training.get("status"), estimated=True),
-        "hrv_rmssd": None,  # Stock PPI is not validated beat-to-beat HRV.
+        "hrv_rmssd": _summary_metric(hrv_status.get("last_night_rmssd_ms"), "ms", status=hrv_status.get("status"),
+                                     estimated=True, observed_at=(summary.get("recovery") or {}).get("today")),
         "breathing_rate": None,  # No validated respiratory estimate yet.
     }
 
@@ -280,6 +282,26 @@ def _daily_metrics(now):
     return result
 
 
+def _lean_dashboard(summary: dict[str, Any]) -> dict[str, Any]:
+    """The dashboard model without the bulk only the web diagnostics pages need.
+
+    Minute observations are cut to the last 36 hours (``/intraday`` serves full
+    days), raw HRV analysis and readiness snapshots are dropped.
+    """
+    out = dict(summary)
+    now = summary.get("now") or int(time.time())
+    out["observations"] = [o for o in summary.get("observations") or [] if isinstance(o, dict) and o.get("ts", 0) >= now - 36 * 3600]
+    hrv = summary.get("hrv")
+    if isinstance(hrv, dict):
+        out["hrv"] = {k: v for k, v in hrv.items() if k not in ("diagnostic", "quality", "analysis")}
+    recovery = summary.get("recovery")
+    if isinstance(recovery, dict):
+        out["recovery"] = {k: v for k, v in recovery.items() if k != "readiness_history"}
+    for key in ("monitor_observations", "training_ledger", "collector_history"):
+        out.pop(key, None)
+    return out
+
+
 def factory(summary_provider):
     """Return a Flask blueprint using an injected summary/history provider."""
     bp = Blueprint("external_api", __name__, url_prefix="/api/v1")
@@ -290,6 +312,8 @@ def factory(summary_provider):
         if denied is not None:
             return denied
         summary = summary_provider() if callable(summary_provider) else summary_provider.summary()
+        if isinstance(summary, tuple):  # dashboard_summary's (error, status) failure form
+            return jsonify(summary[0]), summary[1]
         now = summary.get("now", int(time.time())) if isinstance(summary, dict) else int(time.time())
         metrics=_metrics(summary)
         user=accounts.current()
@@ -298,6 +322,57 @@ def factory(summary_provider):
         identity={key:user[key] for key in ('id','username','display_name')} if user else None
         return jsonify({"api_version": "1", "generated_at": now,
                         "account":identity,"timezone": str(fitness.TZ), "metrics": metrics})
+
+    @bp.get("/dashboard")
+    def dashboard_route():
+        """The full dashboard model, for first-party clients such as the Android app."""
+        denied = _auth("summary:read")
+        if denied is not None:
+            return denied
+        try:
+            days = int(request.args.get("days", "42"))
+        except ValueError:
+            return jsonify(error="invalid days"), 400
+        if not 7 <= days <= 365:
+            return jsonify(error="invalid days"), 400
+        if fitness is None:
+            return jsonify(error="unavailable"), 503
+        summary = summary_provider(days) if callable(summary_provider) else fitness.summary(days)
+        if isinstance(summary, tuple):
+            return jsonify(summary[0]), summary[1]
+        return jsonify(_lean_dashboard(summary))
+
+    @bp.get("/daily")
+    def daily_route():
+        denied = _auth("history:read")
+        if denied is not None:
+            return denied
+        import daily
+        try:
+            today = datetime.now(fitness.TZ).date()
+            last = date.fromisoformat(request.args["to"]) if request.args.get("to") else today
+            first = date.fromisoformat(request.args["from"]) if request.args.get("from") else last.fromordinal(last.toordinal() - 29)
+            if first > last or (last - first).days > 730:
+                raise ValueError
+        except ValueError:
+            return jsonify(error="invalid date range"), 400
+        with fitness.connect() as db:
+            items = daily.rollup(db, first, last, fitness.TZ, int(time.time()))
+        return jsonify({"api_version": "1", "generated_at": int(time.time()), "timezone": str(fitness.TZ), "items": items})
+
+    @bp.get("/intraday")
+    def intraday_route():
+        denied = _auth("history:read")
+        if denied is not None:
+            return denied
+        import daily
+        try:
+            day = date.fromisoformat(request.args["date"]) if request.args.get("date") else datetime.now(fitness.TZ).date()
+        except ValueError:
+            return jsonify(error="invalid date"), 400
+        with fitness.connect() as db:
+            result = daily.intraday(db, day, fitness.TZ, int(time.time()))
+        return jsonify(dict(result, api_version="1", generated_at=int(time.time()), timezone=str(fitness.TZ)))
 
     @bp.get("/<resource>")
     def history_route(resource):

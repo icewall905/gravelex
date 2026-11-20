@@ -37,7 +37,7 @@ import accounts
 from contextvars import copy_context
 
 log = logging.getLogger("pebble-health.briefing")
-FACTS_VERSION = 5
+FACTS_VERSION = 6
 PAGES = ("today", "sleep", "recovery", "training", "more")
 _running = threading.Lock()
 
@@ -116,9 +116,9 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             steps_by_day[d] = steps_by_day.get(d, 0) + o["steps"]
     last7 = [(today - timedelta(days=i)).isoformat() for i in range(1, 8)]
 
-    sleep_recent = [n for n in sleep_nights if date.fromisoformat(n["night"]) > today - timedelta(days=7)]
+    sleep_recent = [n for n in sleep_nights if today - timedelta(days=7) < date.fromisoformat(n["night"]) <= today]
     last_sleep = next((n for n in sleep_nights if n["night"] == today.isoformat()), None)
-    hrv_recent = [n for n in nights if date.fromisoformat(n["night"]) > today - timedelta(days=7)]
+    hrv_recent = [n for n in nights if today - timedelta(days=7) < date.fromisoformat(n["night"]) <= today]
     last_hrv = next((n for n in nights if n["night"] == today.isoformat()), None)
     hs, sl, ready = rc.get("hrv_status") or {}, rc.get("sleep") or {}, rc.get("readiness") or {}
 
@@ -132,6 +132,36 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
     vo2 = fit.get("vo2max") or {}
     t = (s.get("training") or {}).get("latest") or {}
     unconfirmed = [h["date"] for h in (s.get("history") or [])[-7:] if not h.get("complete")]
+
+    def sleep_detail(n):
+        def spans(key):
+            return [{"start": datetime.fromtimestamp(a, tz).isoformat(),
+                     "end": datetime.fromtimestamp(b, tz).isoformat(), "duration": _hm(b-a)}
+                    for a, b in n.get(key, [])]
+        return {"night": n["night"], "source": n.get("source"),
+                "duration": _hm(n.get("sleep_s")), "restful_duration": _hm(n.get("restful_s")),
+                "non_restful_duration": _hm(max(0, n["sleep_s"]-n["restful_s"]))
+                    if n.get("restful_s") is not None else None,
+                "sleep_onset": datetime.fromtimestamp(n["onset"], tz).isoformat() if n.get("onset") else None,
+                "wake": datetime.fromtimestamp(n["wake"], tz).isoformat() if n.get("wake") else None,
+                "sleep_intervals": spans("sleep_intervals"),
+                "restful_intervals": spans("restful_intervals"),
+                "recorded_gaps": spans("recorded_gaps"),
+                "gap_count": len(n["recorded_gaps"]) if "recorded_gaps" in n else None,
+                "gap_duration": _hm(sum(b-a for a,b in n["recorded_gaps"])) if "recorded_gaps" in n else None}
+
+    recent_workouts = []
+    for w in s.get("workouts") or []:
+        start = w.get("start", 0)
+        end = start + (w.get("seconds") or 0)
+        if not s["now"] - 7*86400 <= start <= s["now"] or w.get("excluded"):
+            continue
+        onset = (last_sleep or {}).get("onset")
+        recent_workouts.append({"start": datetime.fromtimestamp(start, tz).isoformat(),
+            "end": datetime.fromtimestamp(end, tz).isoformat(), "kind": w.get("kind"),
+            "duration": _hm(w.get("seconds")), "rpe": w.get("rpe"), "load": w.get("load"),
+            "hours_before_last_sleep": _r((onset-end)/3600) if onset and end <= onset else None,
+            "before_last_sleep": end <= onset if onset else None})
 
     return {
         "facts_version": FACTS_VERSION,
@@ -162,7 +192,10 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
         },
         "sleep": {
             "last_night_duration": _hm(last_sleep["sleep_s"]) if last_sleep else None,
-            "last_night_restful_duration": _hm(last_sleep["restful_s"]) if last_sleep else None,
+            "last_night_restful_duration": _hm(last_sleep.get("restful_s")) if last_sleep else None,
+            "last_night_detail": sleep_detail(last_sleep) if last_sleep else None,
+            "recent_workouts": recent_workouts,
+            "limitations": "Onset is first recorded sleep, not bedtime or sleep latency. Non-restful sleep is not confirmed restlessness or wakefulness. Gaps may be wakefulness or missing recording. No sleep-stage measurement. Daily totals do not establish interval timing.",
             "last_night_bedtime": _clock((last_sleep or {}).get("onset"), tz),
             "last_night_wake": _clock((last_sleep or {}).get("wake"), tz),
             "sleep_score": sl.get("score"), "score_status": sl.get("status"), "need_hours": _r((sl.get("need_s") or 0) / 3600),
@@ -171,8 +204,7 @@ def facts(s: dict[str, Any], tz) -> dict[str, Any]:
             "previous_nights_in_average": sum(1 for n in sleep_recent if n["night"] != today.isoformat()),
             "nights_recorded_last_7": len(sleep_recent),
             "sleep_debt_last_7_nights": _hm(sum(max(0, (sl.get("need_s") or 28800) - n["sleep_s"]) for n in sleep_recent)),
-            "nights": [{"night": n["night"], "duration": _hm(n["sleep_s"]), "bedtime": _clock(n.get("onset"), tz),
-                        "wake": _clock(n.get("wake"), tz)} for n in sleep_recent],
+            "nights": [sleep_detail(n) for n in sleep_recent],
         },
         "recovery": {
             "hrv_last_night_ms": (last_hrv or {}).get("rmssd_ms"),
@@ -275,7 +307,7 @@ SCHEMA = {"type": "object", "properties": {p: PAGE_SCHEMA for p in PAGES}, "requ
 
 PAGE_GUIDE = {
     "today": "The big picture for the day: readiness, last night, activity so far, weight trend, intensity goal.",
-    "sleep": "Last night against the person's own recent nights, timing and regularity, sleep debt.",
+    "sleep": "Analyze last night: onset, wake, duration, quieter/non-restful intervals and recorded gaps against recent nights, regularity and debt. Discuss recent workout timing, duration, effort and available load alongside recovery pulse, qualified HRV and activity context from other pages. Distinguish workouts before sleep from those afterward. Describe possible associations, never claim causation. Respect sleep limitations; do not invent awakenings, restlessness, stages or missing lifestyle factors. Give one practical suggestion grounded in the observations.",
     "recovery": "Overnight HRV, pulse and breathing against recent nights; baseline progress; any sleep/HRV link.",
     "training": "Intensity minutes against the weekly goal, training load status, VO2max estimate and what moves it.",
     "more": "Is the setup healthy: uploads, battery, night recordings arriving, anything the person should fix.",
