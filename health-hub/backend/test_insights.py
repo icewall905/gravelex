@@ -122,7 +122,8 @@ def test_model_retries_transient_gateway_failure(monkeypatch):
             raise HTTPError(request.full_url, 502, "gateway", {}, None)
         return StringIO('{"choices":[{"message":{"content":"{}"}}],"model":"local"}')
 
-    monkeypatch.setattr(briefing, "urlopen", open_model)
+    monkeypatch.setattr(briefing, "model_settings", briefing._defaults)
+    monkeypatch.setattr(briefing, "build_opener", lambda *_: type("Opener", (), {"open": staticmethod(open_model)})())
     assert briefing._chat([], briefing.PATTERNS_SCHEMA) == ({}, "local")
     assert len(attempts) == 2
 

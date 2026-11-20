@@ -156,7 +156,7 @@ button, input, select { font: inherit; color: inherit; }
 .tabs-bottom {
   position: fixed; z-index: 20;
   left: calc(12px + var(--safe-l)); right: calc(12px + var(--safe-r)); bottom: calc(10px + var(--safe-b));
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px;
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px;
   padding: 6px; border-radius: 26px;
   background: color-mix(in srgb, var(--card) 86%, transparent);
   -webkit-backdrop-filter: saturate(1.6) blur(18px); backdrop-filter: saturate(1.6) blur(18px);

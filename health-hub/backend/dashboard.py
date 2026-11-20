@@ -217,6 +217,22 @@ def api_days():
         return {"error": str(error)}, 400
 
 
+@app.route("/api/settings/briefing", methods=["GET", "PUT"])
+def api_briefing_settings():
+    if (accounts.current() or {}).get("role") != "admin":
+        return {"error": "Administrator access is required."}, 403
+    if request.method == "GET":
+        return briefing.public_settings(briefing.model_settings())
+    request.max_content_length = 12288
+    try:
+        body = _json_body()
+        if any(not isinstance(body.get(key), str) for key in ("base_url", "model", "schedule")):
+            raise ValueError("Enter an API URL, model and schedule.")
+        return briefing.save_settings(body)
+    except ValueError as error:
+        return {"error": str(error)}, 400
+
+
 @app.post("/api/briefing/run")
 def api_briefing_run():
     status = briefing.run_in_background()

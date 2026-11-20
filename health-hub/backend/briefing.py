@@ -27,10 +27,12 @@ import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
+from contextlib import closing
+from urllib.parse import urlsplit
 from statistics import mean, median
 from typing import Any
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 import fitness
 import accounts
@@ -48,8 +50,63 @@ PATTERN_ACTIONS = {
 }
 
 
+def _defaults():
+    base = os.getenv("LLM_BASE_URL", "")
+    return {"base_url": base, "enabled": bool(base), "model": os.getenv("LLM_MODEL", "currentmodel"),
+            "api_key": os.getenv("LLM_API_KEY", ""), "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "32000")),
+            "schedule": os.getenv("BRIEFING_TIME", "05:00,05:40")}
+
+
+def model_settings():
+    with accounts.as_user(None), closing(fitness.connect()) as db:
+        row = db.execute("SELECT value FROM settings WHERE key='briefing_config'").fetchone()
+    return json.loads(row[0]) if row else _defaults()
+
+
+def public_settings(settings):
+    return {**{key: value for key, value in settings.items() if key != "api_key"},
+            "has_api_key": bool(settings["api_key"]), "timezone": str(fitness.TZ)}
+
+
+def save_settings(body):
+    base = body.get("base_url", "").strip().rstrip("/")
+    model = body.get("model", "").strip()
+    schedule = body.get("schedule", "").strip()
+    tokens = body.get("max_tokens")
+    enabled = body.get("enabled")
+    url = urlsplit(base)
+    if base and (url.scheme not in ("http", "https") or not url.hostname or url.username is not None
+                 or url.query or url.fragment or any(c.isspace() for c in base)):
+        raise ValueError("Enter an HTTP or HTTPS API base URL without credentials, a query or fragment.")
+    _ = url.port
+    if type(enabled) is not bool or enabled and not base:
+        raise ValueError("An enabled briefing needs an API base URL.")
+    if not model or len(model) > 200 or len(base) > 2048:
+        raise ValueError("Enter a model name or alias and a valid API URL.")
+    if type(tokens) is not int or not 256 <= tokens <= 262144:
+        raise ValueError("Enter a token budget between 256 and 262144.")
+    times = [part.strip() for part in schedule.split(",")] if schedule else []
+    if len(times) > 12 or any(not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", time) for time in times):
+        raise ValueError("Enter up to 12 daily times in HH:MM format, separated by commas.")
+    key = body.get("api_key")
+    if key is not None and (not isinstance(key, str) or len(key) > 4096 or "\r" in key or "\n" in key):
+        raise ValueError("Enter a valid API key.")
+    with accounts.as_user(None), closing(fitness.connect()) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT value FROM settings WHERE key='briefing_config'").fetchone()
+        old = json.loads(row[0]) if row else _defaults()
+        if key is None:
+            key = old["api_key"] if old["base_url"].rstrip("/") == base else ""
+        settings = {"base_url": base, "enabled": enabled, "model": model, "api_key": key,
+                    "max_tokens": tokens, "schedule": ",".join(sorted(set(times)))}
+        db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('briefing_config',?)",
+                   (json.dumps(settings),))
+    return public_settings(settings)
+
+
 def configured() -> bool:
-    return bool(os.environ.get("LLM_BASE_URL"))
+    settings = model_settings()
+    return settings["enabled"] and bool(settings["base_url"])
 
 
 # --------------------------------------------------------------------------
@@ -360,21 +417,27 @@ def _allowed(f: dict[str, Any]) -> set[float]:
     return nums
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _chat(messages: list[dict[str, str]], schema) -> tuple[dict[str, Any], str]:
-    base = os.environ["LLM_BASE_URL"].rstrip("/")
-    body = {"model": os.environ.get("LLM_MODEL", "currentmodel"), "messages": messages, "temperature": 0.4,
+    settings = model_settings()
+    base = settings["base_url"].rstrip("/")
+    body = {"model": settings["model"], "messages": messages, "temperature": 0.4,
             # Reasoning counts against the output budget, and the model is much
             # better with it on; this runs once a night, so be generous.
-            "max_tokens": int(os.environ.get("LLM_MAX_TOKENS", "32000")), "response_format": {"type": "json_object", "schema": schema}}
+            "max_tokens": settings["max_tokens"], "response_format": {"type": "json_object", "schema": schema}}
     headers = {"Content-Type": "application/json"}
-    if os.environ.get("LLM_API_KEY"):
-        headers["Authorization"] = "Bearer " + os.environ["LLM_API_KEY"]
+    if settings["api_key"]:
+        headers["Authorization"] = "Bearer " + settings["api_key"]
     request = Request(base + "/chat/completions", json.dumps(body).encode(), headers)
     for delay in (0, 3, 10):
         if delay:
             time.sleep(delay)
         try:
-            with urlopen(request, timeout=1800) as response:
+            with build_opener(_NoRedirect()).open(request, timeout=1800) as response:
                 reply = json.load(response)
             break
         except HTTPError as error:
@@ -391,7 +454,7 @@ def _chat(messages: list[dict[str, str]], schema) -> tuple[dict[str, Any], str]:
 def _resolve(base: str, headers: dict[str, str], name: str) -> str:
     """Report the real model behind an alias such as "currentmodel"."""
     try:
-        with urlopen(Request(base + "/models", headers=headers), timeout=10) as r:
+        with build_opener(_NoRedirect()).open(Request(base + "/models", headers=headers), timeout=10) as r:
             for m in json.load(r).get("data", []):
                 if m.get("id") == name and m.get("alias_of"):
                     return m["alias_of"]
@@ -574,15 +637,17 @@ def run_in_background() -> str:
 
 def _times() -> list[tuple[int, int]]:
     out = []
-    for part in os.environ.get("BRIEFING_TIME", "05:00,05:40").split(","):
+    for part in filter(None, model_settings()["schedule"].split(",")):
         hh, mm = part.strip().split(":")
         out.append((int(hh), int(mm)))
     return sorted(out)
 
 
-def _next_run(now: datetime) -> tuple[datetime, bool]:
+def _next_run(now: datetime, times=None):
     """Next scheduled time, and whether it is the first of its day."""
-    times = _times()
+    times = _times() if times is None else times
+    if not times:
+        return None
     for i, (hh, mm) in enumerate(times):
         target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         if target > now:
@@ -603,10 +668,18 @@ def daemon() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     fitness.connect().close()
     while True:
-        nxt, first = _next_run(datetime.now(fitness.TZ))
-        log.info("next briefing at %s%s", nxt.isoformat(), "" if first else " (only if new data)")
-        time.sleep(max(1, (nxt - datetime.now(fitness.TZ)).total_seconds()))
-        run_household(first)
+        times = _times()
+        next_run = _next_run(datetime.now(fitness.TZ), times)
+        if next_run is None:
+            time.sleep(30)
+            continue
+        nxt, first = next_run
+        while times == _times():
+            seconds = (nxt - datetime.now(fitness.TZ)).total_seconds()
+            if seconds <= 0:
+                run_household(first)
+                break
+            time.sleep(min(30, seconds))
 
 
 def run_household(first=False):

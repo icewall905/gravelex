@@ -287,3 +287,29 @@ def test_insights_history_scope_uses_authenticated_wearer(household):
             report = response.get_json()
             assert report['through'] == day.isoformat()
             assert report['days'][-1].get('steps') == (2400 if client is owner else None)
+
+
+def test_briefing_settings_are_admin_only_and_never_return_keys(household, monkeypatch):
+    import briefing
+    monkeypatch.setenv("LLM_BASE_URL", "http://model.lan/v1")
+    monkeypatch.setenv("LLM_API_KEY", "deployment-key")
+    owner = login("owner")
+    member(owner)
+    other = login("member")
+    path = "/api/settings/briefing"
+    assert other.get(path).status_code == 403
+    default = owner.get(path).get_json()
+    assert default["base_url"] == "http://model.lan/v1" and default["has_api_key"]
+    assert "api_key" not in default
+    config = {"enabled": True, "base_url": "http://replacement.lan/v1", "model": "local",
+              "schedule": "18:00,05:00,18:00", "max_tokens": 64000}
+    assert other.put(path, json=config).status_code == 403
+    result = owner.put(path, json=config).get_json()
+    assert not result["has_api_key"] and result["schedule"] == "05:00,18:00"
+    result = owner.put(path, json={**config, "api_key": "replacement-key"}).get_json()
+    assert result["has_api_key"] and "api_key" not in result
+    assert owner.put(path, json={**config, "schedule": "25:00"}).status_code == 400
+    with accounts.as_user(accounts.find_username("member")):
+        assert briefing.model_settings()["api_key"] == "replacement-key"
+    assert owner.put(path, json={**config, "schedule": ""}).status_code == 200
+    assert briefing._next_run(__import__("datetime").datetime.now(fitness.TZ)) is None

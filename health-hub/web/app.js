@@ -41,6 +41,7 @@ const ICON = {
   recovery: 'M3 12h4l2-5 3 10 2-5h7',
   training: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  settings: 'M4 6h16M4 12h16M4 18h16M9 3v6M15 9v6M8 15v6',
   refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',
   sun: 'M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
   moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',
@@ -1316,7 +1317,7 @@ const DETAIL = {
         card('train', 'Now', { chip: lt.status !== 'ready' ? chip('Building baseline') : null, cls: 'wide' },
           stats([['7-day load', fmt(lt.load7), lt.known_days7 != null ? `${lt.known_days7}/7 days known` : ''], ['Acute', fmt(lt.acute, 1), 'fatigue'], ['Chronic', fmt(lt.chronic, 1), 'fitness'], ['Form', isNum(lt.form) ? signed(lt.form) : '—']]),
           lt.status !== 'ready' ? pending('Chronic load needs six weeks', `Needs 42 consecutive confirmed days; ${D().training_ledger?.confirmed_consecutive_days ?? lt.baseline_days ?? 0} finished days so far. Confirm days in the calendar below.`, { n: D().training_ledger?.confirmed_consecutive_days ?? lt.baseline_days ?? 0, of: 42, unit: 'days' }) : null,
-          h('p', { class: 'lede' }, `Load method: ${prof.load_method === 'rpe' ? 'session effort' : 'heart rate'}${isNum(prof.hr_max) ? `, max HR ${prof.hr_max} bpm` : ''}. `, h('a', { href: '#more' }, 'Change')),
+          h('p', { class: 'lede' }, `Load method: ${prof.load_method === 'rpe' ? 'session effort' : 'heart rate'}${isNum(prof.hr_max) ? `, max HR ${prof.hr_max} bpm` : ''}. `, h('a', { href: '#settings' }, 'Change')),
           info('How training load works',
             'Each workout gets a load from time in heart-rate zones, or from minutes times your effort rating. Acute load is the last week; chronic load is the last six weeks. Form is chronic minus acute.',
             'Days without a confirmation are unknown, not zero. That keeps an unworn day from looking like a rest day.',
@@ -1667,6 +1668,56 @@ function householdCard() {
 /* ================================================================== *
  * Settings
  * ================================================================== */
+let briefingSettingsPanel = null;
+function briefingSettingsCard() {
+  if (briefingSettingsPanel) return briefingSettingsPanel;
+  const panel = h('div', {class:'above'}, h('p', {role:'status'}, 'Loading model settings…'));
+  function show(cfg) {
+    const input = (type, attrs) => h('input', {type, ...attrs});
+    const enabled = input('checkbox', {checked:cfg.enabled});
+    const base = input('url', {value:cfg.base_url, placeholder:'http://model.lan:8080/v1'});
+    const model = input('text', {value:cfg.model, maxlength:200, required:true});
+    const budget = input('number', {value:cfg.max_tokens, min:256, max:262144, required:true});
+    const schedule = input('text', {value:cfg.schedule, placeholder:'05:00,05:40'});
+    const key = input('password', {autocomplete:'new-password', placeholder:cfg.has_api_key ? 'Key saved' : 'Optional'});
+    const clear = input('checkbox', {});
+    const status = h('p', {role:'status', class:'foot'});
+    const save = h('button', {type:'submit', class:'btn primary'}, 'Save model settings');
+    const field = (label, control, hint) => h('label', {class:'field'}, label, control,
+      hint ? h('span', {class:'field-hint'}, hint) : null);
+    panel.replaceChildren(h('form', {onsubmit:async event => {
+      event.preventDefault();
+      save.disabled = true;
+      status.textContent = 'Saving…';
+      const body = {enabled:enabled.checked, base_url:base.value.trim(), model:model.value,
+        max_tokens:Number(budget.value), schedule:schedule.value};
+      if (clear.checked || key.value) body.api_key = clear.checked ? '' : key.value;
+      try {
+        const saved = await api('api/settings/briefing', 'PUT', body);
+        show(saved);
+        toast('Model settings saved');
+      } catch (error) { status.textContent = error.message; }
+      finally { save.disabled = false; }
+    }},
+    h('label', {class:'check'}, enabled, 'Enable AI briefings'),
+    h('div', {class:'form-grid two'},
+      field('OpenAI-compatible API base URL', base, 'The hub sends briefing evidence to this endpoint.'),
+      field('Model name or alias', model),
+      field('Output and reasoning token budget', budget),
+      field('Daily briefing times', schedule, `Comma-separated HH:MM times in ${cfg.timezone}. Leave blank for manual runs.`),
+      field('API key', key, 'Leave blank to keep the current key for this endpoint.')),
+    cfg.has_api_key ? h('label', {class:'check'}, clear, 'Remove the saved API key') : null,
+    h('div', {class:'btn-row'}, save,
+      h('button', {type:'button', class:'btn small', disabled:!cfg.enabled,
+        onclick:event=>regenerateBriefing(event.currentTarget)}, 'Generate briefing')), status));
+  }
+  api('api/settings/briefing', 'GET').then(show).catch(error => {
+    panel.replaceChildren(h('p', {role:'status'}, error.message));
+  });
+  briefingSettingsPanel = card('device', 'Language model and briefings', {cls:'wide'}, panel);
+  return briefingSettingsPanel;
+}
+
 function settingsCard() {
   const prof = D().profile || {};
   let method = prof.load_method === 'rpe' ? 'rpe' : 'hr';
@@ -1693,6 +1744,7 @@ function settingsCard() {
 function clearApiSecret() { API_TOKENS.secret = null; }
 function clearSessionHealth(broadcast = true) {
   clearApiSecret(); API_TOKENS.tokens=[]; API_TOKENS.scopes=[]; API_TOKENS.loaded=false;
+  briefingSettingsPanel=null;
   S.account=null; S.adminUsers=null; S.accountLoading=false;
   S.data=null; S.daysLoaded=0; S.error=null; S.offlineSince=null;
   document.body.replaceChildren();
@@ -1893,7 +1945,7 @@ function toast(msg, isErr) {
  * ================================================================== */
 const TABS = [
   { id: 'today', label: 'Today' }, { id: 'sleep', label: 'Sleep' }, { id: 'recovery', label: 'Recovery' },
-  { id: 'training', label: 'Training' }, { id: 'more', label: 'More' },
+  { id: 'training', label: 'Training' }, { id: 'more', label: 'More' }, { id: 'settings', label: 'Settings' },
 ];
 const DETAIL_TAB = { oxygen:'recovery', weight: 'today', ready: 'recovery', sleep: 'sleep', hrv: 'recovery', rhr: 'recovery', breath: 'recovery', stress: 'recovery', steps: 'today', heart: 'today', train: 'training', workouts: 'training', calendar: 'training', device: 'more' };
 
@@ -1939,7 +1991,7 @@ function briefPanel(page, opts = {}) {
     h('button',{class:'btn small',type:'button',onclick:e=>regenerateBriefing(e.currentTarget)},'Generate analysis')) : null;
   if (b.requires_refresh) return card('device','Briefing needs refresh',{cls:'wide'},
     h('p',null,'The saved briefing uses older collection or quality rules. Generate a new briefing before using it as current guidance.'),
-    opts.regenerate ? h('button',{class:'btn small',type:'button',onclick:e=>regenerateBriefing(e.currentTarget)},'Regenerate') : h('a',{href:'#more'},'Refresh from More'));
+    opts.regenerate ? h('button',{class:'btn small',type:'button',onclick:e=>regenerateBriefing(e.currentTarget)},'Regenerate') : h('a',{href:'#settings'},'Refresh from Settings'));
   const age = nowSec() - b.created, stale = age > 30 * 3600;
   const when = stale ? fmtDateTime(b.created) : fmtClock(b.created);
   const btn = opts.regenerate ? h('button', { class: 'btn small', type: 'button', onclick: e => regenerateBriefing(e.currentTarget) }, 'Regenerate') : null;
@@ -2029,6 +2081,11 @@ const PAGES = {
   training() {
     return [pageHead('Training', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('training'), trainingReviewCard(), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
   },
+  settings() {
+    return [pageHead('Settings'), h('div', {class:'feed'},
+      S.account?.role === 'admin' ? briefingSettingsCard() : null,
+      settingsCard(), themeCard(), ownDevicesCard(), householdCard(), apiTokensCard())];
+  },
   more() {
     return [pageHead('More'), h('div', { class: 'feed' },
       card('device', 'Phone app · GravelEx', {cls:'wide'},
@@ -2036,7 +2093,7 @@ const PAGES = {
         h('p',null,h('a',{class:'btn',href:'download/gravelex'},'Download GravelEx APK')),
         h('p',{class:'foot'},'Keep your existing Gravel installed. Only one app should manage the watch at a time.'),
         h('p',null,h('a',{href:'#d/oxygen'},'Health export setup and token'),' · ',sourceLink('Source and instructions'))),
-      briefPanel('more', { regenerate: true }), ownDevicesCard(), householdCard(), devicesView(), settingsCard(), apiTokensCard(), themeCard(),
+      briefPanel('more'), devicesView(), h('p', null, h('a', {href:'#settings'}, 'Open Settings')),
       card('device', 'About', { cls: 'wide' }, h('p', { class: 'lede', style: { marginTop: 0 } }, 'Pebble Health runs on your own server. Your data stays there. Scores marked experimental come from an unvalidated watch sensor and are for personal interest, not medical use.')))];
   },
 };
@@ -2095,11 +2152,11 @@ async function boot() {
   try { await loadAccount(); } catch (e) { return; }
   document.getElementById('refresh-btn').replaceChildren(icon('refresh'));
   document.getElementById('refresh-btn').addEventListener('click', () => load(true));
-  document.getElementById('theme-btn').addEventListener('click', () => { setTheme(effectiveDark() ? 'light' : 'dark'); if (route().tab === 'more') render(); });
+  document.getElementById('theme-btn').addEventListener('click', () => { setTheme(effectiveDark() ? 'light' : 'dark'); if (route().tab === 'settings') render(); });
   paintThemeButton();
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeButton); } catch (e) { /* old Safari */ }
   dlg().addEventListener('click', e => { if (e.target === dlg()) closeSheet(); });
-  window.addEventListener('hashchange', () => { clearApiSecret(); clearPasswordFields(document); render(); window.scrollTo(0, 0); document.getElementById('main').focus({ preventScroll: true }); });
+  window.addEventListener('hashchange', () => { clearApiSecret(); clearPasswordFields(document); briefingSettingsPanel=null; render(); window.scrollTo(0, 0); document.getElementById('main').focus({ preventScroll: true }); });
   window.addEventListener('beforeunload', clearApiSecret);
   window.addEventListener('storage', e => { if (e.key === 'ph-auth-logout') { clearSessionHealth(false); window.location.assign('/login'); } });
   window.addEventListener('pageshow', e => { if (!e.persisted) return; fetch('api/summary?days=1', { headers: { Accept: 'application/json', 'X-PH-Request': '1' }, cache: 'no-store' }).then(res => { if (res.status === 401) { clearSessionHealth(); window.location.assign('/login'); } }).catch(() => {}); });
