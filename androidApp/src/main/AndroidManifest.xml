@@ -29,6 +29,7 @@
         android:theme="@android:style/Theme.Material.NoActionBar">
         <provider android:name="io.rebble.libpebblecommon.pebblekit.classic.PebbleKitProvider"
             android:authorities="${applicationId}.basalt" tools:replace="android:authorities" />
+        <activity android:name="com.anopticlabs.gravel.planner.WorkoutPlannerActivity" android:exported="false" />
         <activity
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|layoutDirection|locale|mcc|navigation|smallestScreenSize|touchscreen|uiMode"

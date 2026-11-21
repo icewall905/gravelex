@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import com.anopticlabs.gravel.planner.WorkoutPlannerEntry
 import com.anopticlabs.gravel.workout.WorkoutEntry
 import coredevices.pebble.ui.LocalWorkoutEntry
 import androidx.compose.ui.tooling.preview.Preview
@@ -57,7 +58,10 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            CompositionLocalProvider(LocalWorkoutEntry provides { WorkoutEntry() }) {
+            CompositionLocalProvider(LocalWorkoutEntry provides {
+                WorkoutEntry()
+                WorkoutPlannerEntry()
+            }) {
                 App()
             }
         }
