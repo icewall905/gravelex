@@ -176,6 +176,16 @@ def api_profile():
         return {"error": str(error)}, 400
 
 
+@app.get("/api/phone-workout")
+def api_phone_workout():
+    activity = fitness.phone_activity_read(request.args.get('id', ''))
+    if activity is None:
+        return {"error": "Phone workout not found"}, 404
+    response = jsonify(activity)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @app.get("/api/workout-edits")
 def api_workout_history():
     return {"history":fitness.workout_edit_history(request.args.get('id',''))}

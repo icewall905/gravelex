@@ -422,6 +422,60 @@ def ingest(data):
 PHONE_SPORTS = frozenset(('run', 'hike', 'walk', 'cycle', 'strength', 'tennis', 'rowing', 'yoga', 'workout'))
 
 
+def phone_activity_detail(value, active):
+    if not isinstance(value, dict):
+        raise ValueError('Invalid activity details')
+    result = {}
+    for field, limit in (('title', 120), ('notes', 4000)):
+        if field in value:
+            item = value[field]
+            if not isinstance(item, str) or len(item) > limit:
+                raise ValueError(f'Invalid {field}')
+            result[field] = item
+    columns = {
+        'route': ((-90, 90), (-180, 180), (0, 200000)),
+        'heart': ((0, active + 1), (1, 300), (0, 200000)),
+        'pace': ((0, active + 1), (0, 172800), (0, 200000)),
+        'elevation': ((0, active + 1), (-15000, 15000), (0, 200000)),
+        'laps': ((0, active + 1), (0, 6900000)),
+        'splits': ((0, active + 1),),
+    }
+    for field, bounds in columns.items():
+        rows = value.get(field, [])
+        if not isinstance(rows, list) or len(rows) > 4000:
+            raise ValueError(f'Invalid {field} samples')
+        result[field] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) != len(bounds):
+                raise ValueError(f'Invalid {field} sample')
+            result[field].append([number(point, *bounds[i], field) for i, point in enumerate(row)])
+    sets = value.get('sets', [])
+    if not isinstance(sets, list) or len(sets) > 500:
+        raise ValueError('Invalid strength sets')
+    result['sets'] = []
+    for row in sets:
+        if not isinstance(row, list) or len(row) != 3 or not isinstance(row[0], str) or not 1 <= len(row[0]) <= 100:
+            raise ValueError('Invalid strength set')
+        result['sets'].append([row[0], number(row[1], 1, 999, 'Reps'),
+                               None if row[2] is None else number(row[2], 0, 1000000, 'Weight')])
+    for field, bounds in (('average_bpm', (1, 300)), ('peak_bpm', (1, 300)), ('ascent', (0, 7000000))):
+        if field in value:
+            result[field] = number(value[field], *bounds, field)
+    return result
+
+
+def phone_activity_read(ident):
+    with connect() as db:
+        row = db.execute('SELECT payload FROM phone_workouts WHERE id=?', (ident,)).fetchone()
+        if row is None:
+            return None
+        summary = json.loads(row['payload'])
+        detail = None
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='phone_workout_details'").fetchone():
+            detail = db.execute('SELECT payload FROM phone_workout_details WHERE id=?', (ident,)).fetchone()
+        return {'summary': summary, 'detail': json.loads(detail['payload']) if detail else None}
+
+
 def ingest_phone_workout(data):
     """Store a phone recording separately from watch minute history."""
     now = int(time.time())
@@ -462,6 +516,7 @@ def ingest_phone_workout(data):
         bpm = integer(bucket[1], 1, 300, 'Heart rate')
         observed = integer(bucket[2], 1, min(60, active - offset), 'Observed seconds')
         samples.append([offset, bpm, observed])
+    detail = phone_activity_detail(data['detail'], active) if 'detail' in data else None
     metadata = json.dumps({'start': start, 'seconds': elapsed, 'active_seconds': active,
                            'distance_m': distance, 'heart': samples}, separators=(',', ':'))
     with connect() as db:
@@ -471,8 +526,12 @@ def ingest_phone_workout(data):
         if existing is not None:
             if existing['kind'] != kind or existing['payload'] != metadata:
                 raise workout_edits.ConflictError('Workout ID already belongs to a different recording')
-            if existing['rpe'] == rpe:
-                return ident
+        if detail is not None:
+            db.execute('CREATE TABLE IF NOT EXISTS phone_workout_details (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+            db.execute("""INSERT INTO phone_workout_details VALUES (?,?)
+                ON CONFLICT(id) DO UPDATE SET payload=excluded.payload""", (ident, json.dumps(detail)))
+        if existing is not None and existing['rpe'] == rpe:
+            return ident
         db.execute("""INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,?,'phone')
             ON CONFLICT(id) DO UPDATE SET rpe=excluded.rpe""", (ident, start, elapsed, kind, rpe))
         db.execute("INSERT OR IGNORE INTO phone_workouts VALUES(?,?)", (ident, metadata))

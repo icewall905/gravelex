@@ -112,3 +112,28 @@ def test_phone_workout_uses_history_scope_and_keeps_strap_metrics_out_of_watch_h
     fitness.confirm_days_batch({'acknowledged': True, 'days': [{'date': day, 'status': 'complete'}]})
     assert web.post(route, headers=headers, json=payload).status_code == 201
     assert fitness.summary(7)['confirmations'][day] == 'complete'
+
+
+def test_phone_activity_details_can_backfill_without_changing_summary(web):
+    import time
+    import uuid
+
+    token = web.post('/api/pair?kind=history').get_json()['token']
+    headers = {'Authorization': f'Bearer {token}'}
+    workout = dict(id=str(uuid.uuid4()), start=int(time.time()) - 600, seconds=120,
+                   active_seconds=110, type='run', distance_m=400)
+    path = '/fitness/phone-workouts'
+    detail_path = '/api/phone-workout?id=phone:' + workout['id']
+    assert web.post(path, headers=headers, json=workout).status_code == 201
+    assert web.get(detail_path).get_json()['detail'] is None
+    detail = dict(route=[[55.0, 12.0, 0]], heart=[[1, 150, 0]], title='Evening run',
+                  pace=[[15, 300, 0]], laps=[[110, 400]], sets=[])
+    assert web.post(path, headers=headers, json=dict(workout, detail=detail)).status_code == 201
+    assert web.post(path, headers=headers, json=workout).status_code == 201
+    response = web.get(detail_path)
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert response.get_json()['detail']['route'] == detail['route']
+    assert response.get_json()['detail']['title'] == 'Evening run'
+    assert dashboard.app.test_client().get(detail_path).status_code == 401
+    assert web.post(path, headers=headers, json=dict(workout, detail={'route': [[999, 12, 0]]})).status_code == 400
+    assert web.get(detail_path).get_json()['detail']['heart'] == detail['heart']
