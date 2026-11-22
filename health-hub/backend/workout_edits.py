@@ -201,9 +201,9 @@ def apply_operation(db, data, observed_at=None):
                 raise ValueError('Unknown edit field')
             start = data.get('start', row['start'])
             end = data.get('end', row['start']+row['seconds'])
-            start, end = _interval(start, end, now)
             fields = {}
             if 'start' in data or 'end' in data:
+                start, end = _interval(start, end, now)
                 fields.update(start=start, seconds=end-start)
             if 'type' in data:
                 if not isinstance(data['type'], str) or not data['type'].strip() or len(data['type']) > 40:

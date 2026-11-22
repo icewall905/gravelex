@@ -266,3 +266,15 @@ def test_overridden_duration_ignores_ineffective_raw_reexport(db):
 def test_missing_fingerprints_rejected(db):
     with pytest.raises(edits.ConflictError):
         edits.apply_operation(db,{'operation_id':'missing','operation':'edit','id':'a','type':'cycle','expected_revisions':{'a':0}},NOW)
+
+
+def test_exclude_short_watch_detection_without_rewriting_its_interval(db):
+    db.execute("UPDATE workouts SET seconds=25 WHERE id='a'")
+    command(db, ignored=True)
+    removed, = edits.effective_rows(db)
+    assert removed['ignored'] == 1 and removed['seconds'] == 25
+    command(db, operation_id='restore', expected_revisions={'a': 1}, ignored=False)
+    restored, = edits.effective_rows(db)
+    assert restored['ignored'] == 0 and restored['seconds'] == 25
+    with pytest.raises(ValueError):
+        command(db, operation_id='resize', expected_revisions={'a': 2}, end=START+30)
