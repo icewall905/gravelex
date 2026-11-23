@@ -44,7 +44,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -182,7 +181,7 @@ private fun TopChartControls(type: AppType, modifier: Modifier = Modifier) {
                 viewModel.select(type, selection.copy(sort = it))
             }
         } else {
-            Text(selection.sort.label, color = Color.Gray)
+            Text(selection.sort.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         TopChartDropdown(selection.period, TopChartPeriod.entries, { "${type.topChartPeriodVerb()} ${it.label}" }) {
             viewModel.select(type, selection.copy(period = it))
@@ -306,7 +305,7 @@ private fun TopChartContent(apps: List<CommonApp>?, content: @Composable (List<C
 
         apps.isEmpty() -> Text(
             "Nothing here yet",
-            color = Color.Gray,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
 

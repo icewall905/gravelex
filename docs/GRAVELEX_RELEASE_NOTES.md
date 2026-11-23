@@ -1,3 +1,7 @@
-GravelEx 0.7.2 displays the Pebble Health Workout logo in the phone locker and on the watch app details page for sideloaded installations.
+GravelEx 0.7.3 brings in Gravel 0.5.1’s accessibility improvements and a Pebble health-screen time-format fix.
 
-Obtainium users can update from the existing GravelEx GitHub source.
+- Improves text contrast in Dark and Black themes and across app lists, notifications, and settings.
+- Gives text more room at Android’s largest font size, including in the Notebook, watch screens, and app permissions.
+- Uses the phone’s 12- or 24-hour clock format throughout the affected health views.
+
+Refresh your existing GravelEx entry in Obtainium to update.

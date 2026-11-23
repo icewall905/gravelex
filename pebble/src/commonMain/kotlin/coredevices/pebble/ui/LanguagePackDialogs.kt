@@ -56,7 +56,6 @@ import io.rebble.libpebblecommon.packets.ProtocolCapsFlag
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
-import theme.gravelPurple as coreOrange
 import kotlin.coroutines.cancellation.CancellationException
 
 private val logger = Logger.withTag("LanguagePackDialogs")
@@ -359,7 +358,7 @@ private fun LanguagePackPickerDialog(
                                     error = null
                                 }.border(
                                     width = 2.dp,
-                                    color = if (selected == lp) coreOrange else Color.Transparent,
+                                    color = if (selected == lp) MaterialTheme.colorScheme.primary else Color.Transparent,
                                     shape = RoundedCornerShape(8.dp),
                                 ).padding(9.dp),
                             ) {

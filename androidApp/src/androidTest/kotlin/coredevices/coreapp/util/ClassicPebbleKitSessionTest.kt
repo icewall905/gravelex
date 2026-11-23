@@ -333,10 +333,11 @@ class ClassicPebbleKitSessionTest {
         val scope = ConnectionCoroutineScope(SupervisorJob() + Dispatchers.Default)
         sessionScope = scope
         val classic = PebbleKitClassic(
-            device,
-            appInfo(companionPackages),
-            scope,
-            WatchConfigFlow(config),
+            device = device,
+            appInfo = appInfo(companionPackages),
+            pkjsRunning = false,
+            connectionScope = scope,
+            watchConfig = WatchConfigFlow(config),
         )
         session = classic
         runBlocking { classic.start(incoming) }

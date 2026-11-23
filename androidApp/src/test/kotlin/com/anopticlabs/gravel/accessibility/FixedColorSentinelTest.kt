@@ -51,6 +51,30 @@ class FixedColorSentinelTest {
         ),
         // Pixels of the placeholder image Compose previews show in place of a loaded one.
         "$ui/PreviewUtil.kt" to listOf("ColorImage(Color.Red.toArgb())"),
+        // The workout recorder owns a separate dark palette and uses transparent Android system bars.
+        "pebble/src/androidMain/kotlin/com/anopticlabs/gravel/workout/WorkoutActivity.kt" to listOf(
+            "statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),",
+            "navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),",
+            "MaterialTheme(colorScheme = darkColorScheme(",
+            "background = Color(0xff101e24),",
+            "surface = Color(0xff192b32),",
+            "surfaceVariant = Color(0xff283c42),",
+            "primary = Color(0xffa7ead9),",
+            "onPrimary = Color(0xff142b2b),",
+            "secondary = Color(0xfff4c18e),",
+            "tertiary = Color(0xffc8c1f3),",
+        ),
+        // Native sign-in views use black text on a white web surface.
+        "pebble/src/androidMain/kotlin/coredevices/pebble/config/WebSignIn.android.kt" to listOf(
+            "setBackgroundColor(Color.WHITE)",
+            "setTextColor(Color.BLACK)",
+            "setBackgroundColor(Color.WHITE)",
+        ),
+        // The plugin supplies the preference color. The source viewer renders syntax colors as data.
+        "$ui/PluginPreferencesScreens.kt" to listOf("return Color(channel(4), channel(2), channel(0), channel(6))"),
+        "$ui/PluginSourceScreen.kt" to listOf(
+            "addStyle(SpanStyle(color = Color(0xFF000000 or highlight.rgb.toLong())), start, end)",
+        ),
     )
 
     /** The Health tab keeps upstream's colors (CLAUDE.md, same rule); their names are flagged elsewhere. */

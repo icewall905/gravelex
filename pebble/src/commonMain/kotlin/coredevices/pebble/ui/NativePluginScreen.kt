@@ -42,7 +42,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -143,7 +142,7 @@ fun NativePluginCard(plugin: PluginMetadata, navBarNav: NavBarNav) {
             )
             Text(
                 BUILT_IN_DEVELOPER_NAME,
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp,
                 lineHeight = 10.sp,
                 maxLines = 1,
@@ -169,7 +168,7 @@ fun NativePluginListItem(plugin: PluginMetadata, navBarNav: NavBarNav) {
             Text(plugin.name, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1)
             Text(
                 plugin.description,
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 maxLines = 3,
                 lineHeight = 11.sp,
@@ -203,7 +202,7 @@ fun NativePluginScreen(navBarNav: NavBarNav, topBarParams: TopBarParams, uuid: U
                 Text(
                     if (disabled) "$BUILT_IN_DEVELOPER_NAME · Disabled" else BUILT_IN_DEVELOPER_NAME,
                     fontSize = 12.sp,
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 PebbleElevatedButton(
                     text = "Settings",

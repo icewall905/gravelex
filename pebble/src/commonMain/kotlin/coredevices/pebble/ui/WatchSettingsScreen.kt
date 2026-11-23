@@ -8,7 +8,6 @@ import io.rebble.libpebblecommon.permissions.PermissionPolicy
 import io.rebble.libpebblecommon.plugin.PluginMetadata
 import io.rebble.libpebblecommon.plugin.PluginRegistry
 import org.jetbrains.compose.resources.painterResource
-import theme.gravelPurple as coreOrange
 import CommonRoutes
 import CoreAppVersion
 import NextBugReportContext
@@ -3621,7 +3620,7 @@ fun <T> basicSettingsDropdownItem(
                 OutlinedButton(
                     onClick = { expanded = true },
                     contentPadding = PaddingValues(start = 12.dp, end = 4.dp),
-                    border = BorderStroke(1.dp, coreOrange),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
                 ) {
                     Text(
                         text = itemText(selectedItem),

@@ -71,6 +71,7 @@ import coredevices.pebble.ui.WatchappPermissionRow
 import coredevices.pebble.ui.basicSettingsDropdownItem
 import coredevices.pebble.ui.basicSettingsNumberFieldItem
 import coredevices.pebble.ui.basicSettingsNumberItem
+import coredevices.util.CoreConfig
 import io.rebble.libpebblecommon.connection.NotificationApps
 import io.rebble.libpebblecommon.database.MillisecondInstant
 import io.rebble.libpebblecommon.database.dao.ChannelAndCount
@@ -119,7 +120,11 @@ class ScreenFontPiecesDrawnTextTest(private val check: DrawnCheck) {
     // The bar's content is 70 dp tall when the system's own bar is 25 dp or less (gesture navigation; WatchHomeScreen).
     @Test
     fun tabBar() {
-        val tabs = WatchHomeNavTab.navBarEntries(indexEnabled = false, healthEnabled = true, preferHealthTab = false, notebookShown = true)
+        val config = CoreConfig(navBarSlots = WatchHomeNavTab.MAX_BAR_SLOTS)
+        val tabs = WatchHomeNavTab.barTabs(
+            config,
+            WatchHomeNavTab.availableTabs(config, healthEnabled = true, notebookShown = true),
+        )
         drawn.setContent {
             NavigationBar(Modifier.height(70.dp), windowInsets = WindowInsets(0)) {
                 for (tab in tabs) {

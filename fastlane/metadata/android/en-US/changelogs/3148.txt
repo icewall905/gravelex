@@ -1,0 +1,1 @@
+Improved text contrast and support for Android’s largest font size across the Notebook, watch screens, notifications, and permissions. Fixed 12- and 24-hour time formatting in Health.
