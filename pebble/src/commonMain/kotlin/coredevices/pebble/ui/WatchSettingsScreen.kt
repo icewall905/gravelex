@@ -84,6 +84,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -113,6 +114,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalFocusManager
@@ -121,7 +123,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -132,6 +134,7 @@ import com.anopticlabs.gravel.firmware.FirmwarePickerRoute
 import com.anopticlabs.gravel.ui.NotebookSettingsChoices
 import com.anopticlabs.gravel.ui.NotebookSettingsText
 import com.anopticlabs.gravel.ui.PhoneCalendarFirstStep
+import com.anopticlabs.gravel.ui.fontGrowth
 import com.anopticlabs.gravel.ui.phoneCalendarFirstStep
 import com.anopticlabs.gravel.ui.phoneCalendarRefusalText
 import com.anopticlabs.gravel.ui.rememberNotebookTab
@@ -3409,11 +3412,10 @@ fun basicSettingsNumberItem(
                                 },
                                 enabled = value != defaultValue,
                             ) {
+                                // Gravel: wraps when wider than 150 dp.
                                 Text(
                                     text = "Default: ${valueFormatter?.invoke(defaultValue) ?: "$defaultValue $unit"}",
                                     modifier = Modifier.widthIn(max = 150.dp),
-                                    maxLines = 1,
-                                    lineHeight = 12.sp,
                                 )
                             }
                         }
@@ -3518,8 +3520,14 @@ fun basicSettingsNumberFieldItem(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             suffix = { Text(unit) },
+                            // Gravel: 110 dp plus what the font size adds to the largest value and to the unit, which
+                            // the field draws in bodyLarge (material3-android 1.5.0-alpha08,
+                            // internal.TextFieldImplKt.CommonDecorationBox).
                             modifier = Modifier
-                                .width(110.dp)
+                                .width(
+                                    110.dp + fontGrowth("$maxL", LocalTextStyle.current) +
+                                        fontGrowth(unit, MaterialTheme.typography.bodyLarge)
+                                )
                                 .onFocusChanged { focusState ->
                                     isFocused = focusState.isFocused
                                 },
@@ -3566,6 +3574,18 @@ fun basicSettingsNumberFieldItem(
     },
 )
 
+/**
+ * Gravel: at most [max] wide or, when wider, the text's min intrinsic width (its widest stretch without a line-break
+ * opportunity: ui-text-android 1.11.2, LayoutIntrinsics.getMinIntrinsicWidth) up to half the width offered, which
+ * leaves the setting's title the other half.
+ */
+private fun Modifier.widthInOrLongestWord(max: Dp) = layout { measurable, constraints ->
+    val longestWord = minOf(measurable.minIntrinsicWidth(constraints.maxHeight), constraints.maxWidth / 2)
+    val width = maxOf(max.roundToPx(), longestWord).coerceIn(constraints.minWidth, constraints.maxWidth)
+    val placeable = measurable.measure(constraints.copy(maxWidth = width))
+    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+}
+
 fun <T> basicSettingsDropdownItem(
     id: String? = null,
     title: String,
@@ -3605,9 +3625,7 @@ fun <T> basicSettingsDropdownItem(
                 ) {
                     Text(
                         text = itemText(selectedItem),
-                        modifier = if (selectorBelow) Modifier else Modifier.widthIn(max = 130.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        modifier = if (selectorBelow) Modifier else Modifier.widthInOrLongestWord(150.dp),
                     )
                     Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                 }

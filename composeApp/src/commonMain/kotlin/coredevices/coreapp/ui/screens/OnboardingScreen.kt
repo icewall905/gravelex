@@ -41,7 +41,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -93,7 +92,7 @@ import org.koin.compose.getKoin
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.dsl.module
-import theme.onboardingScheme
+import theme.OnboardingTheme
 
 
 enum class OnboardingStage {
@@ -195,7 +194,8 @@ fun OnboardingScreen(
         viewModel.requestedPermissions.value += permission
     }
 
-    MaterialTheme(colorScheme = onboardingScheme) {
+    // Gravel: setup's scheme with a selection highlight its white text reads on.
+    OnboardingTheme {
     Scaffold { windowInsets ->
         Box(modifier = Modifier.padding(windowInsets).fillMaxSize()) {
             when (viewModel.stage.value) {
@@ -208,7 +208,7 @@ fun OnboardingScreen(
                         Image(
                             painter = painterResource(Res.drawable.gravel_logo),
                             contentDescription = "Gravel logo",
-                            colorFilter = ColorFilter.tint(Color.White),
+                            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onBackground),
                             modifier = Modifier.height(50.dp),
                         )
                         Spacer(modifier = Modifier.height(15.dp))

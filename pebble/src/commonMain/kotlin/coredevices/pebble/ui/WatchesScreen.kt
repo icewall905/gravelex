@@ -91,6 +91,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.ToggleFloatingActionButton
+import androidx.compose.material3.ToggleFloatingActionButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -212,7 +213,6 @@ import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.koin.compose.koinInject
 import org.koin.dsl.module
-import theme.gravelPurple
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.uuid.Uuid
@@ -338,16 +338,7 @@ fun WatchesScreen(navBarNav: NavBarNav, topBarParams: TopBarParams) {
 //                    modifier = Modifier.padding(16.dp),
                     expanded = addFabExpanded,
                     button = {
-                        ToggleFloatingActionButton(
-                            checked = addFabExpanded,
-                            onCheckedChange = { addFabExpanded = !addFabExpanded },
-                        ) {
-                            Icon(
-                                imageVector = if (addFabExpanded) Icons.Filled.Close else Icons.Filled.Add,
-                                contentDescription = "Add a Pebble",
-                                tint = Color.White,
-                            )
-                        }
+                        AddPebbleButton(expanded = addFabExpanded, onToggle = { addFabExpanded = !addFabExpanded })
                     },
                 ) {
                     val uiContext = rememberUiContext()
@@ -777,6 +768,21 @@ private enum class FabInfo(val title: String, val body: String) {
                 "Original Pebble, Pebble Steel, Pebble Time, Pebble Time Steel, and " +
                 "Pebble Time Round.",
     ),
+}
+
+/** The Devices tab's add button, which opens and closes its menu. */
+@Composable
+fun AddPebbleButton(expanded: Boolean, onToggle: () -> Unit) {
+    ToggleFloatingActionButton(
+        checked = expanded,
+        onCheckedChange = { onToggle() },
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.Close else Icons.Filled.Add,
+            contentDescription = "Add a Pebble",
+            tint = ToggleFloatingActionButtonDefaults.iconColor()(checkedProgress),
+        )
+    }
 }
 
 @Composable

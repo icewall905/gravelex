@@ -192,6 +192,8 @@ dependencies {
     // Gravel: the debug-only NotebookDebugReceiver drives the Notebook stores
     // from adb inside a coroutine; the notebook module keeps coroutines private.
     debugImplementation(libs.coroutines)
+    // Gravel: LargestFontTestActivity's superclass; the same activity library the app's modules ship.
+    debugImplementation(libs.androidx.activity.compose)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.rules)
     androidTestImplementation(libs.ktor.client.okhttp)
@@ -212,6 +214,8 @@ dependencies {
     androidTestImplementation(libs.jetbrains.markdown)
     androidTestImplementation(libs.compose.ui)
     androidTestImplementation(libs.compose.ui.test.junit4)
+    // The material3 the app's modules already use, for the drawn-text tests' Material pieces.
+    androidTestImplementation(libs.compose.material3)
     androidTestImplementation(libs.espresso.core)
     debugImplementation(libs.compose.ui.test.manifest)
     androidTestImplementation(project(":llm"))

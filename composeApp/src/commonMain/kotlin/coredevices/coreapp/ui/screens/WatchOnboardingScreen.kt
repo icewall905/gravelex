@@ -26,12 +26,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -64,6 +66,7 @@ import coredevices.pebble.services.AppStoreHomeResult
 import coredevices.pebble.services.LanguagePackRepository
 import coredevices.pebble.services.PebbleWebServices
 import coredevices.pebble.services.StoreOnboarding
+import coredevices.pebble.ui.CommonApp
 import coredevices.pebble.ui.CommonAppType
 import coredevices.pebble.ui.LanguageDialog
 import coredevices.pebble.ui.installStateFor
@@ -115,7 +118,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import theme.AppTheme
-import theme.onboardingScheme
+import theme.OnboardingTheme
+import theme.lightScheme
 import kotlin.time.Duration.Companion.seconds
 import coredevices.pebble.ui.InstallReviewDialog
 import io.rebble.libpebblecommon.permissions.InstallReview
@@ -165,14 +169,15 @@ fun WatchOnboardingScreen(
     }
 
     val scrollState = rememberScrollState()
-    MaterialTheme(colorScheme = onboardingScheme) {
+    // Gravel: setup's scheme with a selection highlight its white text reads on.
+    OnboardingTheme {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
         ) { windowInsets ->
             Box(modifier = Modifier.padding(windowInsets).fillMaxSize()) {
                 Column(
                     modifier = Modifier.fillMaxSize()
-                        .verticalScrollbar(scrollState)
+                        .verticalScrollbar(scrollState, MaterialTheme.colorScheme.outline)
                         .padding(20.dp)
                         .verticalScroll(scrollState),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -409,8 +414,8 @@ fun WatchOnboardingScreen(
 
 private fun Modifier.verticalScrollbar(
     scrollState: ScrollState,
+    color: Color,
     width: Dp = 4.dp,
-    color: Color = Color.White.copy(alpha = 0.5f),
 ): Modifier = drawWithContent {
     drawContent()
     if (scrollState.maxValue > 0) {
@@ -440,7 +445,7 @@ fun SectionText(text: String) {
 fun SectionDivider() {
     HorizontalDivider(
         modifier = Modifier.padding(vertical = 25.dp),
-        color = Color.White,
+        color = MaterialTheme.colorScheme.onBackground,
     )
 }
 
@@ -497,78 +502,63 @@ fun OnboardingAppCarousel(
             var added by remember { mutableStateOf(false) }
             var review by remember { mutableStateOf<InstallReview?>(null) }
             val commonAppStore = entry.commonAppType as? CommonAppType.Store ?: return@items
-            Card(
-                modifier = Modifier.padding(3.dp)
-                    .width(125.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.91f),
-                    contentColor = Color.Black,
-                ),
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    NativeWatchfaceMainContent(
-                        entry = entry,
-                        highlightInLocker = false,
-                        topBarParams = null
-                    )
-                    if (entry.uuid in allCollectionUuids.orEmpty()) {
-                        PebbleElevatedButton(
-                            text = "Remove",
-                            onClick = {
-                                added = false
-                                GlobalScope.launch {
-                                    nativeLockerAddUtil.removeFromLocker(
-                                        commonAppStore.storeSource,
-                                        entry.uuid,
-                                    )
-                                    logger.v { "Remove from locker from watch onboarding ${commonAppStore.storeApp?.title}" }
-                                }
-                            },
-                            primaryColor = true,
-                            icon = Icons.Default.RemoveCircle,
-                        )
-                    } else {
-                        fun add(granted: Map<String, Boolean?>) {
-                            added = true
+            SetupStoreCard(entry) {
+                if (entry.uuid in allCollectionUuids.orEmpty()) {
+                    PebbleElevatedButton(
+                        text = "Remove",
+                        onClick = {
+                            added = false
                             GlobalScope.launch {
-                                val addResult = nativeLockerAddUtil.addAppToLocker(
-                                    commonAppStore,
+                                nativeLockerAddUtil.removeFromLocker(
                                     commonAppStore.storeSource,
-                                    granted,
+                                    entry.uuid,
                                 )
-                                logger.v { "Add to locker from watch onboarding ${commonAppStore.storeApp?.title} result=$addResult" }
-                                if (!addResult) {
-                                    snackbarDisplay.showSnackbar("Failed to add app")
-                                    return@launch
-                                }
-                                libPebble.launchApp(
-                                    entry = entry,
-                                    snackbarDisplay = NoOpSnackbarDisplay,
-                                    connectedIdentifier = watch.identifier,
-                                )
+                                logger.v { "Remove from locker from watch onboarding ${commonAppStore.storeApp?.title}" }
                             }
-                        }
-                        review?.let { pending ->
-                            InstallReviewDialog(pending) { granted ->
-                                review = null
-                                if (granted != null) add(granted) else added = false
+                        },
+                        primaryColor = true,
+                        icon = Icons.Default.RemoveCircle,
+                    )
+                } else {
+                    fun add(granted: Map<String, Boolean?>) {
+                        added = true
+                        GlobalScope.launch {
+                            val addResult = nativeLockerAddUtil.addAppToLocker(
+                                commonAppStore,
+                                commonAppStore.storeSource,
+                                granted,
+                            )
+                            logger.v { "Add to locker from watch onboarding ${commonAppStore.storeApp?.title} result=$addResult" }
+                            if (!addResult) {
+                                snackbarDisplay.showSnackbar("Failed to add app")
+                                return@launch
                             }
+                            libPebble.launchApp(
+                                entry = entry,
+                                snackbarDisplay = NoOpSnackbarDisplay,
+                                connectedIdentifier = watch.identifier,
+                            )
                         }
-                        PebbleElevatedButton(
-                            text = "Add",
-                            onClick = {
-                                added = true
-                                scope.launch {
-                                    val appReview = nativeLockerAddUtil.review(commonAppStore)
-                                    if (appReview == null) add(emptyMap()) else review = appReview
-                                }
-                            },
-                            primaryColor = true,
-                            enabled = !added,
-                            icon = Icons.Default.Add,
-                        )
                     }
-                    Spacer(modifier = Modifier.height(5.dp))
+                    review?.let { pending ->
+                        InstallReviewDialog(pending) { granted ->
+                            review = null
+                            if (granted != null) add(granted) else added = false
+                        }
+                    }
+                    PebbleElevatedButton(
+                        text = "Add",
+                        onClick = {
+                            added = true
+                            scope.launch {
+                                val appReview = nativeLockerAddUtil.review(commonAppStore)
+                                if (appReview == null) add(emptyMap()) else review = appReview
+                            }
+                        },
+                        primaryColor = true,
+                        enabled = !added,
+                        icon = Icons.Default.Add,
+                    )
                 }
             }
         }
@@ -578,6 +568,32 @@ fun OnboardingAppCarousel(
         Text(footerText, textAlign = TextAlign.Center)
     }
     SectionDivider()
+}
+
+/** A store entry on setup's near-white card; setup's scheme draws white on purple, so the entry takes the Light scheme. */
+@Composable
+fun SetupStoreCard(entry: CommonApp, button: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.padding(3.dp)
+            .width(125.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.91f),
+        ),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            MaterialTheme(colorScheme = lightScheme) {
+                CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                    NativeWatchfaceMainContent(
+                        entry = entry,
+                        highlightInLocker = false,
+                        topBarParams = null
+                    )
+                }
+            }
+            button()
+            Spacer(modifier = Modifier.height(5.dp))
+        }
+    }
 }
 
 object NoOpSnackbarDisplay : SnackbarDisplay {

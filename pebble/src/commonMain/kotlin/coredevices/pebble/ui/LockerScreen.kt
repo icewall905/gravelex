@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -140,7 +141,7 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import rememberOpenDocumentLauncher
-import theme.coreDarkGreen
+import theme.ExtendedTheme
 import kotlin.uuid.Uuid
 
 const val REBBLE_LOGIN_URI = "https://boot.rebble.io"
@@ -686,23 +687,7 @@ fun LockerScreen(
                                             Column(
                                                 modifier = Modifier.padding(start = 8.dp),
                                             ) {
-                                                Text(
-                                                    active.title,
-                                                    fontSize = 20.sp,
-                                                    modifier = Modifier.padding(0.dp)
-                                                )
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    active.CompatibilityWarning(
-                                                        topBarParams
-                                                    )
-                                                    Text(
-                                                        active.developerName,
-                                                        fontSize = 12.sp,
-                                                        color = Color.Gray,
-                                                        modifier = Modifier.padding(0.dp)
-                                                            .weight(1f)
-                                                    )
-                                                }
+                                                ActiveAppTitle(active, topBarParams)
                                                 if (active.hasSettings()) {
                                                     active.SettingsButton(
                                                         navBarNav,
@@ -1262,6 +1247,28 @@ val testApps = listOf(
 
 internal val NATIVE_SCREENSHOT_HEIGHT = 100.dp
 
+/** The title and author lines of the Locker's active watchface or watchapp. */
+@Composable
+fun ColumnScope.ActiveAppTitle(active: CommonApp, topBarParams: TopBarParams) {
+    Text(
+        active.title,
+        fontSize = 20.sp,
+        modifier = Modifier.padding(0.dp)
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        active.CompatibilityWarning(
+            topBarParams
+        )
+        Text(
+            active.developerName,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(0.dp)
+                .weight(1f)
+        )
+    }
+}
+
 @Composable
 fun NativeWatchfaceCard(
     entry: CommonApp,
@@ -1334,16 +1341,17 @@ fun NativeWatchfaceMainContent(
                         contentDescription = "In My Collection",
                         modifier = Modifier.size(19.dp)
                             .padding(top = 1.dp, bottom = 5.dp),
-                        tint = coreDarkGreen,
+                        tint = ExtendedTheme.colors.inCollection,
                     )
                 }
             }
             Text(
                 entry.developerName,
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp,
                 lineHeight = 10.sp,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(bottom = 7.dp)
                     .weight(1f),
             )
@@ -1390,6 +1398,7 @@ fun NativeWatchfaceListItem(
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Row {
@@ -1410,7 +1419,7 @@ fun NativeWatchfaceListItem(
                                 contentDescription = "In My Collection",
                                 modifier = Modifier.size(16.dp)
                                     .padding(top = 1.dp, end = 6.dp, bottom = 5.dp),
-                                tint = coreDarkGreen,
+                                tint = ExtendedTheme.colors.inCollection,
                             )
                         }
                     }
@@ -1419,9 +1428,10 @@ fun NativeWatchfaceListItem(
                 if (entry.description != null) {
                     Text(
                         text = entry.description,
-                        color = Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                         lineHeight = 11.sp,
                     )
                 }
