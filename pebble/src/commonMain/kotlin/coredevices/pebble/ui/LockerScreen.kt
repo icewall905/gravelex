@@ -1313,12 +1313,7 @@ fun NativeWatchfaceMainContent(
             modifier = Modifier.padding(start = 5.dp, end = 5.dp),
         ) {
             if (entry.type == AppType.Watchapp) {
-                AsyncImage(
-                    model = entry.listImageUrl,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp).padding(end = 3.dp),
-                    colorFilter = entry.listImageColorFilter(),
-                )
+                LockerAppListIcon(entry, modifier = Modifier.size(18.dp).padding(end = 3.dp))
             }
             Text(
                 entry.title,
@@ -1387,12 +1382,7 @@ fun NativeWatchfaceListItem(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (entry.type == AppType.Watchapp) {
-                    AsyncImage(
-                        model = entry.listImageUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(21.dp),
-                        colorFilter = entry.listImageColorFilter(),
-                    )
+                    LockerAppListIcon(entry, modifier = Modifier.size(21.dp))
                     Spacer(modifier = Modifier.width(5.dp))
                 }
                 Text(
@@ -1467,6 +1457,24 @@ fun CommonApp.listImageColorFilter(): ColorFilter? =
 
 private const val SCREENSHOT_ASPECT_RATIO = 144f / 168f
 
+private val pebbleHealthWorkoutId = Uuid.parse("23a97c1c-672f-4285-9b6c-5244cae8526e")
+
+private fun CommonApp.bundledArtwork(): String? =
+    if (uuid == pebbleHealthWorkoutId && (commonAppType as? CommonAppType.Locker)?.sideloaded == true)
+        Res.getUri("drawable/pebble_health_workout.png")
+    else null
+
+@Composable
+internal fun LockerAppListIcon(entry: CommonApp, modifier: Modifier) {
+    val url = entry.listImageUrl?.takeIf { it.isNotBlank() }
+    AsyncImage(
+        model = url ?: entry.bundledArtwork(),
+        contentDescription = null,
+        modifier = modifier,
+        colorFilter = if (url != null) entry.listImageColorFilter() else null,
+    )
+}
+
 @Composable
 fun AppImage(entry: CommonApp, modifier: Modifier, size: Dp) {
     val placeholderColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
@@ -1483,7 +1491,7 @@ fun AppImage(entry: CommonApp, modifier: Modifier, size: Dp) {
                     AppType.Plugin -> entry.listImageUrl?.ifBlank { null } ?: entry.screenshotImageUrl
                 }
                 // A sideloaded app often has none.
-                if (url.isNullOrBlank()) return@remember null
+                if (url.isNullOrBlank()) return@remember entry.bundledArtwork()
                 ImageRequest.Builder(context)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .data(url)

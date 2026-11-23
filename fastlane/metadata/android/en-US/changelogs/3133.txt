@@ -1,0 +1,1 @@
+Show Pebble Health Workout artwork in the phone locker after installing the watch app from Pebble Health.

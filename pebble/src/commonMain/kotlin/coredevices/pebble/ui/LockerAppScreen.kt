@@ -310,12 +310,7 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
                         Column(modifier = Modifier.padding(horizontal = 5.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (entry.type == AppType.Watchapp) {
-                                    AsyncImage(
-                                        model = entry.listImageUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(28.dp),
-                                        colorFilter = entry.listImageColorFilter(),
-                                    )
+                                    LockerAppListIcon(entry, modifier = Modifier.size(28.dp))
                                     Spacer(modifier = Modifier.width(5.dp))
                                 }
                                 Text(
