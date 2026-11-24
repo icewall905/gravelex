@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import briefing
 import fitness
@@ -35,6 +36,17 @@ PAIR_PURPOSE = {
 }
 
 app = Flask(__name__, static_folder=None)
+
+
+def trust_proxy(wsgi_app):
+    raw = os.environ.get("TRUSTED_PROXY_HOPS", "0").strip() or "0"
+    if not raw.isdigit():
+        raise RuntimeError(f"TRUSTED_PROXY_HOPS must be a non-negative integer, got {raw!r}")
+    hops = int(raw)
+    return ProxyFix(wsgi_app, x_for=hops, x_proto=hops, x_host=0) if hops else wsgi_app
+
+
+app.wsgi_app = trust_proxy(app.wsgi_app)
 # Watch uploads and the Today read endpoint, so one hostname serves everything.
 app.register_blueprint(watch_api.blueprint())
 app.register_blueprint(api_tokens.blueprint())
