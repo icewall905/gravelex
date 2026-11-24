@@ -719,7 +719,7 @@ private fun DiscoveredWatchesDialog(
                     Text("No watches found", modifier = Modifier.padding(vertical = 16.dp))
                 }
                 LazyColumn {
-                    items(watches, key = { it.identifier.asString }) { watch ->
+                    items(watches, key = { DeviceListEntry.Watch(it).key }) { watch ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier

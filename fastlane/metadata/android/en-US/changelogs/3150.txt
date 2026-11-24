@@ -1,0 +1,1 @@
+Fixed duplicate-item crashes in Settings and hardened app store, language pack, and device lists.

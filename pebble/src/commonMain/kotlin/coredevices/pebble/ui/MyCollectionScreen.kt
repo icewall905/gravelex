@@ -211,7 +211,7 @@ fun MyCollectionScreen(
                         }
                     }
                     if (appType == AppType.Plugin) {
-                        items(nativePlugins, key = { it.pluginUuid }) { plugin ->
+                        items(nativePlugins, key = { "native-plugin:${it.pluginUuid}" }) { plugin ->
                             NativePluginListItem(plugin, navBarNav)
                         }
                     }

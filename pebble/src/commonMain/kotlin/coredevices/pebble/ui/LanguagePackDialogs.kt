@@ -128,7 +128,7 @@ private fun LanguagePacksDialog(watch: ConnectedPebbleDevice, onDismissRequest: 
         it.setActiveLanguage(pack)
     }
 
-    val packs = installedPacks.orEmpty()
+    val packs = installedPacks.orEmpty().distinctBy { it.slot }
     AlertDialog(
         onDismissRequest = { if (!talkingToWatch) onDismissRequest() },
         title = { Text("Watch Language") },
@@ -344,14 +344,14 @@ private fun LanguagePackPickerDialog(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     groups.forEach { (group, packs) ->
-                        item(key = group.name) {
+                        item(key = "language-group:${group.name}") {
                             Text(
                                 group.title,
                                 style = MaterialTheme.typography.titleSmall,
                                 modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                             )
                         }
-                        items(packs, key = { it.id }) { lp ->
+                        items(packs, key = { "language-pack:${it.id}" }) { lp ->
                             Column(
                                 modifier = Modifier.fillMaxWidth().clickable(enabled = !busy) {
                                     selected = lp

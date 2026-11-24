@@ -157,7 +157,7 @@ enum class LanguagePackGroup(val title: String) {
 
 /** Built-in English makes the archived en_US pack redundant. */
 internal fun groupLanguagePacks(packs: List<LanguagePack>): List<Pair<LanguagePackGroup, List<LanguagePack>>> {
-    val grouped = packs.filter { canonicalLocale(it.isoLocal) != "en_us" }.groupBy {
+    val grouped = packs.filter { canonicalLocale(it.isoLocal) != "en_us" }.distinctBy { it.id }.groupBy {
         when {
             isEnglishFontPack(it.isoLocal) -> LanguagePackGroup.FontPacks
             it.published != null -> LanguagePackGroup.Translations

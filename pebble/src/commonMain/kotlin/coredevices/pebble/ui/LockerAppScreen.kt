@@ -671,7 +671,7 @@ fun LockerAppScreen(topBarParams: TopBarParams, uuid: Uuid?, navBarNav: NavBarNa
 //                                AppType.Watchface -> entry.commonAppType.allScreenshotUrls.drop(1)
 //                                AppType.Watchapp -> entry.commonAppType.allScreenshotUrls
 //                            }
-                                storeEntry.commonAppType.allScreenshotUrls.drop(1)
+                                storeEntry.commonAppType.allScreenshotUrls.drop(1).distinct()
                             }
 
                             else -> emptyList()

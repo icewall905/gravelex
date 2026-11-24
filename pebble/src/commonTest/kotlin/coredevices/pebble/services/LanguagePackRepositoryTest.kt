@@ -96,6 +96,16 @@ class LanguagePackRepositoryTest {
     }
 
     @Test
+    fun duplicatePackIdsAppearOnlyOnceInThePicker() {
+        val translation = published.asLanguagePack()
+        val duplicate = translation.copy(published = null)
+
+        val groups = groupLanguagePacks(listOf(translation, duplicate))
+
+        assertEquals(listOf(LanguagePackGroup.Translations to listOf(translation)), groups)
+    }
+
+    @Test
     fun emptyPublishedListRetainsLegacyCatalog() {
         val old = listOf(legacy("de_DE"), legacy("he_IL"))
         assertEquals(old, selectLanguagePacks(old, emptyList(), WatchHardwarePlatform.CORE_ASTERIX, "de-DE"))

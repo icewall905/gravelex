@@ -439,7 +439,7 @@ fun PreferredSourcesScreen(nav: NavBarNav, topBarParams: TopBarParams) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
-        items(shared.entries.toList(), key = { (ref, _) -> "${ref.category}/${ref.item}" }) { (ref, plugins) ->
+        items(shared.entries.toList(), key = { (ref, _) -> "${ref.category.length}:${ref.category}${ref.item}" }) { (ref, plugins) ->
             val chosen = plugins.firstOrNull { it.pluginUuid == preferred["${ref.category}/${ref.item}"] }
             var expanded by remember { mutableStateOf(false) }
             ListItem(

@@ -801,9 +801,9 @@ fun LockerScreen(
                                     }
                                 }
                                 items(
-                                    home.collections,
+                                    home.collections.distinctBy { it.slug },
                                     contentType = { "app_carousel_collection" },
-                                    key = { "collection_${source.id}_${it.slug}" }) { collection ->
+                                    key = { "app_collection:${source.id}/${it.slug}" }) { collection ->
                                     val (excludedStoreIds, excludedUuids) = seenInHigherFeeds[source.id] ?: Pair(emptySet<String>(), emptySet<String>())
                                     val collectionApps =
                                         remember(
@@ -1142,7 +1142,7 @@ fun AppCarousel(
                     highlightInLocker = highlightInLocker,
                 )
             }
-            items(nativePlugins, key = { it.pluginUuid }) { plugin ->
+            items(nativePlugins, key = { "native-plugin:${it.pluginUuid}" }) { plugin ->
                 NativePluginCard(plugin, navBarNav)
             }
         }

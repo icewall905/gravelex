@@ -480,7 +480,7 @@ fun OnboardingAppCarousel(
             )
         }?.filter {
             it.isNativelyCompatible && it.uuid !in initialAllCollectionUuids
-        }?.take(5)
+        }?.distinctBy { it.uuid }?.take(5)
     }
     if (apps.isNullOrEmpty()) {
         return
