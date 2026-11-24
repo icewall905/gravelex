@@ -397,7 +397,8 @@ data class SettingsItem(
     val isDebugSetting: Boolean,
     val onDisplayed: (@Composable () -> Unit)? = null,
 ) {
-    val key: String get() = "${group?.name.orEmpty()}/$title"
+    internal val key: String
+        get() = "${topLevelType.name}/${section.name}/${group?.name.orEmpty()}/${id ?: title}"
 
     /** Every word of [query] is somewhere in the title, keywords or group, so "activity insights" finds "Activity" in Insights. */
     fun matches(query: String): Boolean {
@@ -412,16 +413,30 @@ data class SettingsItem(
     }
 }
 
+internal fun settingsListKeys(items: List<SettingsItem>): List<String> {
+    val occurrences = mutableMapOf<String, Int>()
+    return items.map { setting ->
+        val base = setting.key
+        val occurrence = occurrences.getOrPut(base) { 0 }
+        occurrences[base] = occurrence + 1
+        "setting:$base/$occurrence"
+    }
+}
+
 /** [items] in order, each group gathered where its first item is, in a card under its heading. */
 private fun LazyListScope.settingsItems(items: List<SettingsItem>) {
-    items.groupBy { it.group ?: it.key }.values.forEach { run ->
-        val group = run.first().group
+    items.zip(settingsListKeys(items)).groupBy { (setting, key) ->
+        setting.group?.let { "group:${setting.section.name}/${it.name}" } ?: key
+    }.forEach { (key, run) ->
+        val group = run.first().first.group
         if (group == null) {
-            items(items = run, key = { it.key }) { it.Item() }
+            item(key = key) { run.single().first.Item() }
             return@forEach
         }
-        item(key = "group:${group.name}") {
-            CardGroup(group.title, run, Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { it.Item() }
+        item(key = key) {
+            CardGroup(group.title, run, Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { (setting, _) ->
+                setting.Item()
+            }
         }
     }
 }
@@ -2916,12 +2931,6 @@ fun rememberSettingsItemsState(navBarNav: NavBarNav?, snackbarDisplay: SnackbarD
                     section = Section.Apps,
                     group = SettingsGroup.AppUsage,
                     action = { nav.navigateTo(PebbleNavBarRoutes.AppActivityRoute) },
-                ) },
-                navBarNav?.let { nav -> basicSettingsActionItem(
-                    title = "Configure Appstore Sources",
-                    topLevelType = TopLevelType.Phone,
-                    section = Section.Apps,
-                    action = { nav.navigateTo(PebbleNavBarRoutes.AppstoreSettingsRoute()) },
                 ) },
                 basicSettingsActionItem(
                     title = "Restore System app positions",
