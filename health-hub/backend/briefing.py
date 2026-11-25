@@ -539,8 +539,11 @@ def _write(facts, guides, system, schema):
         messages += [{"role": "assistant", "content": json.dumps(result)},
                      {"role": "user", "content": "These numbers do not appear in the facts: " + json.dumps(problems) +
                       ". Rewrite these pages using only numbers from the facts."}]
-        result, model = _chat(messages, schema)
-        result = _normalise(result, pages)
+        try:
+            retry, retry_model = _chat(messages, schema)
+            result, model = _normalise(retry, pages), retry_model
+        except (EmptyBriefing, json.JSONDecodeError):
+            log.warning("grounding retry unusable; keeping the first draft")
     remaining = _check(result, allowed)
     _scrub(result, allowed)
     return result, model, retried, remaining
@@ -606,9 +609,9 @@ def run() -> str:
     if not _running.acquire(blocking=False):
         return "busy"
     try:
-        summary = fitness.summary(42)
         started = time.time()
         try:
+            summary = fitness.summary(42)
             if summary.get("insights"):
                 summary["briefing_history"] = fitness.briefing_history(summary)
             out = generate(summary, fitness.TZ)
@@ -677,7 +680,10 @@ def daemon() -> None:
         while times == _times():
             seconds = (nxt - datetime.now(fitness.TZ)).total_seconds()
             if seconds <= 0:
-                run_household(first)
+                try:
+                    run_household(first)
+                except Exception:
+                    log.exception("scheduled briefings failed")
                 break
             time.sleep(min(30, seconds))
 
@@ -687,17 +693,20 @@ def run_household(first=False):
     people=accounts.users() or [None]
     for person in people:
         if person and not person['active']: continue
-        with accounts.as_user(person):
-            if not new_data_since_last_briefing() and not first:
-                continue
-            with fitness.connect() as db:
-                has_data=db.execute('SELECT EXISTS(SELECT 1 FROM reports) OR EXISTS(SELECT 1 FROM hrv_sessions)').fetchone()[0]
-            if not has_data: continue
-            for attempt in range(3):
-                status=run()
-                log.info("briefing run: %s",status)
-                if status!='error': break
-                time.sleep(900)
+        try:
+            with accounts.as_user(person):
+                if not new_data_since_last_briefing() and not first:
+                    continue
+                with fitness.connect() as db:
+                    has_data=db.execute('SELECT EXISTS(SELECT 1 FROM reports) OR EXISTS(SELECT 1 FROM hrv_sessions)').fetchone()[0]
+                if not has_data: continue
+                for attempt in range(3):
+                    status=run()
+                    log.info("briefing run: %s",status)
+                    if status!='error': break
+                    time.sleep(900)
+        except Exception:
+            log.exception("briefing for %s failed", (person or {}).get('username'))
 
 
 

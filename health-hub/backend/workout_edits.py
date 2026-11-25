@@ -107,6 +107,11 @@ def effective_rows(db, rows=None):
     return _with_fingerprints(result.values())
 
 
+def effective_row(db, ident):
+    base = _rows(db.execute('SELECT * FROM workouts WHERE id=?', (ident,)))
+    return next((row for row in effective_rows(db, base) if row['id'] == ident), None)
+
+
 def _number(value, label, low, high):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
         raise ValueError(f'Invalid {label}')
