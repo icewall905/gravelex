@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workout planner · Pebble Health</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/planner.css">
+<script src="/planner.js" defer></script>
+</head>
+<body>
+<main class="planner">
+  <a id="dashboard-link" href="/#training">← Training</a>
+  <h1>Workout planner</h1>
+  <button type="button" class="btn" id="sign-out" hidden>Sign out</button>
+  <p id="status" role="status">Loading your calendar…</p>
+  <details class="planner-panel" id="setup-panel">
+    <summary>Goals, availability and reminders</summary>
+    <form id="setup">
+      <label class="field">Priorities<textarea name="priorities" maxlength="1500" placeholder="What matters most to you?"></textarea></label>
+      <label class="field">Activities and equipment<textarea name="activities" maxlength="1500" placeholder="Running, strength, cycling…"></textarea></label>
+      <label class="field">Goals<textarea name="goals" maxlength="1500"></textarea></label>
+      <label class="field">Availability<textarea name="availability" maxlength="1500" placeholder="Days, time windows and session lengths"></textarea></label>
+      <label class="field">Calendar timezone<input name="timezone" required maxlength="100" placeholder="Europe/Copenhagen"></label>
+      <label class="field">Morning reminder time<input name="morning" type="time"></label>
+      <label><input name="follow_up" type="checkbox"> Follow up one hour after each workout</label>
+      <p class="foot" id="reminder-help">Browser reminders work while this planner is open. For background reminders, use GravelEx on Android.</p>
+      <a class="btn" id="enable-reminders" href="/planner-native/notifications" hidden>Enable phone notifications</a>
+      <button type="button" class="btn" id="browser-reminders" hidden>Enable browser notifications</button>
+      <button class="btn primary">Save setup</button>
+    </form>
+  </details>
+  <details class="planner-panel" id="ntfy-panel" hidden>
+    <summary>ntfy reminders</summary>
+    <form id="ntfy">
+      <p id="ntfy-server"></p>
+      <label class="field">Topic<input name="topic" maxlength="64" placeholder="Leave blank to generate a private topic"></label>
+      <label><input name="enabled" type="checkbox"> Send workout reminders via ntfy</label>
+      <div class="planner-row">
+        <button class="btn primary">Save ntfy settings</button>
+        <button type="button" class="btn" id="test-ntfy">Send test notification</button>
+      </div>
+      <p id="ntfy-status" role="status"></p>
+    </form>
+  </details>
+  <details class="planner-panel" id="model-settings">
+    <summary>Trainer model and memory settings</summary>
+    <form id="model">
+      <label class="field">LLM endpoint<select name="base_url" required></select></label>
+      <label class="field">Model<input name="model" maxlength="120" required></label>
+      <label><input name="web_search" type="checkbox"> Allow Trainer to search public sources</label>
+      <p class="foot">Trainer can keep notes about goals and preferences and recall earlier conversations.</p>
+      <div id="saved-notes"></div>
+      <div class="planner-row">
+        <button class="btn primary">Save model settings</button>
+        <button type="button" class="btn" id="test-model">Test connection</button>
+      </div>
+      <p id="model-status" role="status"></p>
+    </form>
+  </details>
+  <section class="planner-panel" aria-labelledby="calendar-title">
+    <div class="planner-row">
+      <h2 id="calendar-title">Training calendar</h2>
+      <a id="export" class="btn" href="/api/planner/calendar.ics">Export .ics</a>
+    </div>
+    <div class="planner-row month-controls">
+      <button class="btn" id="previous" aria-label="Previous month">←</button>
+      <label class="field">Month<input type="month" id="month"></label>
+      <button class="btn" id="next" aria-label="Next month">→</button>
+      <button type="button" class="btn primary" id="add">Add workout</button>
+    </div>
+    <form id="workout" hidden>
+      <h3 id="edit-title">Add workout</h3>
+      <input name="id" type="hidden">
+      <label class="field">Workout name<input name="title" required maxlength="120"></label>
+      <label class="field">Date and time<input name="start" type="datetime-local" required></label>
+      <label class="field">Duration in minutes<input name="minutes" type="number" min="1" max="720" value="45" required></label>
+      <label class="field">Completion status<select name="status">
+        <option value="planned">Planned / unconfirmed</option><option value="done">Done</option><option value="skipped">Skipped</option><option value="rescheduled">Rescheduled</option>
+      </select></label>
+      <label class="field">Session details<textarea name="details" maxlength="4000"></textarea></label>
+      <div class="planner-row">
+        <button class="btn primary">Save workout</button>
+        <button type="button" class="btn" id="cancel-edit">Cancel</button>
+      </div>
+    </form>
+    <div id="calendar"></div>
+    <div id="recorded"></div>
+  </section>
+  <section class="planner-panel" id="trainer" aria-labelledby="trainer-title">
+    <h2 id="trainer-title">Trainer</h2>
+    <p class="foot">Trainer uses your setup, calendar and recent health summaries when you send a message.</p>
+    <div id="messages"></div>
+    <div id="options"></div>
+    <form id="chat">
+      <p id="workout-context" hidden></p>
+      <button type="button" class="btn" id="clear-context" hidden>Clear workout context</button>
+      <label class="field">Message Trainer<textarea name="message" required maxlength="3000" placeholder="Ask for a plan, advice, or a change to your schedule"></textarea></label>
+      <div class="planner-row">
+        <button class="btn primary">Send</button>
+        <button type="button" class="btn" id="reschedule" hidden>Propose a reschedule</button>
+        <button type="button" class="btn" id="suggest">Suggest plans</button>
+      </div>
+    </form>
+    <p id="trainer-status" role="status"></p>
+  </section>
+</main>
+</body>
+</html>

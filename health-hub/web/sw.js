@@ -3,7 +3,7 @@
    API and auth requests are network-only and are never stored in Cache Storage.
    Writes (POST/PUT/…) and every other request go straight to the network. */
 'use strict';
-const VERSION = 'v60';
+const VERSION = 'v62';
 const SHELL_CACHE = 'pebble-health-shell-' + VERSION;
 const SHELL = [
   'styles.css', 'app.js', 'manifest.webmanifest',
@@ -63,5 +63,13 @@ self.addEventListener('fetch', event => {
   const rel = url.pathname.slice(scope.pathname.length);
   if (rel === 'login' || rel === 'login/' || rel.startsWith('api/') || rel.startsWith('auth/')) { event.respondWith(fetch(request)); return; }
   if (rel.startsWith('download/') || rel.startsWith('pair')) return;
+  if (rel.startsWith('planner') || rel.startsWith('planner-native/')) { event.respondWith(fetch(request)); return; }
   if (request.mode === 'navigate' || SHELL.includes(rel) || rel === '') event.respondWith(shell(request));
+});
+
+self.addEventListener('notificationclick', event => {
+  const workout = event.notification.data?.workout;
+  if (!/^[a-f0-9]{32}$/.test(workout || '')) return;
+  event.notification.close();
+  event.waitUntil(self.clients.openWindow('/planner.html?workout=' + workout));
 });

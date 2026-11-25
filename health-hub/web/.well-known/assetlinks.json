@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "org.tdgs.ph",
+      "sha256_cert_fingerprints": [
+        "50:AA:6D:C3:33:76:90:8C:FA:CC:D0:9C:21:D2:49:55:39:AC:C0:71:4F:62:46:B3:2D:59:4B:39:46:33:20:5E"
+      ]
+    }
+  }
+]

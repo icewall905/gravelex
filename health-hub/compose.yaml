@@ -31,6 +31,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+  planner-reminders:
+    <<: *common
+    command: ["python", "planner_ntfy.py"]
   briefing:
     <<: *common
     profiles: [briefing]

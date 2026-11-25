@@ -1,5 +1,6 @@
 """Versioned household sessions; upload and integration credentials stay separate."""
 import os
+import re
 import secrets
 import threading
 import time
@@ -42,7 +43,7 @@ def install(app, web_dir):
     @app.before_request
     def protect():
         path = request.path
-        if path.startswith('/fitness/') or path.startswith('/api/v1/') or path == '/healthz':
+        if path.startswith('/fitness/') or path.startswith('/api/v1/') or path in ('/healthz', '/.well-known/assetlinks.json'):
             return None
         if not configured():
             return jsonify(error='dashboard_setup_required'), 503
@@ -53,6 +54,10 @@ def install(app, web_dir):
             session.clear()
             if path.startswith('/api/') or path.startswith('/auth/'):
                 return jsonify(error='login_required'), 401
+            if path == '/planner.html':
+                return redirect('/login?planner=1' + ('&android=1' if request.args.get('android') == '1' else '')
+                                + ('&settings=1' if request.args.get('settings') == '1' else '')
+                                + ('&workout=' + request.args['workout'] if re.fullmatch(r'[a-f0-9]{32}', request.args.get('workout', '')) else ''))
             return redirect('/login')
         accounts.bind(user)
         if request.method not in ('GET','HEAD','OPTIONS'):
@@ -83,18 +88,26 @@ def install(app, web_dir):
         if len(request.get_data()) >= 4096:
             return jsonify(error='request_too_large'), 413
         body=request.get_json(silent=True)
-        key=request.remote_addr or 'unknown'
+        username=body.get('username') if isinstance(body,dict) else None
+        # Per (ip, account): behind a shared proxy IP, one attacker must not lock out every user.
+        key=(request.remote_addr or 'unknown', username.strip().lower() if isinstance(username,str) and len(username)<=40 else '\0')
+        # Per-client cap against username spraying and LRU flushing; needs real
+        # client IPs (TRUSTED_PROXY_HOPS>0), else every client shares one bucket.
+        raw_hops=os.environ.get('TRUSTED_PROXY_HOPS','0').strip()
+        client_key=(key[0],None) if raw_hops.isdigit() and int(raw_hops)>0 else None
         now=time.monotonic()
         with _lock:
             attempts=[t for t in _attempts.get(key,[]) if now-t < 300]
-            if len(attempts)>=5:
+            client_attempts=[t for t in _attempts.get(client_key,[]) if now-t < 300] if client_key else []
+            if len(attempts)>=5 or len(client_attempts)>=30:
                 return jsonify(error='too_many_attempts'),429,{'Retry-After':'300'}
-            attempts.append(now)
-            _attempts[key]=attempts
-            _attempts.move_to_end(key)
+            for k,recent in ((key,attempts),(client_key,client_attempts)):
+                if k is None: continue
+                recent.append(now)
+                _attempts[k]=recent
+                _attempts.move_to_end(k)
             while len(_attempts)>1024: _attempts.popitem(last=False)
         password=body.get('password') if isinstance(body,dict) else None
-        username=body.get('username') if isinstance(body,dict) else None
         user=accounts.find_username(username) if isinstance(username,str) and len(username)<=40 else None
         digest=user['password_hash'] if user else _DUMMY_HASH
         valid=isinstance(password,str) and len(password)<=1024 and check_password_hash(digest,password)
@@ -109,6 +122,8 @@ def install(app, web_dir):
 
     @app.post('/auth/logout')
     def logout():
+        # protect() guarantees a current session; bumping its version revokes copied cookies too.
+        accounts.end_sessions(session['user_id'])
         session.clear()
         response=jsonify(ok=True)
         response.headers['Clear-Site-Data']='"cache", "storage"'

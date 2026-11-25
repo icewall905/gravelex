@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import briefing
 import insights
@@ -23,12 +24,13 @@ import provenance
 import watch_api
 import workout_edits
 import dashboard_auth
+import planner
 import api_tokens
 import accounts
 
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent / "web"))
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
-DOWNLOADS = {"status": "pebble-health-sync.pbw", "gravelex": "GravelEx.apk", "hrv": "pebblefit-hrv.pbw", "history": "pebblefit-history.pbw", "today": "pebblefit-today.pbw", "gravel-spo2": "gravel-pebblefit-spo2-debug.apk", "gravel-spo2-source": "gravel-pebblefit-spo2-source.zip"}
+DOWNLOADS = {"assist": "ha-assist.pbw", "status": "pebble-health-sync.pbw", "gravelex": "GravelEx.apk", "hrv": "pebblefit-hrv.pbw", "history": "pebblefit-history.pbw", "today": "pebblefit-today.pbw", "gravel-spo2": "gravel-pebblefit-spo2-debug.apk", "gravel-spo2-source": "gravel-pebblefit-spo2-source.zip"}
 PAIR_PURPOSE = {
     "hrv": ("HRV measurements", "This watch app will be allowed to upload overnight and manual pulse-interval measurements. It cannot read your history."),
     "history": ("health history", "This watch app will be allowed to upload minute-level heart rate, movement, workouts and sleep sessions. It cannot read your history."),
@@ -36,6 +38,17 @@ PAIR_PURPOSE = {
 }
 
 app = Flask(__name__, static_folder=None)
+
+
+def trust_proxy(wsgi_app):
+    raw = os.environ.get("TRUSTED_PROXY_HOPS", "0").strip() or "0"
+    if not raw.isdigit():
+        raise RuntimeError(f"TRUSTED_PROXY_HOPS must be a non-negative integer, got {raw!r}")
+    hops = int(raw)
+    return ProxyFix(wsgi_app, x_for=hops, x_proto=hops, x_host=0) if hops else wsgi_app
+
+
+app.wsgi_app = trust_proxy(app.wsgi_app)
 # Watch uploads and the Today read endpoint, so one hostname serves everything.
 app.register_blueprint(watch_api.blueprint())
 app.register_blueprint(api_tokens.blueprint())
@@ -61,6 +74,7 @@ def _check_host():
 
 
 dashboard_auth.install(app, lambda: WEB_DIR)
+app.register_blueprint(planner.blueprint())
 
 
 @app.after_request
@@ -174,6 +188,16 @@ def api_profile():
         return fitness.profile(_json_body())
     except (ValueError, TypeError) as error:
         return {"error": str(error)}, 400
+
+
+@app.get("/api/activity-minutes")
+def api_activity_minutes():
+    activity = fitness.activity_minutes(request.args.get('id', ''))
+    if activity is None:
+        return {"error": "Activity not found"}, 404
+    response = jsonify(activity)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.get("/api/phone-workout")

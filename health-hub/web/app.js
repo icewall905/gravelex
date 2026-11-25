@@ -307,6 +307,31 @@ function fmtAxis(v) {
   return fmt(v, v < 10 && v % 1 ? 1 : 0);
 }
 
+// Keep missing periods visible without inserting readings at missing timestamps.
+function seriesPaths(items, key, x, y, hasGap = () => false) {
+  let line = '', gaps = '', previous = null;
+  items.forEach((item, i) => {
+    if (item.breakBefore) previous = null;
+    if (!isNum(item[key])) return;
+    const point = `${x(i).toFixed(1)} ${y(item[key]).toFixed(1)}`;
+    if (!previous) {
+      line += `M${point}`;
+    } else if (i - previous.i > 1 || hasGap(previous.item, item)) {
+      gaps += `M${previous.point}L${point}`;
+      line += `M${point}`;
+    } else {
+      line += `L${point}`;
+    }
+    previous = { i, item, point };
+  });
+  return { line, gaps };
+}
+
+function drawSeries(kids, { line, gaps }, cls = 'line') {
+  if (gaps) kids.push(s('path', { class: cls, d: gaps, style: 'stroke-dasharray:2 5;stroke-opacity:.5' }));
+  if (line.includes('L')) kids.push(s('path', { class: cls, d: line }));
+}
+
 /* Line chart with gaps, optional usual-range band and optional second series. */
 function lineChart({ items, W = 340, H = 150, fmtV = v => fmt(v), unit = '', band, label, alt, dots = true, range, zeroBase }) {
   const top = 10, bottom = 22, left = 30, right = 6, ph = H - top - bottom, pw = W - left - right;
@@ -332,19 +357,11 @@ function lineChart({ items, W = 340, H = 150, fmtV = v => fmt(v), unit = '', ban
   if (band && isNum(band.lo) && isNum(band.hi)) {
     kids.push(s('rect', { class: 'band', x: left, width: pw, y: Y(band.hi), height: Math.max(1, Y(band.lo) - Y(band.hi)) }, s('title', null, `${band.label || 'Usual range'}: ${fmtV(band.lo)}–${fmtV(band.hi)} ${unit}`)));
   }
-  const path = key => {
-    let d = '', open = false;
-    items.forEach((it, i) => {
-      if (isNum(it[key])) { d += `${open && !it.breakBefore ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(it[key]).toFixed(1)}`; open = true; } else open = false;
-    });
-    return d;
-  };
   items.forEach((it, i) => {
     if (isNum(it.lo) && isNum(it.hi)) kids.push(s('line', { x1: X(i), x2: X(i), y1: Y(it.lo), y2: Y(it.hi), stroke: 'var(--mc)', 'stroke-opacity': .35, 'stroke-width': Math.max(2, Math.min(8, bw * .6)), 'stroke-linecap': 'round' }));
   });
-  if (alt) { const da = path('alt'); if (da) kids.push(s('path', { class: 'line alt', d: da })); }
-  const d = path('v');
-  if (d) kids.push(s('path', { class: 'line', d }));
+  if (alt) drawSeries(kids, seriesPaths(items, 'alt', X, Y), 'line alt');
+  drawSeries(kids, seriesPaths(items, 'v', X, Y));
   const showDots = dots && items.length <= 60;
   items.forEach((it, i) => {
     if (isNum(it.v)) {
@@ -483,11 +500,9 @@ function dayChart({ points, bars, W = 340, H = 150, unit = '', label, fmtV = v =
     const bw = pw / 24;
     points.forEach(p => { if (isNum(p.v) && p.v > 0) kids.push(s('rect', { class: 'bar', x: X(p.t) + 1, width: bw - 2, y: Y(p.v), height: Y(0) - Y(p.v), rx: 2 }, s('title', null, `${String(p.t).padStart(2, '0')}:00: ${fmtV(p.v)} ${unit}`))); });
   } else {
-    let d = '', prev = null;
-    points.filter(p => !p.snapshot).forEach(p => {
-      d += `${prev !== null && p.t - prev < 6 / 60 ? 'L' : 'M'}${X(p.t).toFixed(1)} ${Y(p.v).toFixed(1)}`; prev = p.t;
-    });
-    if (d) kids.push(s('path', { class: 'line', d, 'stroke-width': 1.6 }));
+    const readings = points.filter(p => isNum(p.v)).sort((a, b) => a.t - b.t);
+    drawSeries(kids, seriesPaths(readings, 'v', i => X(readings[i].t), Y,
+      (a, b) => a.snapshot || b.snapshot || b.t - a.t >= 6 / 60));
     points.forEach(p => {
       const lone = !p.snapshot && !points.some(q => q !== p && !q.snapshot && Math.abs(q.t - p.t) < 6 / 60);
       if (p.snapshot || lone) kids.push(s('circle', { class: `dot${p.snapshot ? ' hollow' : ''}`, cx: X(p.t), cy: Y(p.v), r: 3.2 }, s('title', null, `${hourLabel(p.t)}: ${fmtV(p.v)} ${unit}${p.snapshot ? ' (hourly snapshot)' : ''}`)));
@@ -844,12 +859,18 @@ function activityDuration(seconds) {
     ':' + String(total % 60).padStart(2, '0');
 }
 
+function activitySource(w) {
+  if (w.id?.startsWith('phone:')) return 'Phone recording';
+  if (w.id?.startsWith('pebble:')) return 'Detected by Pebble';
+  return 'Activity log';
+}
+
 function activityStats(w) {
   const active = w.active_seconds ?? w.seconds;
   return stats([['Active time', activityDuration(active)],
-    ['Distance', isNum(w.distance_m) ? fmt(w.distance_m / 1000, 2) + ' km' : '—'],
-    ['Average pace', w.distance_m > 0 ? activityDuration(active * 1000 / w.distance_m) + ' /km' : '—'],
-    ['Effort', isNum(w.rpe) ? fmt(w.rpe) + '/10' : '—']]);
+    isNum(w.distance_m) ? ['Distance', fmt(w.distance_m / 1000, 2) + ' km'] : null,
+    w.distance_m > 0 ? ['Average pace', activityDuration(active * 1000 / w.distance_m) + ' /km'] : null,
+    isNum(w.rpe) ? ['Effort', fmt(w.rpe) + '/10'] : null]);
 }
 
 function recentActivities() {
@@ -860,7 +881,7 @@ function recentActivities() {
   return h('section', {class: 'feed', 'aria-label': 'Recent activities'},
     card('workouts', 'Latest activity', {cls: 'wide latest-activity'},
       h('h3', {class:'latest-activity-name'}, cap(latest.kind || 'Workout')),
-      h('p', {class:'lede'}, fmtDateTime(latest.start)), activityStats(latest),
+      h('p', {class:'lede'}, fmtDateTime(latest.start) + ' · ' + activitySource(latest)), activityStats(latest),
       h('button', {type:'button', class:'btn primary above', onclick: () => openActivity(latest)}, 'View activity')),
     recent.length ? card('workouts', 'Recent activities', {cls: 'wide', link: 'workouts'},
       h('ul', {class:'list'}, recent.slice(0, 6).map(workoutRow))) : null);
@@ -881,57 +902,145 @@ function activityRoute(points) {
     s('circle', {cx, cy, r:4, fill:'currentColor'}));
 }
 
-function activitySeries(points, label, unit) {
+function activitySeries(points, label, unit, elapsed, metric) {
   if (!points?.length) return null;
-  const end = Math.max(1, points.at(-1)[0]);
+  const pace = unit === '/km';
+  const end = Math.max(1, elapsed, points.at(-1)[0]);
   const low = Math.min(...points.map(p => p[1])), high = Math.max(...points.map(p => p[1]));
-  const drawing = points.map((p,i) => (i === 0 || points[i - 1][2] !== p[2] ? 'M' : 'L') +
-    (8 + 364 * p[0] / end) + ',' + (102 - 94 * (p[1] - low) / Math.max(high - low, 1))).join(' ');
-  return h('section', {class:'above'}, h('h3', null, label),
-    s('svg', {viewBox:'0 0 380 110', class:'activity-route', role:'img', 'aria-label':label},
-      s('path', {d:drawing, fill:'none', stroke:'currentColor', 'stroke-width':2})),
-    h('p', {class:'lede'}, label === 'Pace' ? activityDuration(low) + '–' + activityDuration(high) + ' /km'
-      : fmt(low) + '–' + fmt(high) + ' ' + unit));
+  const spread = high - low;
+  const x = t => 48 + 316 * t / end;
+  const y = v => 16 + 85 * (spread ? (pace ? v - low : high - v) / spread : .5);
+  const value = v => pace ? activityDuration(v) : fmt(v);
+  const breaks = i => i === 0 || points[i - 1][2] !== points[i][2];
+  const drawing = points.map((p,i) => (breaks(i) ? 'M' : 'L') + x(p[0]) + ',' + y(p[1])).join(' ');
+  return h('section', {class:'activity-chart ' + metric}, h('h3', null, label),
+    s('svg', {viewBox:'0 0 380 130', role:'img', 'aria-label':`${label}, ${value(low)} to ${value(high)} ${unit}`},
+      [0, .5, 1].map(t => s('g', null,
+        s('line', {x1:48, y1:16 + 85 * t, x2:364, y2:16 + 85 * t, class:'activity-gridline'}),
+        s('text', {x:42, y:20 + 85 * t, 'text-anchor':'end'}, value(pace ? low + spread*t : high - spread*t)),
+        s('text', {x:x(end*t), y:121, 'text-anchor':'middle'}, activityDuration(end*t)))),
+      s('path', {d:drawing, fill:'none', stroke:'currentColor', 'stroke-width':2.5, 'stroke-linejoin':'round'}),
+      points.map((p,i) => breaks(i) && (i === points.length - 1 || breaks(i + 1))
+        ? s('circle', {cx:x(p[0]), cy:y(p[1]), r:3, fill:'currentColor'}) : null)),
+    h('p', {class:'foot'}, (low === high ? value(low) : value(low) + '–' + value(high)) + ' ' + unit));
+}
+
+function activityZones(samples) {
+  const max = D().profile?.hr_max;
+  if (!(max > 0) || !samples.length) return null;
+  const buckets = [0, 0, 0, 0, 0, 0];
+  samples.forEach(([bpm, seconds]) => {
+    buckets[clamp(Math.floor(bpm * 10 / max) - 4, 0, 5)] += seconds;
+  });
+  const total = buckets.reduce((a,b) => a + b, 0);
+  if (!total) return null;
+  const labels = ['Below 50%', '50–59%', '60–69%', '70–79%', '80–89%', '90% and above'];
+  return h('section', {class:'activity-breakdown'}, h('h3', null, 'Heart-rate zones'),
+    h('p', {class:'foot'}, `Recorded time · max HR ${max} bpm`),
+    h('div', {class:'activity-zones'}, buckets.map((seconds, i) =>
+      h('div', {class:'activity-zone', style:'--zone-fill:' + (100 * seconds / total) + '%'},
+        h('span', null, i ? 'Zone ' + i : 'Below zone 1'), h('small', null, labels[i]),
+        h('strong', null, activityDuration(seconds))))));
+}
+
+function activityTable(title, columns, rows) {
+  if (!rows.length) return null;
+  return h('section', {class:'activity-breakdown'}, h('h3', null, title),
+    h('table', {class:'activity-table'},
+      h('thead', null, h('tr', null, columns.map(c => h('th', {scope:'col'}, c)))),
+      h('tbody', null, rows.map(row => h('tr', null, row.map((value, i) =>
+        h(i === 0 ? 'th' : 'td', i === 0 ? {scope:'row'} : null, value)))))));
+}
+
+function watchActivityDetails(w, points) {
+  let segment = 0, last = null;
+  const heart = [], steps = [], distances = [], weighted = [];
+  points.forEach(([time, bpm, count, metres]) => {
+    if (last != null && time - last > 90) segment++;
+    if (isNum(bpm) && bpm > 0) {
+      if (heart.length && time - heart.at(-1)[0] > 90) segment++;
+      heart.push([time, bpm, segment]);
+      weighted.push([bpm, Math.min(60, w.seconds - time)]);
+    }
+    if (isNum(count)) steps.push([time, count, segment]);
+    if (isNum(metres)) distances.push(metres);
+    last = time;
+  });
+  const totalSteps = steps.reduce((sum, point) => sum + point[1], 0);
+  const recorded = weighted.reduce((sum, [, seconds]) => sum + seconds, 0);
+  return [
+    stats([
+      heart.length ? ['Average HR', fmt(weighted.reduce((sum, [bpm, seconds]) => sum + bpm * seconds, 0) / recorded), 'bpm'] : null,
+      heart.length ? ['Peak HR', fmt(Math.max(...heart.map(p => p[1]))), 'bpm'] : null,
+      steps.length ? ['Recorded steps', fmt(totalSteps)] : null,
+      distances.length ? ['Recorded distance', fmt(distances.reduce((a,b) => a+b, 0) / 1000, 2), 'km'] : null,
+    ]),
+    points.length ? h('p', {class:'foot'}, 'Watch data recorded by the minute. Missing minutes can lower step and distance totals.') :
+      h('p', {class:'lede'}, 'No watch measurements were synced for this activity.'),
+    h('div', {class:'activity-charts'},
+      activitySeries(heart, 'Heart rate', 'bpm', w.seconds, 'activity-heart'),
+      activitySeries(steps, 'Steps per minute', 'steps', w.seconds, 'activity-steps')),
+    activityZones(weighted),
+  ];
 }
 
 async function openActivity(w) {
-  const body = h('div', null);
-  openSheet(h('h2', null, cap(w.kind || 'Workout')), h('p', {class:'lede'}, fmtDateTime(w.start)),
-    activityStats(w), body, h('button', {class:'btn above', type:'button', onclick:closeSheet}, 'Close'));
-  if (!w.id?.startsWith('phone:')) {
-    body.append(h('p', {class:'lede'}, 'Watch-detected activity. Detailed phone route and sensor charts are available for phone workouts.'));
-    return;
-  }
-  body.append(h('p', {class:'lede'}, 'Loading recorded details…'));
+  const phone = w.id?.startsWith('phone:');
+  const body = h('div', {class:'activity-detail'}, h('p', {class:'lede', role:'status'}, 'Loading recorded details…'));
+  openSheet(h('header', {class:'activity-detail-head'}, h('div', null,
+      h('h2', null, cap(w.kind || 'Workout')), h('p', {class:'lede'}, fmtDateTime(w.start) + ' · ' + activitySource(w))),
+    h('button', {class:'btn small', type:'button', onclick:closeSheet}, 'Close')),
+    activityStats(w), stats([
+      w.active_seconds != null && w.seconds !== w.active_seconds ? ['Elapsed', activityDuration(w.seconds)] : null,
+      isNum(w.hr_coverage) ? ['HR coverage', fmt(w.hr_coverage * 100), '%'] : null,
+      isNum(w.load) ? ['Training load', fmt(w.load)] : null,
+      isNum(w.hr_load) && w.hr_load !== w.load ? ['HR load', fmt(w.hr_load)] : null,
+    ]), body);
   try {
-    const {summary, detail} = await api('api/phone-workout?id=' + encodeURIComponent(w.id));
+    const id = encodeURIComponent(w.id);
+    if (!phone) {
+      const {points} = await api('api/activity-minutes?id=' + id);
+      body.replaceChildren(...watchActivityDetails(w, points));
+      return;
+    }
+    const {summary, detail} = await api('api/phone-workout?id=' + id);
     const d = detail || {};
-    const heart = d.heart?.length ? d.heart : summary.heart?.map(([offset,bpm]) => [offset,bpm,0]);
+    const active = summary.active_seconds ?? w.active_seconds ?? w.seconds;
+    const weighted = (summary.heart || []).map(([, bpm, seconds]) => [bpm, seconds]);
+    let part = 0;
+    const heart = d.heart?.length ? d.heart : (summary.heart || []).map(([offset,bpm],i,rows) => {
+      if (i && offset - rows[i - 1][0] > 90) part++;
+      return [offset,bpm,part];
+    });
+    const recorded = weighted.reduce((sum, [, seconds]) => sum + seconds, 0);
+    const avg = d.average_bpm ?? (recorded ? weighted.reduce((sum, [bpm, seconds]) => sum + bpm * seconds, 0) / recorded : null);
+    const peak = d.peak_bpm ?? (heart.length ? Math.max(...heart.map(p => p[1])) : null);
     body.replaceChildren(...[
       d.title ? h('h3', null, d.title) : null, d.notes ? h('p', null, d.notes) : null,
-      activityRoute(d.route || []),
-      stats([['Elapsed', activityDuration(w.seconds)], ['Average HR', isNum(d.average_bpm) ? d.average_bpm + ' bpm' : '—'],
-        ['Peak HR', isNum(d.peak_bpm) ? d.peak_bpm + ' bpm' : '—'], ['Ascent', isNum(d.ascent) ? fmt(d.ascent) + ' m' : '—']]),
-      activitySeries(heart, 'Heart rate', 'bpm'), activitySeries(d.pace, 'Pace', '/km'),
-      activitySeries(d.elevation, 'Elevation', 'm'),
-      d.splits?.length ? h('details', {class:'above'}, h('summary', null, 'Kilometre splits'),
-        h('ol', null, d.splits.map(([time]) => h('li', null, activityDuration(time))))) : null,
-      d.laps?.length ? h('details', {class:'above'}, h('summary', null, 'Laps'),
-        h('ol', null, d.laps.map(([time, meters], i) => h('li', null,
-          activityDuration(time - (d.laps[i - 1]?.[0] ?? 0)) + ' · ' + fmt((meters - (d.laps[i - 1]?.[1] ?? 0)) / 1000, 2) + ' km')))) : null,
-      d.sets?.length ? h('details', {class:'above'}, h('summary', null, 'Strength sets'),
-        h('ol', null, d.sets.map(([name,reps,kg]) => h('li', null,
-          name + ' · ' + reps + ' reps' + (isNum(kg) ? ' · ' + fmt(kg) + ' kg' : ''))))) : null,
-      !detail ? h('p', {class:'lede'}, 'To see the route and detailed charts, enable Sync detailed workouts in the phone app, then tap Sync now on this workout.') : null
+      stats([isNum(avg) ? ['Average HR', fmt(avg), 'bpm'] : null,
+        isNum(peak) ? [d.peak_bpm != null ? 'Peak HR' : 'Highest recorded HR', fmt(peak), 'bpm'] : null,
+        isNum(d.ascent) ? ['Ascent', fmt(d.ascent), 'm'] : null]),
+      d.route?.length ? h('section', {class:'activity-breakdown'}, h('h3', null, 'GPS route'), activityRoute(d.route)) : null,
+      h('div', {class:'activity-charts'},
+        activitySeries(heart, 'Heart rate', 'bpm', active, 'activity-heart'),
+        activitySeries(d.pace, 'Pace', '/km', active, 'activity-steps'),
+        activitySeries(d.elevation, 'Elevation', 'm', active, 'activity-elevation')),
+      activityZones(weighted),
+      activityTable('Kilometre splits', ['Km', 'Time'], (d.splits || []).map(([time], i) => [i + 1, activityDuration(time)])),
+      activityTable('Laps', ['Lap', 'Time', 'Distance'], (d.laps || []).map(([time, meters], i) => [
+        i + 1, activityDuration(time - (d.laps[i - 1]?.[0] ?? 0)), fmt((meters - (d.laps[i - 1]?.[1] ?? 0)) / 1000, 2) + ' km'])),
+      activityTable('Strength sets', ['Exercise', 'Reps', 'Weight'], (d.sets || []).map(([name,reps,kg]) =>
+        [name, reps, isNum(kg) ? fmt(kg) + ' kg' : '—'])),
+      !detail ? h('p', {class:'lede'}, 'For the route, laps and more charts, enable Sync detailed workouts in Pebble Health, then tap Sync now on this recording.') : null,
     ].filter(Boolean));
   } catch (error) {
-    body.replaceChildren(h('p', {class:'lede'}, 'Could not load this workout’s details.'));
+    body.replaceChildren(h('p', {class:'lede', role:'status'}, 'Could not load this workout’s details.'));
   }
 }
 
 function workoutRow(w) {
   const mins = isNum(w.seconds) ? Math.round(w.seconds / 60) : null;
-  const sub = [fmtDateTime(w.start), mins != null ? `${mins} min` : null,
+  const sub = [fmtDateTime(w.start), activitySource(w), mins != null ? `${mins} min` : null,
     isNum(w.hr_load) ? `HR load ${fmt(w.hr_load)}` : isNum(w.hr_coverage) && w.hr_coverage < .8 ? `HR coverage ${fmt(w.hr_coverage * 100)}%` : null,
     w.overlap ? 'overlaps another recording' : null].filter(Boolean).join(', ');
   return h('li', { class: w.ignored ? 'ignored' : '' },
@@ -1647,13 +1756,14 @@ function devicesView() {
           h('p',{class:'foot'},'Motion windows use callback receipt times, not exact sample timestamps. Uncalibrated recordings remain stored for diagnostics and do not contribute to HRV recovery or stress scores. Genuine beat intervals and reconstructed tachograms use separate baselines.')];
       })() : pending('No HRV quality report yet','Open the HRV watch app to save a recording.')),
     card('device', 'Watch apps', { cls: 'wide' },
-      h('p', { class: 'lede', style: { marginTop: 0 } }, 'Install these on the watch, then pair each one in the phone app. HRV and History upload to this server; Today only reads the daily summary.'),
+      h('p', { class: 'lede', style: { marginTop: 0 } }, 'Install these on the watch. Use Pair to connect the health apps to this dashboard. HRV and History upload to this server; Today only reads the daily summary.'),
       h('ul', { class: 'list' }, [
         ['hrv', 'HRV', 'Night and daytime HRV, resting heart rate and breathing.'],
         ['history', 'History', 'Minute heart rate and steps, sleep sessions and workouts.'],
         ['today', 'Today', 'Readiness, sleep, HRV, resting pulse and training load on the watch. Read-only.'],
+        ['assist', 'Assist', 'Voice control for Home Assistant on Pebble Time 2. Requires the Home Assistant Bridge plugin.'],
       ].map(([kind, name, what]) => h('li', null, h('span', { class: 't' }, name), h('span', { class: 's' }, what),
-        h('span', { class: 'acts' }, h('a', { class: 'btn small', href: `download/${kind}`, download: '' }, 'Download'), h('a', { class: 'btn small', href: `pair?kind=${kind}` }, 'Pair')))))),
+        h('span', { class: 'acts' }, h('a', { class: 'btn small', href: `download/${kind}`, download: '' }, 'Download'), kind === 'assist' ? null : h('a', { class: 'btn small', href: `pair?kind=${kind}` }, 'Pair')))))),
   ];
 }
 const kv = (k, v) => [h('dt', null, k), h('dd', null, v)];
@@ -2177,8 +2287,8 @@ function patternsPanel() {
 const PAGES = {
   today() {
     const section = (title, ...cards) => [h('h2', { class: 'section-title' }, title), h('div', { class: 'feed' }, cards)];
-    return [recentActivities(), h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
-      h('div', { class: 'feed' }, patternsPanel()),
+    return [h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
+      h('div', { class: 'feed' }, patternsPanel()), recentActivities(),
       section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress()),
       section('Activity', CARDS.steps(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.fitness(), CARDS.train()),
       section('Body & device', CARDS.weight(), CARDS.device())];
@@ -2190,10 +2300,10 @@ const PAGES = {
     return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress())];
   },
   training() {
-    return [pageHead('Training', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('training'), trainingReviewCard(), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
+    return [pageHead('Training', null, h('a', {class:'btn primary', href:'/planner.html'}, 'Workout planner')), rangeSwitch(), h('div', { class: 'feed' }, briefPanel('training'), trainingReviewCard(), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
   },
   settings() {
-    return [pageHead('Settings'), h('div', {class:'feed'},
+    return [pageHead('Settings', null, h('a', {class:'btn', href:'/planner.html?settings=1'}, 'Trainer settings')), h('div', {class:'feed'},
       S.account?.role === 'admin' ? briefingSettingsCard() : null,
       settingsCard(), themeCard(), ownDevicesCard(), householdCard(), apiTokensCard())];
   },

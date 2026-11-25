@@ -70,7 +70,8 @@ def test_legacy_health_scoped_auth_preserves_forwarding(web, monkeypatch):
     assert client.get('/health/watchapp.pbw?t=test-master').status_code == 404
 
 
-def test_phone_workout_uses_history_scope_and_keeps_strap_metrics_out_of_watch_history(web):
+@pytest.mark.parametrize("sport", ["tennis", "beat_saber"])
+def test_phone_workout_uses_history_scope_and_keeps_strap_metrics_out_of_watch_history(web, sport):
     import time
     import uuid
     from datetime import datetime
@@ -78,7 +79,7 @@ def test_phone_workout_uses_history_scope_and_keeps_strap_metrics_out_of_watch_h
 
     start = (int(time.time()) // 86400 - 2) * 86400 + 3600
     payload = dict(id=str(uuid.uuid4()), start=start, seconds=180, active_seconds=120,
-                   type='tennis', distance_m=450, rpe=5, heart=[[0, 160, 59], [60, 180, 60]])
+                   type=sport, distance_m=450, rpe=5, heart=[[0, 160, 59], [60, 180, 60]])
     route = '/fitness/phone-workouts'
     assert web.post(route, json=payload).status_code == 401
     wrong = web.post('/api/pair?kind=hrv').get_json()['token']
@@ -100,7 +101,7 @@ def test_phone_workout_uses_history_scope_and_keeps_strap_metrics_out_of_watch_h
     fitness.profile({'hr_max': 200})
     summary = fitness.summary(7)
     workout, = summary['workouts']
-    assert (workout['source'], workout['kind'], workout['active_seconds'], workout['distance_m']) == ('phone', 'tennis', 120, 450)
+    assert (workout['source'], workout['kind'], workout['active_seconds'], workout['distance_m']) == ('phone', sport, 120, 450)
     assert workout['hr_coverage'] == .992
     assert workout['hr_load'] == 8.933
     assert workout['rpe_load'] == 10
@@ -137,3 +138,28 @@ def test_phone_activity_details_can_backfill_without_changing_summary(web):
     assert dashboard.app.test_client().get(detail_path).status_code == 401
     assert web.post(path, headers=headers, json=dict(workout, detail={'route': [[999, 12, 0]]})).status_code == 400
     assert web.get(detail_path).get_json()['detail']['heart'] == detail['heart']
+
+
+def test_watch_activity_detail_only_reads_observations_inside_activity(web):
+    import time
+    start = int(time.time()) - 600
+    token = web.post('/api/pair?kind=history').get_json()['token']
+    result = web.post('/fitness/records', headers={'Authorization': f'Bearer {token}'}, json={
+        'source': 'gravelex', 'ts': start + 180,
+        'sessions': [{'start': start, 'seconds': 120, 'type': 'walk'}],
+        'records': [
+            {'ts': start - 1, 'hr': 70, 'steps': 0},
+            {'ts': start, 'hr': 115, 'steps': 102, 'distance_m': 71.5},
+            {'ts': start + 60, 'hr': 126, 'steps': 115},
+            {'ts': start + 120, 'hr': 75, 'steps': 0},
+        ],
+    })
+    assert result.status_code == 201
+    ident = f'pebble:{start}:walk'
+    assert any(row['id'] == ident for row in web.get('/api/summary').get_json()['workouts'])
+    detail = web.get('/api/activity-minutes', query_string={'id': ident})
+    assert detail.headers['Cache-Control'] == 'no-store'
+    assert detail.get_json() == {'points': [[0, 115, 102, 71.5], [60, 126, 115, None]]}
+    assert web.get('/api/activity-minutes?id=missing').status_code == 404
+    client = dashboard.app.test_client()
+    assert client.get('/api/activity-minutes', query_string={'id': ident}).status_code == 401

@@ -631,3 +631,49 @@ main.login-page { min-height: 100vh; display: grid; place-items: center; max-wid
   background: color-mix(in srgb, currentColor 8%, transparent);
   border-radius: .8rem;
 }
+
+@media (min-width: 600px) {
+  dialog.sheet:has(.activity-detail) { width: min(840px, calc(100vw - 32px)); }
+}
+.activity-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.activity-detail-head .lede { margin: 0; }
+.activity-detail > .stats:empty, .activity-charts:empty { display: none; }
+.activity-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 14px;
+}
+.activity-chart, .activity-breakdown { margin-top: 16px; }
+.activity-chart svg { display: block; width: 100%; }
+.activity-chart text { fill: var(--ink-2); font-size: 11px; }
+.activity-gridline { stroke: var(--line-2); }
+.activity-heart { color: var(--t-heart); }
+.activity-steps { color: var(--t-steps); }
+.activity-elevation { color: var(--t-breath); }
+.activity-chart h3, .activity-chart .foot { color: var(--ink); }
+.activity-zone {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) minmax(5rem, 1fr) auto;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(to right, color-mix(in srgb, var(--m-heart) 19%, transparent) var(--zone-fill), transparent var(--zone-fill));
+  font-variant-numeric: tabular-nums;
+}
+.activity-zone small { color: var(--ink-2); }
+.activity-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.activity-table th, .activity-table td { text-align: start; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+.activity-table tbody th { font-weight: 500; }
+
+/* Keep row controls clickable inside cards with a stretched heading link. */
+.card .list .acts .btn { position: relative; z-index: 1; scroll-margin-block: 90px; }
+
+@media (max-width: 599px) {
+  .activity-detail > .stats:has(.stat:nth-child(4)) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

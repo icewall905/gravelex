@@ -419,7 +419,7 @@ def ingest(data):
 
 
 
-PHONE_SPORTS = frozenset(('run', 'hike', 'walk', 'cycle', 'strength', 'tennis', 'rowing', 'yoga', 'workout'))
+PHONE_SPORTS = frozenset(('run', 'hike', 'walk', 'cycle', 'strength', 'tennis', 'rowing', 'yoga', 'beat_saber', 'workout'))
 
 
 def phone_activity_detail(value, active):
@@ -462,6 +462,25 @@ def phone_activity_detail(value, active):
         if field in value:
             result[field] = number(value[field], *bounds, field)
     return result
+
+
+def activity_minutes(ident):
+    """Read canonical watch observations within the effective activity interval."""
+    with connect() as db:
+        workout = next((row for row in workout_edits.effective_rows(db) if row['id'] == ident), None)
+        if workout is None:
+            return None
+        start = workout['start']
+        end = start + workout['seconds']
+        points = [
+            [ts - start, hr, steps, distance]
+            for ts, hr, steps, distance in db.execute(
+                """SELECT ts, hr, steps, json_extract(payload, '$.distance_m')
+                   FROM minutes WHERE ts >= ? AND ts < ? ORDER BY ts""",
+                (start, end),
+            )
+        ]
+    return {'points': points}
 
 
 def phone_activity_read(ident):
