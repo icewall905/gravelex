@@ -93,12 +93,14 @@ def intraday(db, day: date, tz, now: int) -> dict[str, Any]:
     end = int(datetime.combine(day + timedelta(days=1), time.min, tz).timestamp())
     points = []
     buckets: dict[int, int] = {}
-    for ts, hr, steps, active, intensity in db.execute(
-            "SELECT ts,hr,steps,active,json_extract(payload,'$.intensity') FROM minutes"
+    for ts, hr, steps, active, intensity, distance in db.execute(
+            "SELECT ts,hr,steps,active,json_extract(payload,'$.intensity'),"
+            "json_extract(payload,'$.distance_m') FROM minutes"
             " WHERE ts>=? AND ts<? AND ts<=? ORDER BY ts", (start, end, now + 300)):
         points.append({"ts": ts, "hr": hr if isinstance(hr, int) and 25 <= hr <= 250 else None,
                        "steps": steps, "active": active,
-                       "intensity": intensity if isinstance(intensity, (int, float)) else None})
+                       "intensity": intensity if isinstance(intensity, (int, float)) else None,
+                       "distance_m": distance if isinstance(distance, (int, float)) else None})
         if isinstance(steps, int) and steps > 0:
             key = start + ((ts - start) // 900) * 900
             buckets[key] = buckets.get(key, 0) + steps

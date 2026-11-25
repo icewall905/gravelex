@@ -1,3 +1,4 @@
+import json
 import os
 """Bounded, conservative training-load analytics (stdlib only).
 
@@ -34,6 +35,36 @@ def _round(value):
     return round(float(value), 3)
 
 
+def _minute_distance(row):
+    value = row.get("distance_m")
+    if value is None and isinstance(row.get("payload"), str):
+        try:
+            value = json.loads(row["payload"]).get("distance_m")
+        except (ValueError, AttributeError):
+            value = None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100000 else None
+
+
+def superseded(workouts):
+    """Map each watch session overlapping a phone recording to that recording.
+
+    Both are the same session seen twice: the phone one wins and the watch
+    one drops out entirely, as if removed, so it neither double counts nor
+    blocks the day's load. Rows need id, start and seconds."""
+    live = [w for w in workouts if not w.get("ignored") and w.get("id")]
+    span = lambda w: (_ts(w["start"]), _ts(w["start"]) + float(w["seconds"]))
+    phones = [(w["id"], span(w)) for w in live if w["id"].startswith("phone:")]
+    out = {}
+    for w in live:
+        if w["id"].startswith("phone:"):
+            continue
+        a0, a1 = span(w)
+        winner = next((pid for pid, (b0, b1) in phones if min(a1, b1) - max(a0, b0) > 0), None)
+        if winner:
+            out[w["id"]] = winner
+    return out
+
+
 def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=None,
             initial_fitness=None, phone_metrics=None):
     """Analyze bounded session records and confirmed local calendar days.
@@ -63,7 +94,7 @@ def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=Non
         hr = row.get("hr")
         if hr is not None and (isinstance(hr, bool) or not isinstance(hr, (int, float)) or not 1 <= hr <= 300):
             raise ValueError("heart rate must be between 1 and 300")
-        mins.append((_ts(row["ts"]), float(hr) if hr is not None else None))
+        mins.append((_ts(row["ts"]), float(hr) if hr is not None else None, _minute_distance(row)))
     mins.sort()
     out = []
     zones_by_id = {}
@@ -92,16 +123,22 @@ def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=Non
         else:
             active = seconds
             buckets = {}
-            for ts, hr in mins:
+            distance = None
+            for ts, hr, metres in mins:
                 if ts < start:
                     continue
                 if ts >= start + seconds:
                     break
+                if metres is not None:
+                    distance = (distance or 0.0) + metres
                 if hr is not None:
                     # A wall-clock minute contributes at most once to one session.
                     buckets.setdefault(int(ts // 60), hr)
             weighted_hr = [(hr, min(start + seconds, bucket * 60 + 60) - max(start, bucket * 60))
                            for bucket, hr in buckets.items()]
+            # Watch sessions get the watch's own step-based distance estimate.
+            if distance is not None and item.get("distance_m") is None:
+                item["distance_m"] = _round(distance)
         coverage = min(1.0, sum(observed for _, observed in weighted_hr) / active)
         item["hr_coverage"] = _round(coverage)
         if hr_max is not None and coverage >= .8:
@@ -115,7 +152,10 @@ def analyze(workouts, minutes, days, hr_max, load_method="hr", confirmations=Non
         if rpe is not None:
             item["rpe_load"] = _round(active / 60 * rpe)
         out.append(item)
-    # Mark meaningful overlaps before calculating either series.
+    for watch_id, phone_id in superseded(out).items():
+        next(w for w in out if w.get("id") == watch_id).update(
+            superseded_by=phone_id, ignored=True, excluded=True)
+    # Remaining overlaps are ambiguous; neither is scored.
     for i, left in enumerate(out):
         if left.get("ignored"):
             continue

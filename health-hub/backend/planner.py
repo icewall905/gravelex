@@ -17,6 +17,7 @@ import activity_review
 import fitness
 import planner_context
 import planner_ntfy
+import training
 import workout_edits
 
 
@@ -324,13 +325,15 @@ def blueprint():
             lo = datetime.combine(first, time.min, zone).timestamp()
             hi = datetime.combine(last, time.min, zone).timestamp()
             metrics = fitness.phone_workout_metrics(db)
+            rows = workout_edits.effective_rows(db)
+            duplicates = training.superseded(rows)
             recorded = [
                 {**{key: row.get(key) for key in ("id", "kind", "seconds", "source", "rpe")},
                  "start": datetime.fromtimestamp(row["start"], zone).isoformat(timespec="minutes")[:16],
                  "metrics": {key: value for key, value in metrics.get(row["id"], {}).items()
                              if key in ("distance_m", "avg_hr", "max_hr", "notes", "calories", "ascent_m")}}
-                for row in workout_edits.effective_rows(db)
-                if lo <= row["start"] < hi and not row.get("ignored")
+                for row in rows
+                if lo <= row["start"] < hi and not row.get("ignored") and row["id"] not in duplicates
             ]
         return {"workouts": recorded}
 

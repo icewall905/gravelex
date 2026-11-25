@@ -772,7 +772,8 @@ const CARDS = {
   },
 
   workouts(limit = 3, full) {
-    const ws = (D().workouts || (D().training || {}).workouts || []).slice().sort((a, b) => (b.start || 0) - (a.start || 0));
+    // Watch auto-detections duplicating a phone recording are hidden; the phone one stands for both.
+    const ws = (D().workouts || (D().training || {}).workouts || []).filter(w => !w.superseded_by).sort((a, b) => (b.start || 0) - (a.start || 0));
     const shown = full ? ws : ws.slice(0, limit);
     return card('workouts', 'Workouts', { link: full ? null : 'workouts', cls: full ? 'wide' : '' },
       shown.length ? h('ul', { class: 'list above' }, shown.map(workoutRow)) : h('p', { class: 'lede' }, 'No workouts yet. Record one with the watch’s Workout app, or log one here by effort.'),
