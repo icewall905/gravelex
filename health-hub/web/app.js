@@ -45,6 +45,8 @@ const ICON = {
   refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',
   sun: 'M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
   moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',
+  heart: 'M12 20s-7.5-4.6-7.5-10.2A4.2 4.2 0 0 1 12 7a4.2 4.2 0 0 1 7.5 2.8C19.5 15.4 12 20 12 20z',
+  body: 'M5 4h14l-1.5 16h-11zM9 9a3 3 0 0 1 6 0M12 9l1.5-2',
   chev: 'M9 6l6 6-6 6',
   back: 'M15 6l-6 6 6 6',
 };
@@ -375,39 +377,6 @@ function lineChart({ items, W = 340, H = 150, fmtV = v => fmt(v), unit = '', ban
   return s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': label || 'Line chart' }, kids);
 }
 
-/* Tiny axis-free sparkline for the watch tiles: real gaps stay visible, no grid or labels. */
-function sparkline({ items, unit = '', label, fmtV = v => fmt(v), fmtTip, bars, zeroBase = true }) {
-  const vals = items.map(i => i.v).filter(isNum);
-  if (!vals.length) return null;
-  const tip = it => `${fmtTip ? fmtTip(it) : tipLabel(it)}: ${fmtV(it.v)}${unit ? ' ' + unit : ''}${it.note ? ' (' + it.note + ')' : ''}`;
-  const W = 120, H = 32, top = 3, ph = H - 2 * top;
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (bars || zeroBase) lo = Math.min(0, lo);
-  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
-  const pad = (hi - lo) * .15;
-  if (!(bars || zeroBase)) lo -= pad;
-  hi += pad;
-  const bw = W / Math.max(1, items.length);
-  const X = i => i * bw + bw / 2, Y = v => top + ph - ((v - lo) / (hi - lo)) * ph;
-  const kids = [];
-  if (bars) {
-    items.forEach((it, i) => {
-      const x = i * bw + .75, w = Math.max(1, bw - 1.5);
-      if (isNum(it.v)) kids.push(s('rect', { class: `spark-bar${it.cls ? ' ' + it.cls : ''}`, x, y: Y(it.v), width: w, height: Math.max(1.2, top + ph - Y(it.v)), rx: Math.min(1.5, w / 3) }, s('title', null, tip(it))));
-      else kids.push(s('rect', { class: 'gapmark', x, y: top + ph - 1.5, width: w, height: 1.5 }, s('title', null, `${fmtTip ? fmtTip(it) : tipLabel(it)}: no data`)));
-    });
-  } else {
-    let d = '', open = false;
-    items.forEach((it, i) => { if (isNum(it.v)) { d += `${open ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(it.v).toFixed(1)}`; open = true; } else open = false; });
-    if (d) kids.push(s('path', { class: 'spark-line', d }));
-    // Dense series (battery observations) draw as a line; dots only where they stay readable.
-    if (items.length <= 60) items.forEach((it, i) => {
-      if (isNum(it.v)) kids.push(s('circle', { class: 'spark-dot', cx: X(i), cy: Y(it.v), r: 2.2 }, s('title', null, tip(it))));
-    });
-  }
-  return s('svg', { class: 'watch-spark', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': label || 'Trend' }, kids);
-}
-
 /* Score ring 0–100. */
 function ring(score, { size = 120, stroke = 11, sub, label, draw = true } = {}) {
   const r = (size - stroke) / 2 - 1, c = 2 * Math.PI * r, cx = size / 2;
@@ -515,6 +484,12 @@ const hourLabel = t => `${String(Math.floor(t)).padStart(2, '0')}:${String(Math.
 function legend(items) {
   return h('div', { class: 'legend' }, items.map(([cls, text]) => h('span', null, h('i', { class: cls }), text)));
 }
+/* Redraw charts at their rendered width (board.js); declarations above are hoisted. */
+barChart = responsive(barChart);
+lineChart = responsive(lineChart);
+dayChart = responsive(dayChart);
+timingChart = responsive(timingChart, 1, null);
+batteryChart = responsive(batteryChart, 1, null);
 
 function stockVariabilityDetail() {
   const model=stockVariability(), all=(model.points||[]).filter(p=>isNum(p.ts)&&isNum(p.value_ms));
@@ -873,20 +848,6 @@ function activityStats(w) {
     isNum(w.rpe) ? ['Effort', fmt(w.rpe) + '/10'] : null]);
 }
 
-function recentActivities() {
-  const rows = (D().workouts || []).filter(w => !w.ignored && w.start <= (D().now || nowSec()))
-    .sort((a, b) => b.start - a.start);
-  if (!rows.length) return null;
-  const [latest, ...recent] = rows;
-  return h('section', {class: 'feed', 'aria-label': 'Recent activities'},
-    card('workouts', 'Latest activity', {cls: 'wide latest-activity'},
-      h('h3', {class:'latest-activity-name'}, cap(latest.kind || 'Workout')),
-      h('p', {class:'lede'}, fmtDateTime(latest.start) + ' · ' + activitySource(latest)), activityStats(latest),
-      h('button', {type:'button', class:'btn primary above', onclick: () => openActivity(latest)}, 'View activity')),
-    recent.length ? card('workouts', 'Recent activities', {cls: 'wide', link: 'workouts'},
-      h('ul', {class:'list'}, recent.slice(0, 6).map(workoutRow))) : null);
-}
-
 function activityRoute(points) {
   if (!points.length) return null;
   const base = points[0][1], scale = Math.cos(points[0][0] * Math.PI / 180);
@@ -1130,75 +1091,6 @@ function sleepPulseCard() {
     ? [big(fmt(reading.pulse,1),'bpm'), h('p',{class:'foot'},`${reading.samples} recorded samples across ${reading.blocks} sleep periods · ${reading.night}`)]
     : pending('No sleep pulse summary yet', reading ? `Pulse was recorded in ${reading.blocks} of 3 required periods.` : 'Waiting for timed sleep and pulse recorded during it.'));
 }
-function watchHero() {
-  const r = readinessNow(), sl = rec().sleep || {}, hs = rec().hrv_status || {}, n = lastNight();
-  const d = D(), activity = d.current_activity || {}, battery = d.watch_battery || {};
-  const oxygen = d.oxygen || {}, oxygenLatest = oxygen.latest || {};
-  const weight = d.weight || {}, weightLatest = weight.latest || {};
-  const training = d.training || {}, trainingLatest = training.latest || {};
-  const intensity = (d.fitness || {}).intensity || {};
-  const sleepByNight = byNight(rec().sleep_nights, 'night');
-  const stress = daytimeStressNow();
-  const latestHr = todayObs().filter(o => isNum(o.hr)).at(-1);
-  const hr = new Date().getHours();
-  const greet = hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
-  const name = wearer();
-  const score = r.score, stockPulseCurrent=stock().mode==='stock_firmware_estimates' && stockPulse().latest?.night===todayISO();
-  const pulse = stockPulseCurrent && isNum(stockPulse().latest?.pulse) ? stockPulse().latest : (isLastNight(n) && isNum(n.resting_hr) ? n : null);
-  const pulseValue = pulse && isNum(pulse.pulse) ? `${fmt(pulse.pulse)} bpm` : pulse && isNum(pulse.resting_hr) ? `${fmt(pulse.resting_hr)} bpm` : null;
-  const pulseAt = pulse?.observed_at || pulse?.ts;
-  const activityAt = activity.observed_at?.steps || activity.ts;
-  const batteryValue = isNum(battery.percent) && battery.status !== 'stale' ? `${fmt(battery.percent)}%` : null;
-  const readinessValue = isNum(score) ? `${fmt(score)} · ${readinessWord(score)}` : isNum(r.sleep_based_score) ? `${fmt(r.sleep_based_score)} · sleep-only` : null;
-  /* Seven-day series feeding the tiny per-tile graphs; gaps stay gaps. */
-  const week = dateSpan(7);
-  const readinessHist = new Map((rec().readiness_history || []).map(row => [row.day, row]));
-  const hrvByNight = byNight(rec().nights, 'night');
-  const oxDaily = new Map((oxygen.daily || []).map(row => [row.date, row]));
-  const weightByDay = new Map(((d.weight || {}).entries || []).map(e => [e.date, e]));
-  const intensityDays = new Map((intensity.days || []).map(row => [row.date, row]));
-  const pulseByNight = byNight(stockPulse().points || [], 'night');
-  const loadHist = historyMap();
-  const spark = {
-    ready: sparkline({ items: week.map(day => ({ key: day, label: day, v: (readinessHist.get(day) || {}).readiness?.score ?? null })), unit: 'of 100', label: 'Readiness, last 7 days' }),
-    sleep: sparkline({ items: week.map(day => { const n = sleepByNight.get(day); return { key: day, label: day, v: isNum(n?.sleep_s) ? n.sleep_s / 3600 : null }; }), unit: 'h', fmtV: v => fmt(v, 1), label: 'Sleep per night, last 7 nights' }),
-    stress: sparkline({items:week.map(day=>({key:day,label:day,v:(stress.daily || []).find(d=>d.date===day)?.score ?? null})),unit:'of 100',label:'Estimated stress, last 7 days'}),
-    steps: sparkline({ bars: true, zeroBase: true, items: hourlySteps(todayObs()), unit: 'steps', fmtTip: it => `${it.t}:00`, label: 'Steps per hour today' }),
-    hr: sparkline({ zeroBase: false, items: todayObs().filter(o => isNum(o.hr)).map(o => ({ key: o.ts, label: o.ts, v: o.hr, ts: o.ts })), unit: 'bpm', fmtTip: it => fmtClock(it.ts), label: 'Heart rate today' }),
-    pulse: sparkline({ zeroBase: false, items: week.map(day => { const n = pulseByNight.get(day); return { key: day, label: day, v: isNum(n?.pulse) ? n.pulse : null }; }), unit: 'bpm', label: 'Overnight pulse, last 7 nights' }),
-    hrv: sparkline({ zeroBase: false, items: week.map(day => { const n = hrvByNight.get(day); return { key: day, label: day, v: isNum(n?.rmssd_ms) ? n.rmssd_ms : null }; }), unit: 'ms', fmtV: v => fmt(v, 1), label: 'Nightly HRV, last 7 nights' }),
-    oxygen: sparkline({ zeroBase: false, items: week.map(day => { const n = oxDaily.get(day); return { key: day, label: day, v: isNum(n?.percent) ? n.percent : null }; }), unit: '%', fmtV: v => fmt(v, 1), label: 'Blood oxygen, last 7 days' }),
-    weight: sparkline({ zeroBase: false, items: week.map(day => { const e = weightByDay.get(day); return { key: day, label: day, v: isNum(e?.kg) ? e.kg : null }; }), unit: 'kg', fmtV: v => fmt(v, 1), label: 'Weight, last 7 days' }),
-    train: sparkline({ bars: true, items: week.map(day => { const row = loadHist.get(day); return { key: day, label: day, v: isNum(row?.load) ? row.load : null }; }), unit: 'load', fmtV: v => fmt(v, 0), label: 'Daily training load, last 7 days' }),
-    intensity: sparkline({ bars: true, items: week.map(day => { const n = intensityDays.get(day); return { key: day, label: day, v: isNum(n?.moderate) || isNum(n?.vigorous) ? (n.moderate || 0) + 2 * (n.vigorous || 0) : null }; }), unit: 'min', label: 'Intensity minutes, last 7 days' }),
-    battery: sparkline({ zeroBase: false, items: (battery.series || []).map(p => ({ key: p.ts, label: p.ts, v: p.percent, ts: p.ts })), unit: '%', fmtTip: it => fmtDateTime(it.ts), label: 'Watch battery, last 7 days' }),
-  };
-  return h('article', { class: 'watch', 'data-m': 'ready' },
-    h('div', { class: 'watch-top' },
-      h('h1', { class: 'watch-hello' }, name ? `${greet}, ${name}` : greet),
-      h('p', { class: 'watch-date' }, new Date().toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' }))),
-    h('div', { class: 'watch-metrics' },
-      watchMetric('ready', 'Readiness', readinessValue, isNum(score) || isNum(r.sleep_based_score) ? 'estimated · today' : 'Not enough data', 'ready', spark.ready),
-      watchMetric('sleep', 'Sleep', isNum(sl.sleep_s) ? fmtDur(sl.sleep_s, true) : null, isNum(sl.sleep_s) ? (sl.night ? `night of ${fmtDay(sl.night)}` : 'last night') : 'No overnight reading', 'sleep', spark.sleep),
-      watchMetric('stress', 'Stress', isNum(stress.score ?? stress.today?.score) ? `${fmt(stress.score ?? stress.today.score)} / 100` : null, isNum(stress.score) ? `estimated · ${fmtClock(stress.measured_at)}` : isNum(stress.today?.score) ? 'Estimated · today’s quiet periods' : 'Quiet pulse estimate · view coverage', 'stress', spark.stress),
-      watchMetric('steps', 'Steps', isNum(activity.steps) ? fmt(activity.steps) : null, isNum(activity.steps) ? `partial · ${activityAt ? fmtClock(activityAt) : 'today'}` : 'No activity yet', 'steps', spark.steps),
-      watchMetric('heart', 'Heart rate', latestHr ? `${fmt(latestHr.hr)} bpm` : null, latestHr ? fmtClock(latestHr.ts) : 'No reading today', 'heart', spark.hr),
-      watchMetric('heart', stock().mode==='stock_firmware_estimates' ? 'Overnight pulse' : 'Resting HR', pulseValue, pulseAt ? `${stock().mode==='stock_firmware_estimates' ? 'estimated · ' : ''}${fmtDateTime(pulseAt)}` : 'No overnight reading', 'rhr', spark.pulse),
-      watchMetric('hrv', ppiSourceUnverified() ? 'HRV proxy estimate' : 'HRV', ppiSourceUnverified() && latestPpiProxy() ? `${fmt(latestPpiProxy().value_ms,1)} ms` : null, ppiSourceUnverified() && latestPpiProxy() ? `unvalidated · ${fmtDateTime(latestPpiProxy().ts)}` : 'Not available yet', 'hrv', spark.hrv),
-      watchMetric('oxygen', 'Blood oxygen', isNum(oxygenLatest.percent) ? `${fmt(oxygenLatest.percent, 1)}%` : null, oxygenLatest.ts ? fmtDateTime(oxygenLatest.ts) : 'No samples yet', 'oxygen', spark.oxygen),
-      watchMetric('weight', 'Weight', isNum(weightLatest.kg) ? `${fmt(weightLatest.kg, 1)} kg` : null, weightLatest.date ? `measured ${fmtDay(weightLatest.date)}` : 'No dated reading', 'weight', spark.weight),
-      watchMetric('train', 'Training load', isNum(trainingLatest.load7) ? fmt(trainingLatest.load7, 1) : null, isNum(trainingLatest.load7) ? '7-day load' : 'Needs history', 'train', spark.train),
-      watchMetric('intensity', 'Intensity', isNum(intensity.this_week) ? `${fmt(intensity.this_week)} min` : null, isNum(intensity.this_week) ? 'this week' : 'No weekly total', 'train', spark.intensity),
-      watchMetric('device', 'Watch battery', batteryValue, batteryValue ? (battery.observed_at ? fmtDateTime(battery.observed_at) : 'fresh reading') : battery.status === 'stale' ? 'Stale reading' : 'No reading', 'device', spark.battery)));
-}
-function watchMetric(m, label, value, meta, link, spark) {
-  return h('a', { class: `watch-metric${value ? '' : ' is-empty'}`, 'data-m': m, href: `#d/${link || m}`, 'aria-label': `${label}: ${value || meta || 'No data'}`, title: `${label}: ${value || '—'} · ${meta || 'No data'}` },
-    h('span', { class: 'watch-metric-label' }, h('i'), label),
-    h('strong', { class: 'watch-metric-value' }, value || '—'),
-    spark || null,
-    h('span', { class: 'watch-metric-meta' }, meta || 'No data'));
-}
-
 /* ================================================================== *
  * Detail views
  * ================================================================== */
@@ -1272,8 +1164,8 @@ function oxygenCard(detailed=false) {
 /* Battery detail chart: time-scaled charge curve over the stored 7-day series.
    Slope colours separate charging, discharging and held stretches; the line
    joins across periods the watch was off or disconnected. */
-function batteryChart(series) {
-  const W = chartW(), H = 300, top = 14, bottom = 26, left = 34, right = 10;
+function batteryChart(series, W = chartW()) {
+  const H = 300, top = 14, bottom = 26, left = 34, right = 10;
   const ph = H - top - bottom, pw = W - left - right;
   const t0 = series[0].ts, t1 = Math.max(series[series.length - 1].ts, t0 + 1);
   const X = ts => left + ((ts - t0) / (t1 - t0)) * pw;
@@ -1576,6 +1468,7 @@ const DETAIL = {
     },
   },
 
+  patterns: { title: 'Patterns and planning', m: 'steps', noRange: true, render() { return patternsPanel() || [pending('No pattern report yet', 'Patterns appear after a week of recorded days.')]; } },
   device: { title: 'Watch battery and sync', m: 'device', noRange: true, render() { return [batteryDetail(), ...devicesView()]; } },
 };
 
@@ -2166,9 +2059,10 @@ function toast(msg, isErr) {
  * ================================================================== */
 const TABS = [
   { id: 'today', label: 'Today' }, { id: 'sleep', label: 'Sleep' }, { id: 'recovery', label: 'Recovery' },
-  { id: 'training', label: 'Training' }, { id: 'more', label: 'More' }, { id: 'settings', label: 'Settings' },
+  { id: 'training', label: 'Training' }, { id: 'heart', label: 'Heart', desktop: true }, { id: 'body', label: 'Body', desktop: true },
+  { id: 'more', label: 'More' }, { id: 'settings', label: 'Settings' },
 ];
-const DETAIL_TAB = { oxygen:'recovery', weight: 'today', ready: 'recovery', sleep: 'sleep', hrv: 'recovery', rhr: 'recovery', breath: 'recovery', stress: 'recovery', steps: 'today', heart: 'today', train: 'training', workouts: 'training', calendar: 'training', device: 'more' };
+const DETAIL_TAB = { patterns: 'today', oxygen:'recovery', weight: 'body', ready: 'recovery', sleep: 'sleep', hrv: 'recovery', rhr: 'recovery', breath: 'recovery', stress: 'recovery', steps: 'today', heart: 'heart', train: 'training', workouts: 'training', calendar: 'training', device: 'more' };
 
 function route() {
   const raw = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
@@ -2177,7 +2071,8 @@ function route() {
 }
 
 function renderNav(active) {
-  const mk = bottom => TABS.map(t => h('a', { href: `#${t.id}`, 'aria-current': t.id === active ? 'page' : null }, icon(t.id), h('span', null, t.label)));
+  // The phone tab bar keeps the six original tabs; Heart and Body stay reachable from cards.
+  const mk = bottom => TABS.filter(t => !bottom || !t.desktop).map(t => h('a', { href: `#${t.id}`, 'aria-current': t.id === active ? 'page' : null }, icon(t.id), h('span', null, t.label)));
   document.querySelector('.tabs-top').replaceChildren(...mk(false));
   document.querySelector('.tabs-bottom').replaceChildren(...mk(true));
 }
@@ -2285,23 +2180,12 @@ function patternsPanel() {
 }
 
 const PAGES = {
-  today() {
-    const section = (title, ...cards) => [h('h2', { class: 'section-title' }, title), h('div', { class: 'feed' }, cards)];
-    return [h('div', { class: 'hero-row' }, watchHero(), briefPanel('today')),
-      h('div', { class: 'feed' }, patternsPanel()), recentActivities(),
-      section('Sleep & recovery', CARDS.sleep(), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress()),
-      section('Activity', CARDS.steps(), CARDS.intensity(), CARDS.energy(), CARDS.heart(), CARDS.fitness(), CARDS.train()),
-      section('Body & device', CARDS.weight(), CARDS.device())];
-  },
-  sleep() {
-    return [pageHead('Sleep', null, rangeSwitch()), h('div', { class: 'feed' }, briefPanel('sleep', { regenerate: true }), sleepPulseCard(), DETAIL.sleep.render())];
-  },
-  recovery() {
-    return [pageHead('Recovery'), h('div', { class: 'feed' }, briefPanel('recovery'), DETAIL.ready.render().filter(n => n.tagName !== 'P'), CARDS.hrv(), CARDS.rhr(), oxygenCard(), CARDS.stress())];
-  },
-  training() {
-    return [pageHead('Training', null, h('a', {class:'btn primary', href:'/planner.html'}, 'Workout planner')), rangeSwitch(), h('div', { class: 'feed' }, briefPanel('training'), trainingReviewCard(), DETAIL.train.render(), CARDS.fitness(), CARDS.intensity(), CARDS.workouts(5), CARDS.calendar())];
-  },
+  today: () => todayBoard(),
+  sleep: () => sleepFocus(),
+  recovery: () => recoveryFocus(),
+  training: () => trainingFocus(),
+  heart: () => heartFocus(),
+  body: () => bodyFocus(),
   settings() {
     return [pageHead('Settings', null, h('a', {class:'btn', href:'/planner.html?settings=1'}, 'Trainer settings')), h('div', {class:'feed'},
       S.account?.role === 'admin' ? briefingSettingsCard() : null,
@@ -2320,6 +2204,7 @@ const PAGES = {
 };
 
 function render() {
+  resetCharts();
   const main = document.getElementById('main');
   const r = route();
   renderNav(r.tab);

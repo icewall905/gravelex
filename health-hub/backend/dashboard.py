@@ -122,6 +122,36 @@ def public_config():
             "source_url": os.environ.get("SOURCE_URL", "")}
 
 
+@app.get("/api/daily")
+def api_daily():
+    """Per-day rollups for long-range dashboard views (year heatmap, trends)."""
+    import daily
+    try:
+        today = datetime.now(fitness.TZ).date()
+        last = date.fromisoformat(request.args["to"]) if request.args.get("to") else today
+        first = date.fromisoformat(request.args["from"]) if request.args.get("from") else last - timedelta(days=364)
+        if first > last or (last - first).days > 730:
+            raise ValueError
+    except ValueError:
+        return {"error": "Invalid date range"}, 400
+    now = int(time.time())
+    with fitness.connect() as db:
+        return {"items": daily.rollup(db, first, last, fitness.TZ, now)}
+
+
+@app.get("/api/intraday")
+def api_intraday():
+    """One local day of minute HR/steps plus its sleep sessions."""
+    import daily
+    try:
+        day = date.fromisoformat(request.args["date"]) if request.args.get("date") else datetime.now(fitness.TZ).date()
+    except ValueError:
+        return {"error": "Invalid date"}, 400
+    now = int(time.time())
+    with fitness.connect() as db:
+        return daily.intraday(db, day, fitness.TZ, now)
+
+
 @app.get("/api/oxygen")
 def api_oxygen():
     try:
