@@ -208,6 +208,11 @@ def change_user(ident,body,actor):
     return get_user(ident)
 
 
+def end_sessions(user_id):
+    with connect() as db:
+        db.execute('UPDATE users SET session_version=session_version+1 WHERE id=?',(user_id,))
+
+
 def add_device(user_id,body):
     if not isinstance(body,dict): raise ValueError('Expected a device object')
     name=valid_name(body.get('name'))

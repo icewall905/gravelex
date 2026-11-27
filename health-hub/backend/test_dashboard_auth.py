@@ -42,6 +42,37 @@ def test_fail_closed_and_rate_limit(client,monkeypatch):
         assert client.post('/auth/login',json={'username':'admin','password':'wrong'},headers={'X-PH-Request':'1'}).status_code==401
     assert login(client).status_code==429
 
+def test_rate_limit_keyed_by_username(client):
+    for _ in range(5):
+        assert client.post('/auth/login',json={'username':'mallory','password':'wrong'},headers={'X-PH-Request':'1'}).status_code==401
+    assert client.post('/auth/login',json={'username':'mallory','password':'wrong'},headers={'X-PH-Request':'1'}).status_code==429
+    assert login(client).status_code==200
+
+def test_rate_limit_behind_trusted_proxy(client,monkeypatch):
+    monkeypatch.setenv('TRUSTED_PROXY_HOPS','1')
+    monkeypatch.setattr(dashboard.app,'wsgi_app',dashboard.trust_proxy(dashboard.app.wsgi_app))
+    proxy={'REMOTE_ADDR':'172.18.0.1'}
+    attacker={'X-PH-Request':'1','X-Forwarded-For':'203.0.113.9'}
+    for _ in range(5):
+        assert client.post('/auth/login',json={'username':'admin','password':'wrong'},headers=attacker,environ_base=proxy).status_code==401
+    assert client.post('/auth/login',json={'username':'admin','password':'test-password-123'},headers=attacker,environ_base=proxy).status_code==429
+    owner={'X-PH-Request':'1','X-Forwarded-For':'198.51.100.7'}
+    assert client.post('/auth/login',json={'username':'admin','password':'test-password-123'},headers=owner,environ_base=proxy).status_code==200
+    sprayer={'X-PH-Request':'1','X-Forwarded-For':'203.0.113.10'}
+    for i in range(30):
+        assert client.post('/auth/login',json={'username':f'user{i}','password':'wrong'},headers=sprayer,environ_base=proxy).status_code==401
+    assert client.post('/auth/login',json={'username':'admin','password':'test-password-123'},headers=sprayer,environ_base=proxy).status_code==429
+    monkeypatch.setenv('TRUSTED_PROXY_HOPS','yes')
+    with pytest.raises(RuntimeError): dashboard.trust_proxy(dashboard.app.wsgi_app)
+
+def test_logout_revokes_copied_cookie(client):
+    assert login(client).status_code==200
+    cookie=client.get_cookie('ph_session').value
+    assert client.post('/auth/logout',headers={'X-PH-Request':'1'}).status_code==200
+    replay=dashboard.app.test_client()
+    replay.set_cookie('ph_session',cookie)
+    assert replay.get('/api/me').status_code==401
+
 def test_token_security(client):
     login(client)
     headers={'X-PH-Request':'1'}
