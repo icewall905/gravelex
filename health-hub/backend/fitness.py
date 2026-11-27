@@ -409,7 +409,7 @@ def ingest(data):
             db.execute("""INSERT INTO workouts(id,start,seconds,kind,rpe,source) VALUES(?,?,?,?,NULL,'pebble')
               ON CONFLICT(id) DO UPDATE SET seconds=excluded.seconds""", (ident, start, seconds, kind))
             # Overlays are keyed by id, so only this session's effective row can change.
-            after=next(row for row in workout_edits.effective_rows(db) if row['id']==ident) if before is None or before.get('seconds')!=seconds else before
+            after=workout_edits.effective_row(db,ident) if before is None or before.get('seconds')!=seconds else before
             effective[ident]=after
             keys=('start','seconds','kind','rpe','ignored')
             if before is None or any(before.get(key)!=after.get(key) for key in keys):
