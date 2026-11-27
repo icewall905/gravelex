@@ -459,8 +459,11 @@ def generate(summary: dict[str, Any], tz) -> dict[str, Any]:
         messages += [{"role": "assistant", "content": json.dumps(result)},
                      {"role": "user", "content": "These numbers do not appear in the facts: " + json.dumps(problems) +
                       ". Rewrite the whole briefing using only numbers from the facts."}]
-        result, model = _chat(messages)
-        result = _normalise(result)
+        try:
+            retry, retry_model = _chat(messages)
+            result, model = _normalise(retry), retry_model
+        except (EmptyBriefing, json.JSONDecodeError):
+            log.warning("grounding retry unusable; scrubbing the first draft")
     remaining = _check(result, allowed)
     result = _scrub(result, allowed)
     return {"pages": {p: result.get(p) for p in PAGES}, "model": model, "facts": f,
@@ -488,9 +491,9 @@ def run() -> str:
     if not _running.acquire(blocking=False):
         return "busy"
     try:
-        summary = fitness.summary(42)
         started = time.time()
         try:
+            summary = fitness.summary(42)
             out = generate(summary, fitness.TZ)
             status, error = "ok", None
         except Exception as exc:
@@ -542,14 +545,22 @@ def new_data_since_last_briefing() -> bool:
     return newest > last
 
 
+def _sleep_seconds(nxt: datetime, now_ts: float) -> float:
+    # Aware datetimes sharing a zoneinfo subtract as wall clock, wrong across DST.
+    return max(1, nxt.timestamp() - now_ts)
+
+
 def daemon() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     fitness.connect().close()
     while True:
         nxt, first = _next_run(datetime.now(fitness.TZ))
         log.info("next briefing at %s%s", nxt.isoformat(), "" if first else " (only if new data)")
-        time.sleep(max(1, (nxt - datetime.now(fitness.TZ)).total_seconds()))
-        run_household(first)
+        time.sleep(_sleep_seconds(nxt, time.time()))
+        try:
+            run_household(first)
+        except Exception:
+            log.exception("scheduled briefings failed")
 
 
 def run_household(first=False):
@@ -557,17 +568,20 @@ def run_household(first=False):
     people=accounts.users() or [None]
     for person in people:
         if person and not person['active']: continue
-        with accounts.as_user(person):
-            if not new_data_since_last_briefing() and not first:
-                continue
-            with fitness.connect() as db:
-                has_data=db.execute('SELECT EXISTS(SELECT 1 FROM reports) OR EXISTS(SELECT 1 FROM hrv_sessions)').fetchone()[0]
-            if not has_data: continue
-            for attempt in range(3):
-                status=run()
-                log.info("briefing run: %s",status)
-                if status!='error': break
-                time.sleep(900)
+        try:
+            with accounts.as_user(person):
+                if not new_data_since_last_briefing() and not first:
+                    continue
+                with fitness.connect() as db:
+                    has_data=db.execute('SELECT EXISTS(SELECT 1 FROM reports) OR EXISTS(SELECT 1 FROM hrv_sessions)').fetchone()[0]
+                if not has_data: continue
+                for attempt in range(3):
+                    status=run()
+                    log.info("briefing run: %s",status)
+                    if status!='error': break
+                    time.sleep(900)
+        except Exception:
+            log.exception("briefing for %s failed", person and person.get('username'))
 
 
 
