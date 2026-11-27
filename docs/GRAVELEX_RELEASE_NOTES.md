@@ -1,3 +1,5 @@
-GravelEx 0.7.5 fixes a crash when opening the Apps section in Settings or searching for “Configure Appstore Sources.” Settings now shows a single link to the app store configuration.
+GravelEx 0.7.6 includes four fixes from Pebble.
 
-The update also makes app store, language pack, and device lists tolerate duplicate entries.
+- Fix a Bluetooth Classic socket leak and a case where a watch connection could get stuck.
+- Reload sideloaded plugins when their manifests change.
+- Let plugins distinguish the first subscription request from later refreshes.

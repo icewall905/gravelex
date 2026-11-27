@@ -1,0 +1,1 @@
+Fixes a Bluetooth Classic socket leak and a stuck watch connection. Sideloaded plugins reload when their manifests change, and plugins can distinguish the first subscription request from later refreshes.
